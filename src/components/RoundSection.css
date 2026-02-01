@@ -1,0 +1,108 @@
+.round-section {
+  border: 1px solid var(--round-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: all var(--transition-base);
+  animation: roundFadeIn 300ms ease;
+}
+
+@keyframes roundFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.round-section.streaming {
+  border-color: var(--round-active-border);
+  box-shadow: 0 0 16px rgba(79, 143, 247, 0.08);
+}
+
+.round-section.complete {
+  border-color: rgba(34, 197, 94, 0.15);
+}
+
+.round-section.error {
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.round-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background var(--transition-fast);
+}
+
+.round-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.round-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.round-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text-tertiary);
+}
+
+.round-status-icon {
+  display: flex;
+  align-items: center;
+}
+
+.round-status-icon.streaming {
+  color: var(--status-streaming);
+}
+
+.round-status-icon.complete {
+  color: var(--status-success);
+}
+
+.round-status-icon.error {
+  color: var(--status-error);
+}
+
+.round-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.round-number {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.round-body {
+  padding: var(--space-md);
+  padding-top: 0;
+}
+
+.round-streams {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-md);
+  padding-top: var(--space-sm);
+}
+
+@media (max-width: 640px) {
+  .round-streams {
+    grid-template-columns: 1fr;
+  }
+}

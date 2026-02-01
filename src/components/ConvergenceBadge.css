@@ -1,0 +1,26 @@
+.convergence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-xs);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-weight: 500;
+  cursor: default;
+  transition: all var(--transition-fast);
+}
+
+.convergence-badge.checking {
+  color: var(--convergence-checking);
+  background: var(--convergence-checking-bg);
+}
+
+.convergence-badge.converged {
+  color: var(--convergence-converged);
+  background: var(--convergence-converged-bg);
+}
+
+.convergence-badge.diverged {
+  color: var(--convergence-diverged);
+  background: var(--convergence-diverged-bg);
+}
