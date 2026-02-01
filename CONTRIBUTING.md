@@ -196,7 +196,7 @@ If you have questions or need help:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be subject to the same license as the project.
 
 ---
 

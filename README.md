@@ -130,7 +130,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-MIT License - feel free to use this project however you'd like.
+All rights reserved.
 
 ## Acknowledgments
 
