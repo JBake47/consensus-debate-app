@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon } from 'lucide-react';
+import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, MessageSquare, Send } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { processFile, formatFileSize } from '../lib/fileProcessor';
 import './ChatInput.css';
 
 export default function ChatInput() {
-  const { startDebate, cancelDebate, debateInProgress, apiKey, webSearchEnabled, editingTurn, dispatch } = useDebate();
+  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, editingTurn, dispatch } = useDebate();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -64,10 +64,16 @@ export default function ChatInput() {
     const currentAttachments = attachments;
     setInput('');
     setAttachments([]);
-    startDebate(trimmed || '(see attachments)', {
+    const opts = {
       webSearch: webSearchEnabled,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-    });
+    };
+    const prompt = trimmed || '(see attachments)';
+    if (chatMode === 'direct') {
+      startDirect(prompt, opts);
+    } else {
+      startDebate(prompt, opts);
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -79,6 +85,10 @@ export default function ChatInput() {
 
   const toggleWebSearch = () => {
     dispatch({ type: 'SET_WEB_SEARCH_ENABLED', payload: !webSearchEnabled });
+  };
+
+  const toggleChatMode = () => {
+    dispatch({ type: 'SET_CHAT_MODE', payload: chatMode === 'debate' ? 'direct' : 'debate' });
   };
 
   const handleDragOver = (e) => {
@@ -160,6 +170,15 @@ export default function ChatInput() {
               <span>Search</span>
             </button>
             <button
+              className={`chat-toggle ${chatMode === 'debate' ? 'active' : ''}`}
+              onClick={toggleChatMode}
+              disabled={debateInProgress || !apiKey}
+              title={chatMode === 'debate' ? 'Debate mode: queries multiple models' : 'Direct mode: queries single model'}
+            >
+              {chatMode === 'debate' ? <Swords size={15} /> : <MessageSquare size={15} />}
+              <span>{chatMode === 'debate' ? 'Debate' : 'Direct'}</span>
+            </button>
+            <button
               className="chat-toggle"
               onClick={() => fileInputRef.current?.click()}
               disabled={debateInProgress || !apiKey || processing}
@@ -181,7 +200,9 @@ export default function ChatInput() {
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder={apiKey ? 'Ask a question to debate across models...' : 'Set your API key in Settings to begin...'}
+            placeholder={apiKey
+              ? (chatMode === 'debate' ? 'Ask a question to debate across models...' : 'Ask a question...')
+              : 'Set your API key in Settings to begin...'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -197,12 +218,12 @@ export default function ChatInput() {
               </button>
             ) : (
               <button
-                className="chat-btn chat-btn-submit"
+                className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'direct' : ''}`}
                 onClick={handleSubmit}
                 disabled={(!input.trim() && attachments.length === 0) || !apiKey}
               >
-                <Swords size={16} />
-                <span>Debate</span>
+                {chatMode === 'debate' ? <Swords size={16} /> : <Send size={16} />}
+                <span>{chatMode === 'debate' ? 'Debate' : 'Send'}</span>
               </button>
             )}
           </div>

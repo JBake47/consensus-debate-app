@@ -203,6 +203,10 @@
   color: white;
 }
 
+.chat-btn-submit.direct {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+}
+
 .chat-btn-submit:hover:not(:disabled) {
   filter: brightness(1.1);
   transform: translateY(-1px);
