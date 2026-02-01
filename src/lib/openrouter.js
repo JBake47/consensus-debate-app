@@ -19,15 +19,28 @@ function extractUsage(obj) {
     promptTokens: u.prompt_tokens ?? null,
     completionTokens: u.completion_tokens ?? null,
     totalTokens: u.total_tokens ?? null,
+    cost: u.cost ?? null,
+    reasoningTokens: u.completion_tokens_details?.reasoning_tokens ?? null,
   };
+}
+
+/**
+ * Extract reasoning text from reasoning_details array.
+ */
+function extractReasoningText(details) {
+  if (!Array.isArray(details)) return '';
+  return details
+    .map(d => d.text || d.summary || '')
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
  * Stream a chat completion from OpenRouter.
  * Calls onChunk with each text delta as it arrives.
- * Returns { content, usage, durationMs }.
+ * Returns { content, reasoning, usage, durationMs }.
  */
-export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
+export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal }) {
   const startTime = performance.now();
 
   const response = await fetch(OPENROUTER_API_URL, {
@@ -42,6 +55,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
       model,
       messages,
       stream: true,
+      include_reasoning: true,
     }),
     signal,
   });
@@ -72,6 +86,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let accumulated = '';
+  let accumulatedReasoning = '';
   let buffer = '';
   let usage = null;
 
@@ -81,7 +96,6 @@ export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
-    // Keep the last potentially incomplete line in the buffer
     buffer = lines.pop() || '';
 
     for (const line of lines) {
@@ -93,12 +107,29 @@ export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
 
       try {
         const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (delta) {
-          accumulated += delta;
-          onChunk?.(delta, accumulated);
+        const delta = parsed.choices?.[0]?.delta;
+
+        // Content delta
+        if (delta?.content) {
+          accumulated += delta.content;
+          onChunk?.(delta.content, accumulated);
         }
-        // Capture usage from final chunk if present
+
+        // Reasoning delta (streamed reasoning text)
+        if (delta?.reasoning) {
+          accumulatedReasoning += delta.reasoning;
+          onReasoning?.(accumulatedReasoning);
+        }
+
+        // Reasoning details (structured reasoning blocks)
+        if (delta?.reasoning_details) {
+          const text = extractReasoningText(delta.reasoning_details);
+          if (text) {
+            accumulatedReasoning += text;
+            onReasoning?.(accumulatedReasoning);
+          }
+        }
+
         if (parsed.usage) {
           usage = extractUsage(parsed);
         }
@@ -109,7 +140,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, signal }) {
   }
 
   const durationMs = Math.round(performance.now() - startTime);
-  return { content: accumulated, usage, durationMs };
+  return { content: accumulated, reasoning: accumulatedReasoning || null, usage, durationMs };
 }
 
 /**
@@ -161,7 +192,8 @@ export async function chatCompletion({ model, messages, apiKey, signal }) {
 
   const data = await response.json();
   const durationMs = Math.round(performance.now() - startTime);
-  const content = data.choices?.[0]?.message?.content || '';
+  const message = data.choices?.[0]?.message;
+  const content = message?.content || '';
   const usage = extractUsage(data);
   return { content, usage, durationMs };
 }

@@ -9,6 +9,47 @@ export function formatTokenCount(count) {
 }
 
 /**
+ * Format a USD cost for display.
+ * "$0.0012" or "$0.05" or "$1.23"
+ */
+export function formatCost(cost) {
+  if (cost == null) return null;
+  if (cost === 0) return '$0.00';
+  if (cost < 0.001) return '<$0.001';
+  if (cost < 0.01) return '$' + cost.toFixed(4);
+  if (cost < 1) return '$' + cost.toFixed(3);
+  return '$' + cost.toFixed(2);
+}
+
+/**
+ * Aggregate cost from all streams and synthesis in a turn.
+ */
+export function computeTurnCost(turn) {
+  let total = 0;
+  if (turn.rounds) {
+    for (const round of turn.rounds) {
+      for (const stream of round.streams) {
+        if (stream.usage?.cost != null) total += stream.usage.cost;
+      }
+    }
+  }
+  if (turn.synthesis?.usage?.cost != null) total += turn.synthesis.usage.cost;
+  return total;
+}
+
+/**
+ * Aggregate cost from all turns in a conversation.
+ */
+export function computeConversationCost(conversation) {
+  if (!conversation?.turns) return 0;
+  let total = 0;
+  for (const turn of conversation.turns) {
+    total += computeTurnCost(turn);
+  }
+  return total;
+}
+
+/**
  * Format a duration in milliseconds for display.
  * "340ms" or "3.4s" or "1m 12s"
  */

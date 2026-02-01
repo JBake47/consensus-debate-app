@@ -72,6 +72,11 @@
   background: var(--convergence-converged-bg);
 }
 
+.synthesis-cost {
+  color: var(--accent-green);
+  font-weight: 500;
+}
+
 .synthesis-streaming-badge {
   display: flex;
   align-items: center;

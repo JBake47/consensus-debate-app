@@ -158,6 +158,20 @@
   color: var(--text-primary);
 }
 
+.main-header-cost {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--accent-green);
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(34, 197, 94, 0.08);
+  flex-shrink: 0;
+}
+
 .main-content {
   flex: 1;
   overflow-y: auto;

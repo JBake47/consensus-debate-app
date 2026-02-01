@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw } from 'lucide-react';
+import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import { formatFileSize } from '../lib/fileProcessor';
 import RoundSection from './RoundSection';
+import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
-import { formatDuration } from '../lib/formatTokens';
+import { formatDuration, formatCost, computeTurnCost } from '../lib/formatTokens';
 import './DebateView.css';
 
 function WebSearchPanel({ webSearchResult }) {
@@ -61,6 +62,7 @@ function WebSearchPanel({ webSearchResult }) {
 
 export default function DebateView({ turn, isLastTurn }) {
   const { editLastTurn, retryLastTurn, debateInProgress } = useDebate();
+  const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const hasRounds = turn.rounds && turn.rounds.length > 0;
 
   return (
@@ -119,24 +121,56 @@ export default function DebateView({ turn, isLastTurn }) {
 
       {hasRounds && (
         <>
-          <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} />
-
-          <div className="debate-rounds">
-            {turn.rounds.map((round, i) => (
-              <RoundSection
-                key={round.roundNumber}
-                round={round}
-                isLatest={i === turn.rounds.length - 1}
-                roundIndex={i}
-                isLastTurn={isLastTurn}
-              />
-            ))}
+          <div className="debate-controls">
+            <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} />
+            {turn.rounds.length > 0 && (
+              <div className="debate-view-toggle">
+                <button
+                  className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
+                  onClick={() => setViewMode('cards')}
+                  title="Card view"
+                >
+                  <LayoutGrid size={14} />
+                  <span>Cards</span>
+                </button>
+                <button
+                  className={`view-toggle-btn ${viewMode === 'thread' ? 'active' : ''}`}
+                  onClick={() => setViewMode('thread')}
+                  title="Debate thread view"
+                >
+                  <MessageSquare size={14} />
+                  <span>Thread</span>
+                </button>
+              </div>
+            )}
           </div>
+
+          {viewMode === 'cards' ? (
+            <div className="debate-rounds">
+              {turn.rounds.map((round, i) => (
+                <RoundSection
+                  key={round.roundNumber}
+                  round={round}
+                  isLatest={i === turn.rounds.length - 1}
+                  roundIndex={i}
+                  isLastTurn={isLastTurn}
+                />
+              ))}
+            </div>
+          ) : (
+            <DebateThread rounds={turn.rounds} />
+          )}
         </>
       )}
 
       {turn.synthesis && turn.synthesis.status !== 'pending' && (
         <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} />
+      )}
+
+      {turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+        <div className="turn-cost-summary">
+          Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+        </div>
       )}
     </div>
   );

@@ -3,7 +3,7 @@ import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw } from 'lucide-
 import MarkdownRenderer from './MarkdownRenderer';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
-import { formatTokenCount, formatDuration } from '../lib/formatTokens';
+import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './SynthesisView.css';
 
 export default function SynthesisView({ synthesis, debateMetadata }) {
@@ -47,6 +47,7 @@ export default function SynthesisView({ synthesis, debateMetadata }) {
           )}
           {status === 'complete' && (synthesis.usage || synthesis.durationMs) && (
             <div className="synthesis-meta-badge">
+              {synthesis.usage?.cost != null && <><span className="synthesis-cost">{formatCost(synthesis.usage.cost)}</span> · </>}
               {synthesis.usage?.totalTokens != null && <>{formatTokenCount(synthesis.usage.totalTokens)} tokens</>}
               {synthesis.usage?.totalTokens != null && synthesis.durationMs != null && ' · '}
               {synthesis.durationMs != null && formatDuration(synthesis.durationMs)}

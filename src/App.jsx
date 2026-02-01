@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Menu, Pencil, Check, X } from 'lucide-react';
+import { Menu, Pencil, Check, X, DollarSign } from 'lucide-react';
 import { useDebate } from './context/DebateContext';
+import { formatCost, computeConversationCost } from './lib/formatTokens';
 import Sidebar from './components/Sidebar';
 import SettingsModal from './components/SettingsModal';
 import ChatInput from './components/ChatInput';
@@ -101,6 +102,12 @@ function AppContent() {
               {activeConversation && (
                 <Pencil size={12} className="main-header-edit-icon" />
               )}
+            </div>
+          )}
+          {activeConversation && computeConversationCost(activeConversation) > 0 && (
+            <div className="main-header-cost">
+              <DollarSign size={12} />
+              <span>{formatCost(computeConversationCost(activeConversation))}</span>
             </div>
           )}
         </header>

@@ -195,7 +195,7 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'UPDATE_ROUND_STREAM': {
-      const { conversationId, roundIndex, streamIndex, content, status, error, usage, durationMs } = action.payload;
+      const { conversationId, roundIndex, streamIndex, content, status, error, usage, durationMs, reasoning } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         const rounds = [...lastTurn.rounds];
         const round = { ...rounds[roundIndex] };
@@ -203,6 +203,7 @@ function reducer(state, action) {
         const updates = { ...streams[streamIndex], content, status, error };
         if (usage !== undefined) updates.usage = usage;
         if (durationMs !== undefined) updates.durationMs = durationMs;
+        if (reasoning !== undefined) updates.reasoning = reasoning;
         streams[streamIndex] = updates;
         round.streams = streams;
         rounds[roundIndex] = round;
@@ -377,7 +378,7 @@ export function DebateProvider({ children }) {
         const modelMessages = messagesPerModel ? messagesPerModel[index] : messages;
 
         try {
-          const { content, usage, durationMs } = await streamChat({
+          const { content, reasoning, usage, durationMs } = await streamChat({
             model,
             messages: modelMessages,
             apiKey,
@@ -395,6 +396,20 @@ export function DebateProvider({ children }) {
                 },
               });
             },
+            onReasoning: (accumulatedReasoning) => {
+              dispatch({
+                type: 'UPDATE_ROUND_STREAM',
+                payload: {
+                  conversationId: convId,
+                  roundIndex,
+                  streamIndex: index,
+                  content: '',
+                  status: 'streaming',
+                  error: null,
+                  reasoning: accumulatedReasoning,
+                },
+              });
+            },
           });
 
           dispatch({
@@ -408,6 +423,7 @@ export function DebateProvider({ children }) {
               error: null,
               usage,
               durationMs,
+              reasoning: reasoning || null,
             },
           });
 
@@ -977,7 +993,7 @@ export function DebateProvider({ children }) {
     let retryResult = { content: '', succeeded: false };
 
     try {
-      const { content, usage, durationMs } = await streamChat({
+      const { content, reasoning, usage, durationMs } = await streamChat({
         model: targetModel,
         messages: modelMessages,
         apiKey,
@@ -988,10 +1004,16 @@ export function DebateProvider({ children }) {
             payload: { conversationId: convId, roundIndex, streamIndex, content: accumulated, status: 'streaming', error: null },
           });
         },
+        onReasoning: (accumulatedReasoning) => {
+          dispatch({
+            type: 'UPDATE_ROUND_STREAM',
+            payload: { conversationId: convId, roundIndex, streamIndex, content: '', status: 'streaming', error: null, reasoning: accumulatedReasoning },
+          });
+        },
       });
       dispatch({
         type: 'UPDATE_ROUND_STREAM',
-        payload: { conversationId: convId, roundIndex, streamIndex, content, status: 'complete', error: null, usage, durationMs },
+        payload: { conversationId: convId, roundIndex, streamIndex, content, status: 'complete', error: null, usage, durationMs, reasoning: reasoning || null },
       });
       retryResult = { content, succeeded: true };
     } catch (err) {

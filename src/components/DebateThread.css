@@ -1,0 +1,210 @@
+.debate-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Round dividers */
+.thread-round-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+}
+
+.thread-round-divider::before,
+.thread-round-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.thread-round-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+/* Messages */
+.thread-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+}
+
+.thread-message {
+  --thread-accent: var(--accent-blue);
+  display: flex;
+  gap: var(--space-sm);
+  align-items: flex-start;
+  animation: threadMsgIn 300ms ease;
+}
+
+@keyframes threadMsgIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.thread-message-avatar {
+  flex-shrink: 0;
+  width: 24px;
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.thread-avatar-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--thread-accent);
+}
+
+.thread-message.streaming .thread-avatar-dot {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.thread-message-body {
+  flex: 1;
+  min-width: 0;
+  border-left: 2px solid var(--thread-accent);
+  padding-left: var(--space-sm);
+}
+
+.thread-message-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.thread-message-provider {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.thread-message-model {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-message-round {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.thread-message-stats {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.thread-message-cost {
+  color: var(--accent-green);
+  font-weight: 500;
+}
+
+.thread-message-content {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.thread-message-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-sm);
+  color: var(--status-error);
+  padding: var(--space-xs) 0;
+}
+
+.thread-message-pending {
+  padding: var(--space-xs) 0;
+}
+
+/* Reasoning in thread */
+.thread-reasoning {
+  margin-bottom: 4px;
+}
+
+.thread-reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: none;
+  background: rgba(168, 85, 247, 0.08);
+  color: var(--accent-purple);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.thread-reasoning-toggle:hover {
+  background: rgba(168, 85, 247, 0.15);
+}
+
+.thread-reasoning-tokens {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.thread-reasoning-text {
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+  padding: var(--space-xs) var(--space-sm);
+  background: rgba(168, 85, 247, 0.04);
+  border-radius: var(--radius-sm);
+  max-height: 200px;
+  overflow-y: auto;
+  opacity: 0.85;
+}
+
+/* System messages (convergence) */
+.thread-system-message {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  justify-content: center;
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: var(--space-xs) 0;
+}
+
+.thread-system-message.converged {
+  color: var(--status-success);
+}
+
+.thread-system-message.not-converged {
+  color: var(--text-tertiary);
+}
+
+.thread-system-label {
+  font-weight: 600;
+}
+
+.thread-system-reason {
+  font-weight: 400;
+  opacity: 0.8;
+}
