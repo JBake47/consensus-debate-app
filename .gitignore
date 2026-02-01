@@ -2,3 +2,6 @@ node_modules
 dist
 nul
 .claude
+.env
+.env.local
+.env.*.local
