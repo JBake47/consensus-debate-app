@@ -1,13 +1,130 @@
-import { useRef, useEffect } from 'react';
-import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw } from 'lucide-react';
+import { useRef, useEffect, useState } from 'react';
+import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
+import CopyButton from './CopyButton';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './SynthesisView.css';
 
-export default function SynthesisView({ synthesis, debateMetadata }) {
+function DebateInternals({ rounds, debateMetadata }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!rounds || rounds.length === 0) return null;
+
+  const terminationLabels = {
+    converged: 'Models reached consensus',
+    max_rounds_reached: 'Maximum debate rounds reached',
+    all_models_failed: 'All models failed',
+    cancelled: 'Debate was cancelled',
+  };
+
+  const totalDebateCost = rounds.reduce((sum, round) =>
+    sum + round.streams.reduce((rs, s) => rs + (s.usage?.cost || 0), 0), 0
+  );
+
+  return (
+    <div className="debate-internals">
+      <div className="debate-internals-header" onClick={() => setExpanded(!expanded)}>
+        <div className="debate-internals-label">
+          <Eye size={13} />
+          <span>Debate Internals</span>
+        </div>
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </div>
+      {expanded && (
+        <div className="debate-internals-content">
+          <div className="internals-summary">
+            <div className="internals-stat">
+              <span className="internals-stat-label">Rounds</span>
+              <span className="internals-stat-value">{debateMetadata?.totalRounds || rounds.length}</span>
+            </div>
+            <div className="internals-stat">
+              <span className="internals-stat-label">Outcome</span>
+              <span className={`internals-stat-value ${debateMetadata?.converged ? 'converged' : ''}`}>
+                {debateMetadata?.converged ? 'Converged' : 'Did not converge'}
+              </span>
+            </div>
+            {debateMetadata?.terminationReason && (
+              <div className="internals-stat">
+                <span className="internals-stat-label">Ended because</span>
+                <span className="internals-stat-value">
+                  {terminationLabels[debateMetadata.terminationReason] || debateMetadata.terminationReason}
+                </span>
+              </div>
+            )}
+            {totalDebateCost > 0 && (
+              <div className="internals-stat">
+                <span className="internals-stat-label">Debate Cost</span>
+                <span className="internals-stat-value internals-cost">{formatCost(totalDebateCost)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="internals-timeline">
+            {rounds.map((round, i) => {
+              const completedModels = round.streams.filter(s => s.status === 'complete' || (s.content && s.status !== 'error'));
+              const failedModels = round.streams.filter(s => s.status === 'error');
+              const roundCost = round.streams.reduce((sum, s) => sum + (s.usage?.cost || 0), 0);
+              const cc = round.convergenceCheck;
+
+              return (
+                <div key={i} className="internals-round">
+                  <div className="internals-round-header">
+                    <span className={`internals-round-dot ${round.status}`} />
+                    <span className="internals-round-label">{round.label}</span>
+                    {roundCost > 0 && (
+                      <span className="internals-round-cost">{formatCost(roundCost)}</span>
+                    )}
+                    <span className="internals-round-models">
+                      {completedModels.length}/{round.streams.length} models responded
+                      {failedModels.length > 0 && (
+                        <span className="internals-failed"> ({failedModels.length} failed)</span>
+                      )}
+                    </span>
+                  </div>
+                  {round.streams.map((stream, si) => (
+                    <div key={si} className="internals-stream-row">
+                      <span className={`internals-stream-status ${stream.status}`}>
+                        {stream.status === 'complete' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                      </span>
+                      <span className="internals-stream-model">{getModelDisplayName(stream.model)}</span>
+                      {stream.usage?.cost != null && stream.usage.cost > 0 && (
+                        <span className="internals-stream-cost">{formatCost(stream.usage.cost)}</span>
+                      )}
+                      {stream.usage?.totalTokens != null && (
+                        <span className="internals-stream-tokens">{formatTokenCount(stream.usage.totalTokens)} tokens</span>
+                      )}
+                      {stream.durationMs != null && (
+                        <span className="internals-stream-duration">{formatDuration(stream.durationMs)}</span>
+                      )}
+                      {stream.error && (
+                        <span className="internals-stream-error">{stream.error}</span>
+                      )}
+                    </div>
+                  ))}
+                  {cc && cc.converged !== null && (
+                    <div className={`internals-convergence ${cc.converged ? 'converged' : 'diverged'}`}>
+                      <span className="internals-convergence-label">
+                        {cc.converged ? 'Converged' : 'Diverged'}
+                      </span>
+                      {cc.reason && <span className="internals-convergence-reason">{cc.reason}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds }) {
+  const { retrySynthesis, debateInProgress } = useDebate();
   const { model, content, status, error } = synthesis;
+  const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
   const contentRef = useRef(null);
 
   useEffect(() => {
@@ -32,6 +149,18 @@ export default function SynthesisView({ synthesis, debateMetadata }) {
           <span className="synthesis-model">{getModelDisplayName(model)}</span>
         </div>
         <div className="synthesis-badges">
+          {status === 'complete' && content && (
+            <CopyButton text={content} />
+          )}
+          {canRetry && (
+            <button
+              className="synthesis-retry-btn"
+              onClick={retrySynthesis}
+              title="Retry synthesis"
+            >
+              <RotateCcw size={13} />
+            </button>
+          )}
           {debateMetadata && debateMetadata.totalRounds > 0 && (
             <div className="synthesis-meta-badge">
               <RotateCcw size={11} />
@@ -85,6 +214,10 @@ export default function SynthesisView({ synthesis, debateMetadata }) {
           </div>
         )}
       </div>
+
+      {status === 'complete' && rounds && (
+        <DebateInternals rounds={rounds} debateMetadata={debateMetadata} />
+      )}
     </div>
   );
 }

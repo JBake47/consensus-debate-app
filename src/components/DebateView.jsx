@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
+import CopyButton from './CopyButton';
 import { formatFileSize } from '../lib/fileProcessor';
+import ModelCard from './ModelCard';
 import RoundSection from './RoundSection';
 import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
@@ -33,6 +35,7 @@ function WebSearchPanel({ webSearchResult }) {
           )}
           {status === 'complete' && (
             <>
+              {content && <CopyButton text={content} />}
               <span className="web-search-badge complete">Done</span>
               {durationMs != null && (
                 <span className="web-search-duration">{formatDuration(durationMs)}</span>
@@ -64,6 +67,7 @@ export default function DebateView({ turn, isLastTurn }) {
   const { editLastTurn, retryLastTurn, debateInProgress } = useDebate();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const hasRounds = turn.rounds && turn.rounds.length > 0;
+  const isDirectMode = turn.mode === 'direct';
 
   return (
     <div className="debate-turn">
@@ -77,26 +81,29 @@ export default function DebateView({ turn, isLastTurn }) {
             {turn.timestamp && (
               <span className="user-timestamp">{formatFullTimestamp(turn.timestamp)}</span>
             )}
-            {isLastTurn && !debateInProgress && (
-              <div className="user-message-actions">
-                <button
-                  className="user-action-btn"
-                  onClick={editLastTurn}
-                  title="Edit this message"
-                >
-                  <Pencil size={14} />
-                </button>
-                {hasRounds && (
+            <div className="user-message-actions">
+              <CopyButton text={turn.userPrompt} />
+              {isLastTurn && !debateInProgress && (
+                <>
                   <button
                     className="user-action-btn"
-                    onClick={retryLastTurn}
-                    title="Retry this turn"
+                    onClick={editLastTurn}
+                    title="Edit this message"
                   >
-                    <RotateCcw size={14} />
+                    <Pencil size={14} />
                   </button>
-                )}
-              </div>
-            )}
+                  {hasRounds && (
+                    <button
+                      className="user-action-btn"
+                      onClick={retryLastTurn}
+                      title="Retry this turn"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
           <div className="user-text markdown-content">
             <MarkdownRenderer>{turn.userPrompt}</MarkdownRenderer>
@@ -119,7 +126,27 @@ export default function DebateView({ turn, isLastTurn }) {
         <WebSearchPanel webSearchResult={turn.webSearchResult} />
       )}
 
-      {hasRounds && (
+      {isDirectMode && hasRounds && (
+        <>
+          <div className="direct-response">
+            {turn.rounds[0]?.streams[0] && (
+              <ModelCard
+                stream={turn.rounds[0].streams[0]}
+                roundIndex={0}
+                streamIndex={0}
+                isLastTurn={isLastTurn}
+              />
+            )}
+          </div>
+          {turn.rounds[0]?.streams[0]?.status === 'complete' && computeTurnCost(turn) > 0 && (
+            <div className="turn-cost-summary">
+              Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {!isDirectMode && hasRounds && (
         <>
           <div className="debate-controls">
             <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} />
@@ -163,11 +190,11 @@ export default function DebateView({ turn, isLastTurn }) {
         </>
       )}
 
-      {turn.synthesis && turn.synthesis.status !== 'pending' && (
-        <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} />
+      {!isDirectMode && turn.synthesis && turn.synthesis.status !== 'pending' && (
+        <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} isLastTurn={isLastTurn} rounds={turn.rounds} />
       )}
 
-      {turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+      {!isDirectMode && turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
         <div className="turn-cost-summary">
           Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
         </div>

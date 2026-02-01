@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
+import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './DebateThread.css';
@@ -31,6 +32,9 @@ function ThreadMessage({ stream, roundNumber, roundLabel }) {
           <span className="thread-message-model">{displayName}</span>
           <span className="thread-message-round">R{roundNumber}</span>
           {status === 'streaming' && <Loader2 size={12} className="spinning" />}
+          {status === 'complete' && content && (
+            <CopyButton text={content} />
+          )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="thread-message-stats">
               {usage?.cost != null && <><span className="thread-message-cost">{formatCost(usage.cost)}</span> · </>}
@@ -42,17 +46,22 @@ function ThreadMessage({ stream, roundNumber, roundLabel }) {
 
         {reasoning && (
           <div className="thread-reasoning">
-            <button
-              className="thread-reasoning-toggle"
-              onClick={() => setReasoningOpen(!reasoningOpen)}
-            >
-              <Brain size={12} />
-              <span>Thinking</span>
-              {usage?.reasoningTokens != null && (
-                <span className="thread-reasoning-tokens">{formatTokenCount(usage.reasoningTokens)} tok</span>
+            <div className="thread-reasoning-header">
+              <button
+                className="thread-reasoning-toggle"
+                onClick={() => setReasoningOpen(!reasoningOpen)}
+              >
+                <Brain size={12} />
+                <span>Thinking</span>
+                {usage?.reasoningTokens != null && (
+                  <span className="thread-reasoning-tokens">{formatTokenCount(usage.reasoningTokens)} tok</span>
+                )}
+                {reasoningOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+              {reasoningOpen && status === 'complete' && (
+                <CopyButton text={reasoning} />
               )}
-              {reasoningOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            </button>
+            </div>
             {reasoningOpen && (
               <pre className="thread-reasoning-text">{reasoning}</pre>
             )}

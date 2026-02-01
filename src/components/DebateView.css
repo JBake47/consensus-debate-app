@@ -88,7 +88,8 @@
   opacity: 0;
 }
 
-.user-message:hover .user-action-btn {
+.user-message:hover .user-action-btn,
+.user-message:hover .copy-btn {
   opacity: 1;
 }
 
@@ -266,6 +267,14 @@
   align-items: center;
   gap: var(--space-sm);
   color: var(--text-tertiary);
+}
+
+.web-search-header-right .copy-btn {
+  opacity: 0;
+}
+
+.web-search-header:hover .copy-btn {
+  opacity: 1;
 }
 
 .web-search-badge {

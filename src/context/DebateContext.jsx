@@ -105,6 +105,7 @@ const initialState = {
   convergenceModel: loadFromStorage('convergence_model', DEFAULT_CONVERGENCE_MODEL),
   maxDebateRounds: loadFromStorage('max_debate_rounds', DEFAULT_MAX_DEBATE_ROUNDS),
   webSearchModel: loadFromStorage('web_search_model', DEFAULT_WEB_SEARCH_MODEL),
+  chatMode: loadFromStorage('chat_mode', 'debate'),
   webSearchEnabled: false,
   conversations: migratedConversations,
   activeConversationId: null,
@@ -152,6 +153,10 @@ function reducer(state, action) {
     }
     case 'SET_WEB_SEARCH_ENABLED': {
       return { ...state, webSearchEnabled: action.payload };
+    }
+    case 'SET_CHAT_MODE': {
+      saveToStorage('chat_mode', action.payload);
+      return { ...state, chatMode: action.payload };
     }
     case 'SET_WEB_SEARCH_RESULT': {
       const { conversationId, result } = action.payload;
@@ -482,6 +487,7 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      mode: 'debate',
       rounds: [],
       synthesis: {
         model: synthModel,
@@ -721,6 +727,7 @@ export function DebateProvider({ children }) {
           });
 
           const parsed = parseConvergenceResponse(convergenceResponse);
+          parsed.rawResponse = convergenceResponse;
 
           dispatch({
             type: 'SET_CONVERGENCE',
@@ -893,6 +900,246 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.activeConversationId, state.conversations]);
 
+  const startDirect = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
+    if (!state.apiKey) {
+      dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
+      return;
+    }
+
+    const synthModel = state.synthesizerModel;
+    const webSearchModel = state.webSearchModel;
+    const apiKey = state.apiKey;
+
+    // Create new conversation if none active
+    let convId = state.activeConversationId;
+    if (!convId) {
+      convId = Date.now().toString();
+      const title = userPrompt.length > 50
+        ? userPrompt.slice(0, 50) + '...'
+        : userPrompt;
+      dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
+    }
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
+
+    // Build direct mode turn
+    const turn = {
+      userPrompt,
+      timestamp: Date.now(),
+      attachments: attachments || null,
+      mode: 'direct',
+      rounds: [],
+      synthesis: null,
+      debateMetadata: {
+        totalRounds: 1,
+        converged: false,
+        terminationReason: 'direct_mode',
+      },
+    };
+
+    dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // ===== WEB SEARCH (optional) =====
+    let webSearchContext = '';
+    if (webSearch && webSearchModel) {
+      dispatch({
+        type: 'SET_WEB_SEARCH_RESULT',
+        payload: {
+          conversationId: convId,
+          result: { status: 'searching', content: '', model: webSearchModel, error: null },
+        },
+      });
+
+      try {
+        const { content: searchContent, durationMs: searchDurationMs } = await chatCompletion({
+          model: webSearchModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'Search the web to find current, accurate information relevant to the user\'s query. Provide a comprehensive summary of what you find, including key facts, data, and sources.',
+            },
+            { role: 'user', content: userPrompt },
+          ],
+          apiKey,
+          signal: abortController.signal,
+        });
+
+        webSearchContext = searchContent;
+        dispatch({
+          type: 'SET_WEB_SEARCH_RESULT',
+          payload: {
+            conversationId: convId,
+            result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, durationMs: searchDurationMs },
+          },
+        });
+      } catch (err) {
+        if (abortController.signal.aborted) {
+          dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+          return;
+        }
+        dispatch({
+          type: 'SET_WEB_SEARCH_RESULT',
+          payload: {
+            conversationId: convId,
+            result: { status: 'error', content: '', model: webSearchModel, error: err.message },
+          },
+        });
+      }
+    }
+
+    // Build conversation context
+    const currentConv = state.conversations.find(c => c.id === convId);
+    const { messages: contextMessages, needsSummary, turnsToSummarize } = buildConversationContext({
+      conversation: currentConv,
+      runningSummary: currentConv?.runningSummary || null,
+    });
+
+    // Background summarization if needed
+    if (needsSummary && currentConv && turnsToSummarize > 0) {
+      const turnsForSummary = currentConv.turns.slice(0, turnsToSummarize);
+      const summaryMessages = buildSummaryPrompt({
+        existingSummary: currentConv.runningSummary || null,
+        turnsToSummarize: turnsForSummary,
+      });
+      chatCompletion({
+        model: synthModel,
+        messages: summaryMessages,
+        apiKey,
+        signal: abortController.signal,
+      }).then(({ content: summary }) => {
+        dispatch({
+          type: 'SET_RUNNING_SUMMARY',
+          payload: { conversationId: convId, summary },
+        });
+      }).catch(() => {});
+    }
+
+    const userMessageContent = webSearchContext
+      ? `${userPrompt}\n\n---\n**Web Search Context (from ${webSearchModel}):**\n${webSearchContext}`
+      : userPrompt;
+
+    const conversationHistory = contextMessages;
+    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const messages = [...conversationHistory, { role: 'user', content: userContent }];
+
+    // Add a single round with one stream
+    const round = {
+      roundNumber: 1,
+      label: 'Response',
+      status: 'pending',
+      streams: [{ model: synthModel, content: '', status: 'pending', error: null }],
+      convergenceCheck: null,
+    };
+
+    dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
+    dispatch({
+      type: 'UPDATE_ROUND_STATUS',
+      payload: { conversationId: convId, roundIndex: 0, status: 'streaming' },
+    });
+
+    // Stream from the synthesizer model
+    try {
+      const { content, reasoning, usage, durationMs } = await streamChat({
+        model: synthModel,
+        messages,
+        apiKey,
+        signal: abortController.signal,
+        onChunk: (_delta, accumulated) => {
+          dispatch({
+            type: 'UPDATE_ROUND_STREAM',
+            payload: {
+              conversationId: convId,
+              roundIndex: 0,
+              streamIndex: 0,
+              content: accumulated,
+              status: 'streaming',
+              error: null,
+            },
+          });
+        },
+        onReasoning: (accumulatedReasoning) => {
+          dispatch({
+            type: 'UPDATE_ROUND_STREAM',
+            payload: {
+              conversationId: convId,
+              roundIndex: 0,
+              streamIndex: 0,
+              content: '',
+              status: 'streaming',
+              error: null,
+              reasoning: accumulatedReasoning,
+            },
+          });
+        },
+      });
+
+      dispatch({
+        type: 'UPDATE_ROUND_STREAM',
+        payload: {
+          conversationId: convId,
+          roundIndex: 0,
+          streamIndex: 0,
+          content,
+          status: 'complete',
+          error: null,
+          usage,
+          durationMs,
+          reasoning: reasoning || null,
+        },
+      });
+
+      dispatch({
+        type: 'UPDATE_ROUND_STATUS',
+        payload: { conversationId: convId, roundIndex: 0, status: 'complete' },
+      });
+
+      // Generate title on first turn
+      const currentConvForTitle = state.conversations.find(c => c.id === convId);
+      const turnCount = currentConvForTitle ? currentConvForTitle.turns.length : 0;
+      if (turnCount <= 1) {
+        generateTitle({
+          userPrompt,
+          synthesisContent: content,
+          apiKey,
+        }).then(result => {
+          dispatch({
+            type: 'SET_CONVERSATION_TITLE',
+            payload: { conversationId: convId, title: result.title },
+          });
+          if (result.description) {
+            dispatch({
+              type: 'SET_CONVERSATION_DESCRIPTION',
+              payload: { conversationId: convId, description: result.description },
+            });
+          }
+        }).catch(() => {});
+      }
+    } catch (err) {
+      if (!abortController.signal.aborted) {
+        dispatch({
+          type: 'UPDATE_ROUND_STREAM',
+          payload: {
+            conversationId: convId,
+            roundIndex: 0,
+            streamIndex: 0,
+            content: '',
+            status: 'error',
+            error: err.message || 'An error occurred',
+          },
+        });
+        dispatch({
+          type: 'UPDATE_ROUND_STATUS',
+          payload: { conversationId: convId, roundIndex: 0, status: 'error' },
+        });
+      }
+    }
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+  }, [state.apiKey, state.synthesizerModel, state.webSearchModel, state.activeConversationId, state.conversations]);
+
   const cancelDebate = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -916,12 +1163,446 @@ export function DebateProvider({ children }) {
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     const prompt = lastTurn.userPrompt;
     const turnAttachments = lastTurn.attachments;
+    const turnMode = lastTurn.mode;
     dispatch({ type: 'REMOVE_LAST_TURN', payload: activeConversation.id });
-    startDebate(prompt, {
+    const opts = {
       webSearch: state.webSearchEnabled,
       attachments: turnAttachments || undefined,
+    };
+    if (turnMode === 'direct') {
+      startDirect(prompt, opts);
+    } else {
+      startDebate(prompt, opts);
+    }
+  }, [activeConversation, startDebate, startDirect, state.webSearchEnabled]);
+
+  const retrySynthesis = useCallback(async () => {
+    if (!activeConversation || activeConversation.turns.length === 0) return;
+    const convId = activeConversation.id;
+    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    if (!lastTurn.rounds || lastTurn.rounds.length === 0) return;
+
+    const userPrompt = lastTurn.userPrompt;
+    const attachments = lastTurn.attachments;
+    const apiKey = state.apiKey;
+    const synthModel = state.synthesizerModel;
+
+    // Gather completed streams from the final round
+    const finalRound = lastTurn.rounds[lastTurn.rounds.length - 1];
+    const lastCompletedStreams = finalRound.streams
+      .filter(s => s.content && (s.status === 'complete' || s.error))
+      .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
+
+    if (lastCompletedStreams.length === 0) return;
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Build conversation context (excluding current turn)
+    const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
+    const { messages: contextMessages } = buildConversationContext({
+      conversation: convForContext,
+      runningSummary: activeConversation.runningSummary || null,
     });
-  }, [activeConversation, startDebate, state.webSearchEnabled]);
+    const conversationHistory = contextMessages;
+
+    const converged = lastTurn.debateMetadata?.converged || false;
+    const totalRounds = lastTurn.debateMetadata?.totalRounds || lastTurn.rounds.length;
+
+    // Reset synthesis
+    dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+
+    const synthesisMessages = buildMultiRoundSynthesisMessages({
+      userPrompt,
+      rounds: [{
+        label: `Final positions after ${totalRounds} round(s)`,
+        streams: lastCompletedStreams,
+        convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
+      }],
+      conversationHistory,
+    });
+
+    try {
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+        model: synthModel,
+        messages: synthesisMessages,
+        apiKey,
+        signal: abortController.signal,
+        onChunk: (_delta, accumulated) => {
+          dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } });
+        },
+      });
+      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+    } catch (err) {
+      if (!abortController.signal.aborted) {
+        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } });
+      }
+    }
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+  }, [activeConversation, state.apiKey, state.synthesizerModel]);
+
+  const retryRound = useCallback(async (roundIndex) => {
+    if (!activeConversation || activeConversation.turns.length === 0) return;
+    const convId = activeConversation.id;
+    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
+
+    const userPrompt = lastTurn.userPrompt;
+    const attachments = lastTurn.attachments;
+    const targetRound = lastTurn.rounds[roundIndex];
+    const models = targetRound.streams.map(s => s.model);
+
+    const apiKey = state.apiKey;
+    const synthModel = state.synthesizerModel;
+    const convergenceModel = state.convergenceModel;
+    const maxRounds = state.maxDebateRounds;
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
+    dispatch({ type: 'TRUNCATE_ROUNDS', payload: { conversationId: convId, keepCount: roundIndex + 1 } });
+    dispatch({ type: 'RESET_SYNTHESIS', payload: { conversationId: convId, model: synthModel } });
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Build conversation context (excluding current turn)
+    const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
+    const { messages: contextMessages } = buildConversationContext({
+      conversation: convForContext,
+      runningSummary: activeConversation.runningSummary || null,
+    });
+    const conversationHistory = contextMessages;
+
+    // Build web search context if present
+    const webSearchResult = lastTurn.webSearchResult;
+    const webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
+    const wsModel = webSearchResult?.model || '';
+    const userMessageContent = webSearchCtx
+      ? `${userPrompt}\n\n---\n**Web Search Context (from ${wsModel}):**\n${webSearchCtx}`
+      : userPrompt;
+    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const initialMessages = [...conversationHistory, { role: 'user', content: userContent }];
+
+    // Get previous round streams for rebuttal context
+    let previousRoundStreams = null;
+    if (roundIndex > 0) {
+      const prevRound = lastTurn.rounds[roundIndex - 1];
+      previousRoundStreams = prevRound.streams
+        .filter(s => s.content && s.status === 'complete')
+        .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
+    }
+
+    // Identify which streams need re-running (failed, stuck, or pending)
+    const failedIndices = [];
+    targetRound.streams.forEach((s, i) => {
+      if (s.status !== 'complete' || !s.content) {
+        failedIndices.push(i);
+      }
+    });
+
+    // If all streams are actually complete, just continue from this round
+    // (re-run convergence + subsequent rounds + synthesis)
+    if (failedIndices.length === 0) {
+      // Build lastCompletedStreams from existing data
+      let lastCompletedStreams = targetRound.streams
+        .filter(s => s.content && s.status === 'complete')
+        .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
+
+      // Skip ahead to convergence + continuation
+      let converged = false;
+      let terminationReason = null;
+      let totalRounds = roundIndex + 1;
+      let currentRoundIndex = roundIndex;
+
+      // Convergence check on current round
+      if (totalRounds >= 2 && totalRounds < maxRounds && !abortController.signal.aborted) {
+        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+        try {
+          const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
+          const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+          const parsed = parseConvergenceResponse(cResponse);
+          parsed.rawResponse = cResponse;
+          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+          if (parsed.converged) { converged = true; terminationReason = 'converged'; }
+        } catch (err) {
+          if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
+          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+        }
+      }
+
+      // Continue with additional rounds if not converged
+      if (!converged && !abortController.signal.aborted && totalRounds < maxRounds) {
+        for (let roundNum = totalRounds + 1; roundNum <= maxRounds; roundNum++) {
+          if (abortController.signal.aborted) break;
+          const roundLabel = getRoundLabel(roundNum);
+          const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
+          currentRoundIndex = roundNum - 1;
+          dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
+          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
+          const messagesPerModel = models.map(() =>
+            buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory })
+          );
+          const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
+          if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
+          const completedStreams = results.filter(r => r.content && !r.error);
+          if (completedStreams.length === 0) {
+            dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'error' } });
+            terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
+          }
+          if (completedStreams.length < models.length) {
+            for (const result of results) {
+              if (result.error && !result.content) {
+                const prev = lastCompletedStreams.find(s => s.model === result.model);
+                if (prev) { result.content = prev.content; dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex: currentRoundIndex, streamIndex: result.index, content: prev.content, status: 'complete', error: 'Failed this round — showing previous response' } }); }
+              }
+            }
+          }
+          lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
+          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
+          totalRounds = roundNum;
+          if (roundNum >= 2 && roundNum < maxRounds) {
+            if (abortController.signal.aborted) break;
+            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+            try {
+              const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
+              const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+              const parsed = parseConvergenceResponse(cResponse);
+              parsed.rawResponse = cResponse;
+              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+              if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
+            } catch (err) {
+              if (abortController.signal.aborted) break;
+              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+            }
+          }
+          if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
+        }
+      } else if (totalRounds >= maxRounds) {
+        terminationReason = terminationReason || 'max_rounds_reached';
+      }
+
+      if (abortController.signal.aborted) {
+        dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged: false, terminationReason: 'cancelled' } } });
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
+
+      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' } } });
+
+      // Synthesis
+      if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
+        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
+      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+      const synthesisMessages = buildMultiRoundSynthesisMessages({
+        userPrompt,
+        rounds: [{ label: `Final positions after ${totalRounds} round(s)`, streams: lastCompletedStreams, convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null }],
+        conversationHistory,
+      });
+      try {
+        const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+          model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
+          onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
+        });
+        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+      } catch (err) {
+        if (!abortController.signal.aborted) { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } }); }
+      }
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    // === Re-run only failed/stuck streams in parallel ===
+    dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'streaming' } });
+
+    const retryResults = await Promise.allSettled(
+      failedIndices.map(async (si) => {
+        const model = models[si];
+        // Build messages for this model
+        let modelMessages;
+        if (roundIndex === 0) {
+          modelMessages = initialMessages;
+        } else {
+          modelMessages = buildRebuttalMessages({
+            userPrompt,
+            previousRoundStreams,
+            roundNumber: roundIndex + 1,
+            conversationHistory,
+          });
+        }
+
+        dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: '', status: 'streaming', error: null } });
+
+        try {
+          const { content, reasoning, usage, durationMs } = await streamChat({
+            model,
+            messages: modelMessages,
+            apiKey,
+            signal: abortController.signal,
+            onChunk: (_delta, accumulated) => {
+              dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: accumulated, status: 'streaming', error: null } });
+            },
+            onReasoning: (accumulatedReasoning) => {
+              dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: '', status: 'streaming', error: null, reasoning: accumulatedReasoning } });
+            },
+          });
+          dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content, status: 'complete', error: null, usage, durationMs, reasoning: reasoning || null } });
+          return { model, content, index: si };
+        } catch (err) {
+          if (err.name === 'AbortError') throw err;
+          const errorMsg = err.message || 'An error occurred';
+          dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: '', status: 'error', error: errorMsg } });
+          return { model, content: '', index: si, error: errorMsg };
+        }
+      })
+    );
+
+    if (abortController.signal.aborted) {
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    // Build lastCompletedStreams: existing complete streams + retry results
+    let lastCompletedStreams = [];
+    for (let i = 0; i < models.length; i++) {
+      if (!failedIndices.includes(i)) {
+        // Kept from existing complete stream
+        const s = targetRound.streams[i];
+        if (s.content && s.status === 'complete') {
+          lastCompletedStreams.push({ model: s.model, content: s.content, status: 'complete' });
+        }
+      } else {
+        // From retry results
+        const retryIdx = failedIndices.indexOf(i);
+        const result = retryResults[retryIdx];
+        if (result.status === 'fulfilled' && result.value.content && !result.value.error) {
+          lastCompletedStreams.push({ model: result.value.model, content: result.value.content, status: 'complete' });
+        }
+      }
+    }
+
+    if (lastCompletedStreams.length === 0) {
+      dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'error' } });
+      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds: roundIndex + 1, converged: false, terminationReason: 'all_models_failed' } } });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'complete' } });
+
+    // Continue debate from this round: convergence check + more rounds + synthesis
+    let converged = false;
+    let terminationReason = null;
+    let totalRounds = roundIndex + 1;
+    let currentRoundIndex = roundIndex;
+
+    // Convergence check on current round
+    if (totalRounds >= 2 && totalRounds < maxRounds && !abortController.signal.aborted) {
+      dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+      try {
+        const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
+        const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+        const parsed = parseConvergenceResponse(cResponse);
+        parsed.rawResponse = cResponse;
+        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+        if (parsed.converged) { converged = true; terminationReason = 'converged'; }
+      } catch (err) {
+        if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
+        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+      }
+    }
+
+    // Continue with additional rounds if not converged
+    if (!converged && !abortController.signal.aborted && totalRounds < maxRounds) {
+      for (let roundNum = totalRounds + 1; roundNum <= maxRounds; roundNum++) {
+        if (abortController.signal.aborted) break;
+        const roundLabel = getRoundLabel(roundNum);
+        const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
+        currentRoundIndex = roundNum - 1;
+        dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
+        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
+        const messagesPerModel = models.map(() =>
+          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory })
+        );
+        const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
+        if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
+        const completedStreams = results.filter(r => r.content && !r.error);
+        if (completedStreams.length === 0) {
+          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'error' } });
+          terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
+        }
+        if (completedStreams.length < models.length) {
+          for (const result of results) {
+            if (result.error && !result.content) {
+              const prev = lastCompletedStreams.find(s => s.model === result.model);
+              if (prev) { result.content = prev.content; dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex: currentRoundIndex, streamIndex: result.index, content: prev.content, status: 'complete', error: 'Failed this round — showing previous response' } }); }
+            }
+          }
+        }
+        lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
+        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
+        totalRounds = roundNum;
+        if (roundNum >= 2 && roundNum < maxRounds) {
+          if (abortController.signal.aborted) break;
+          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+          try {
+            const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
+            const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+            const parsed = parseConvergenceResponse(cResponse);
+            parsed.rawResponse = cResponse;
+            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+            if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
+          } catch (err) {
+            if (abortController.signal.aborted) break;
+            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+          }
+        }
+        if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
+      }
+    } else if (totalRounds >= maxRounds) {
+      terminationReason = terminationReason || 'max_rounds_reached';
+    }
+
+    if (abortController.signal.aborted) {
+      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged: false, terminationReason: 'cancelled' } } });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' } } });
+
+    // Synthesis
+    if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
+      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+
+    const synthesisMessages = buildMultiRoundSynthesisMessages({
+      userPrompt,
+      rounds: [{ label: `Final positions after ${totalRounds} round(s)`, streams: lastCompletedStreams, convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null }],
+      conversationHistory,
+    });
+
+    try {
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+        model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
+        onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
+      });
+      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+    } catch (err) {
+      if (!abortController.signal.aborted) { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } }); }
+    }
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds]);
 
   const retryStream = useCallback(async (roundIndex, streamIndex) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -1061,6 +1742,7 @@ export function DebateProvider({ children }) {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
         const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
         const parsed = parseConvergenceResponse(cResponse);
+        parsed.rawResponse = cResponse;
         dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
         if (parsed.converged) { converged = true; terminationReason = 'converged'; }
       } catch (err) {
@@ -1118,6 +1800,7 @@ export function DebateProvider({ children }) {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
             const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
             const parsed = parseConvergenceResponse(cResponse);
+            parsed.rawResponse = cResponse;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
             if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
           } catch (err) {
@@ -1174,10 +1857,13 @@ export function DebateProvider({ children }) {
     activeConversation,
     dispatch,
     startDebate,
+    startDirect,
     cancelDebate,
     editLastTurn,
     retryLastTurn,
     retryStream,
+    retryRound,
+    retrySynthesis,
   };
 
   return (

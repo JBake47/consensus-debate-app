@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
+import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './ModelCard.css';
@@ -71,6 +72,9 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
           </div>
         </div>
         <div className="model-card-status-area">
+          {status === 'complete' && content && (
+            <CopyButton text={content} />
+          )}
           {canRetry && (
             <button
               className="model-card-retry"
@@ -117,7 +121,12 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
                     </span>
                   )}
                 </div>
-                {reasoningCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                <div className="model-card-reasoning-actions">
+                  {!reasoningCollapsed && status === 'complete' && (
+                    <CopyButton text={reasoning} />
+                  )}
+                  {reasoningCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                </div>
               </div>
               {!reasoningCollapsed && (
                 <div className="model-card-reasoning-content" ref={reasoningRef}>

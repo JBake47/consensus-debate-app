@@ -88,8 +88,23 @@
   opacity: 0;
 }
 
-.model-card:hover .model-card-retry {
+.model-card:hover .model-card-retry,
+.model-card:hover .copy-btn {
   opacity: 1;
+}
+
+.model-card-reasoning-header .copy-btn {
+  opacity: 0;
+}
+
+.model-card-reasoning-header:hover .copy-btn {
+  opacity: 1;
+}
+
+.model-card-reasoning-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .model-card-retry:hover {
