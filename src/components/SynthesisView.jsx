@@ -11,8 +11,13 @@ export default function SynthesisView({ synthesis, debateMetadata }) {
   const contentRef = useRef(null);
 
   useEffect(() => {
-    if (status === 'streaming' && contentRef.current) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    const el = contentRef.current;
+    if (status === 'streaming' && el) {
+      const threshold = 80;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [content, status]);
 

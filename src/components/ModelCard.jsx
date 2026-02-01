@@ -19,17 +19,27 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
   const displayName = getModelDisplayName(model);
   const provider = getProviderName(model);
 
-  // Auto-scroll while streaming
+  // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
-    if (status === 'streaming' && contentRef.current && !collapsed) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    const el = contentRef.current;
+    if (status === 'streaming' && el && !collapsed) {
+      const threshold = 80;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [content, status, collapsed]);
 
-  // Auto-scroll reasoning while streaming
+  // Auto-scroll reasoning while streaming, only if user is near the bottom
   useEffect(() => {
-    if (status === 'streaming' && reasoningRef.current && !reasoningCollapsed) {
-      reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
+    const el = reasoningRef.current;
+    if (status === 'streaming' && el && !reasoningCollapsed) {
+      const threshold = 80;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   }, [reasoning, status, reasoningCollapsed]);
 

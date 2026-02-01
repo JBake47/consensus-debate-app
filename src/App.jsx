@@ -25,10 +25,14 @@ function AppContent() {
     setEditingHeader(false);
   }, [activeConversation?.id]);
 
-  // Auto-scroll to bottom when new content arrives
+  // Auto-scroll to bottom only when user is already near the bottom
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 150;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    if (isNearBottom) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [turns, debateInProgress]);
 
