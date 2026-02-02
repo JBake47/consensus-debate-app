@@ -409,25 +409,12 @@ export function DebateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const abortControllerRef = useRef(null);
 
-  // Show settings on first load if no API key
-  useEffect(() => {
-    if (!state.apiKey) {
-      dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
-    }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
 
-    if (!state.apiKey) {
-      dispatch({ type: 'SET_MODEL_CATALOG', payload: {} });
-      dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'idle', error: null } });
-      return undefined;
-    }
-
     dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'loading', error: null } });
 
-    fetchModels(state.apiKey)
+    fetchModels()
       .then((models) => {
         if (cancelled) return;
         const catalog = {};
@@ -561,11 +548,6 @@ export function DebateProvider({ children }) {
   };
 
   const startDebate = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
-    if (!state.apiKey) {
-      dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
-      return;
-    }
-
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
@@ -1110,11 +1092,6 @@ export function DebateProvider({ children }) {
   };
 
   const startDirect = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
-    if (!state.apiKey) {
-      dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
-      return;
-    }
-
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;

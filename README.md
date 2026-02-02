@@ -1,6 +1,6 @@
 # OpenRouter Debate App
 
-A client-side React application that leverages multiple AI models through OpenRouter to provide debate-style responses and synthesized answers to your questions.
+A React application with an optional Node proxy that can route requests to OpenRouter, Anthropic, OpenAI, and Gemini while preserving the same debate workflow.
 
 ## Features
 
@@ -45,8 +45,8 @@ A client-side React application that leverages multiple AI models through OpenRo
 ## Getting Started
 
 ### Prerequisites
-- Node.js (v16 or higher)
-- OpenRouter API key ([get one here](https://openrouter.ai/keys))
+- Node.js (v18 or higher)
+- API keys for the providers you want to use
 
 ### Installation
 
@@ -61,14 +61,24 @@ cd openrouter-debate-app
 npm install
 ```
 
-3. Start the development server:
+3. Configure server environment variables (example in `.env.example`).
+
+4. Start the backend API proxy (recommended):
+```bash
+npm run server
+```
+
+5. Start the frontend dev server:
 ```bash
 npm run dev
 ```
 
-4. Open your browser to `http://localhost:5173`
+6. Open your browser to `http://localhost:5173`
 
-5. Enter your OpenRouter API key in the Settings panel
+Tip: run both with one command:
+```bash
+npm run dev:all
+```
 
 ### Build for Production
 
@@ -82,7 +92,8 @@ npm run preview
 ### Model Selection
 - Configure debate models in Settings (default: Claude 3 Opus, Gemini 2.0 Flash, Llama 3 70B)
 - Configure synthesis model (default: GPT-4o)
-- All models are configurable per your OpenRouter account
+- Prefix direct providers with `anthropic:`, `openai:`, or `gemini:` (e.g. `anthropic:claude-3.7-sonnet`)
+- Unprefixed model IDs route through OpenRouter
 
 ### Debate Settings
 - Max rounds: Control debate depth
@@ -90,12 +101,12 @@ npm run preview
 
 ## Architecture
 
-### Client-Side Only
-No backend required - all API calls go directly to OpenRouter from your browser.
+### Backend Proxy (Recommended)
+Use `server/index.js` to keep API keys off the client. Configure provider keys via environment variables.
 
 ### Data Storage
 - Conversation history stored in browser localStorage
-- API key stored securely in localStorage
+- Optional OpenRouter override key stored in localStorage
 - Efficient context management for large conversations
 
 ### Debate Engine

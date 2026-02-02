@@ -1,4 +1,5 @@
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const API_PROXY_URL = '/api/chat';
+const MODELS_PROXY_URL = '/api/models';
 
 export class OpenRouterError extends Error {
   constructor(message, status, code) {
@@ -13,12 +14,12 @@ export class OpenRouterError extends Error {
  * Extract usage info from an API response object.
  */
 function extractUsage(obj) {
-  const u = obj?.usage;
+  const u = obj?.usage || obj;
   if (!u) return null;
   return {
-    promptTokens: u.prompt_tokens ?? null,
-    completionTokens: u.completion_tokens ?? null,
-    totalTokens: u.total_tokens ?? null,
+    promptTokens: u.prompt_tokens ?? u.promptTokens ?? u.input_tokens ?? u.promptTokenCount ?? null,
+    completionTokens: u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? u.candidatesTokenCount ?? u.outputTokenCount ?? null,
+    totalTokens: u.total_tokens ?? u.totalTokens ?? u.totalTokenCount ?? null,
     cost: u.cost ?? null,
     reasoningTokens: u.completion_tokens_details?.reasoning_tokens ?? null,
   };
@@ -58,19 +59,16 @@ function updateReasoningAccumulated(accumulated, incoming) {
 export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal }) {
   const startTime = performance.now();
 
-  const response = await fetch(OPENROUTER_API_URL, {
+  const response = await fetch(API_PROXY_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': window.location.origin,
-      'X-Title': 'OpenRouter Debate App',
     },
     body: JSON.stringify({
       model,
       messages,
       stream: true,
-      include_reasoning: true,
+      clientApiKey: apiKey || undefined,
     }),
     signal,
   });
@@ -80,20 +78,20 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
     let errorCode = null;
     try {
       const errorBody = await response.json();
-      errorMessage = errorBody.error?.message || errorMessage;
+      errorMessage = errorBody.error?.message || errorBody.error || errorMessage;
       errorCode = errorBody.error?.code || null;
     } catch {
       // ignore parse failures
     }
 
     if (response.status === 401) {
-      throw new OpenRouterError('Invalid API key. Please check your key in Settings.', 401, 'invalid_key');
+      throw new OpenRouterError('Unauthorized. Check server API key configuration.', 401, 'invalid_key');
     }
     if (response.status === 429) {
       throw new OpenRouterError('Rate limited. Please wait a moment and try again.', 429, 'rate_limit');
     }
     if (response.status === 402) {
-      throw new OpenRouterError('Insufficient credits. Please add credits to your OpenRouter account.', 402, 'insufficient_credits');
+      throw new OpenRouterError('Insufficient credits. Please add credits to your provider account.', 402, 'insufficient_credits');
     }
     throw new OpenRouterError(errorMessage, response.status, errorCode);
   }
@@ -104,6 +102,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
   let accumulatedReasoning = '';
   let buffer = '';
   let usage = null;
+  let streamError = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -122,36 +121,31 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
 
       try {
         const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta;
-
-        // Content delta
-        if (delta?.content) {
-          accumulated += delta.content;
-          onChunk?.(delta.content, accumulated);
+        if (parsed.type === 'content' && parsed.delta) {
+          accumulated += parsed.delta;
+          onChunk?.(parsed.delta, accumulated);
         }
-
-        // Reasoning delta (streamed reasoning text)
-        if (delta?.reasoning) {
-          accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, delta.reasoning);
+        if (parsed.type === 'reasoning' && parsed.delta) {
+          accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, parsed.delta);
           onReasoning?.(accumulatedReasoning);
         }
-
-        // Reasoning details (structured reasoning blocks)
-        if (delta?.reasoning_details) {
-          const text = extractReasoningText(delta.reasoning_details);
-          if (text) {
-            accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, text);
-            onReasoning?.(accumulatedReasoning);
-          }
+        if (parsed.type === 'done') {
+          usage = extractUsage(parsed.usage || {});
         }
-
-        if (parsed.usage) {
-          usage = extractUsage(parsed);
+        if (parsed.type === 'error') {
+          streamError = parsed.message || 'Stream error';
+          await reader.cancel();
+          break;
         }
       } catch {
         // skip malformed JSON chunks
       }
     }
+    if (streamError) break;
+  }
+
+  if (streamError) {
+    throw new OpenRouterError(streamError, 500, 'stream_error');
   }
 
   const durationMs = Math.round(performance.now() - startTime);
@@ -166,18 +160,16 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
 export async function chatCompletion({ model, messages, apiKey, signal }) {
   const startTime = performance.now();
 
-  const response = await fetch(OPENROUTER_API_URL, {
+  const response = await fetch(API_PROXY_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': window.location.origin,
-      'X-Title': 'OpenRouter Debate App',
     },
     body: JSON.stringify({
       model,
       messages,
       stream: false,
+      clientApiKey: apiKey || undefined,
     }),
     signal,
   });
@@ -187,41 +179,37 @@ export async function chatCompletion({ model, messages, apiKey, signal }) {
     let errorCode = null;
     try {
       const errorBody = await response.json();
-      errorMessage = errorBody.error?.message || errorMessage;
+      errorMessage = errorBody.error?.message || errorBody.error || errorMessage;
       errorCode = errorBody.error?.code || null;
     } catch {
       // ignore parse failures
     }
 
     if (response.status === 401) {
-      throw new OpenRouterError('Invalid API key. Please check your key in Settings.', 401, 'invalid_key');
+      throw new OpenRouterError('Unauthorized. Check server API key configuration.', 401, 'invalid_key');
     }
     if (response.status === 429) {
       throw new OpenRouterError('Rate limited. Please wait a moment and try again.', 429, 'rate_limit');
     }
     if (response.status === 402) {
-      throw new OpenRouterError('Insufficient credits. Please add credits to your OpenRouter account.', 402, 'insufficient_credits');
+      throw new OpenRouterError('Insufficient credits. Please add credits to your provider account.', 402, 'insufficient_credits');
     }
     throw new OpenRouterError(errorMessage, response.status, errorCode);
   }
 
   const data = await response.json();
   const durationMs = Math.round(performance.now() - startTime);
-  const message = data.choices?.[0]?.message;
-  const content = message?.content || '';
-  const usage = extractUsage(data);
-  return { content, usage, durationMs };
+  const content = data.content || '';
+  const reasoning = data.reasoning || null;
+  const usage = extractUsage(data.usage || {});
+  return { content, reasoning, usage, durationMs };
 }
 
 /**
  * Fetch available models from OpenRouter.
  */
 export async function fetchModels(apiKey) {
-  const response = await fetch('https://openrouter.ai/api/v1/models', {
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-    },
-  });
+  const response = await fetch(MODELS_PROXY_URL);
 
   if (!response.ok) {
     throw new OpenRouterError('Failed to fetch models', response.status);
@@ -251,27 +239,40 @@ export const MODEL_COLORS = {
   'meta-llama': 'var(--accent-orange)',
   'openai': 'var(--accent-green)',
   'mistralai': 'var(--accent-cyan)',
+  'gemini': 'var(--accent-blue)',
   'default': 'var(--accent-pink)',
 };
 
+function parseModelId(modelId) {
+  if (!modelId) return { provider: '', name: '' };
+  if (modelId.includes(':')) {
+    const [prefix, rest] = modelId.split(':');
+    return { provider: prefix, name: rest };
+  }
+  const parts = modelId.split('/');
+  return { provider: parts[0], name: parts.slice(1).join('/') };
+}
+
 export function getModelColor(modelId) {
-  const provider = modelId.split('/')[0];
+  const { provider } = parseModelId(modelId);
   return MODEL_COLORS[provider] || MODEL_COLORS.default;
 }
 
 export function getModelDisplayName(modelId) {
-  const parts = modelId.split('/');
-  return parts.length > 1 ? parts[1] : modelId;
+  const { name } = parseModelId(modelId);
+  return name || modelId;
 }
 
 export function getProviderName(modelId) {
-  const provider = modelId.split('/')[0];
+  const { provider } = parseModelId(modelId);
   const names = {
     'anthropic': 'Anthropic',
+    'gemini': 'Google',
     'google': 'Google',
     'meta-llama': 'Meta',
     'openai': 'OpenAI',
     'mistralai': 'Mistral',
+    'openrouter': 'OpenRouter',
   };
   return names[provider] || provider;
 }

@@ -50,7 +50,6 @@ export default function SettingsModal() {
   };
 
   const handleClose = () => {
-    if (!apiKey) return; // Don't close if no API key set
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -80,23 +79,21 @@ export default function SettingsModal() {
       <div className="settings-modal glass-panel" onClick={e => e.stopPropagation()}>
         <div className="settings-header">
           <h2>Settings</h2>
-          {apiKey && (
-            <button className="settings-close" onClick={handleClose}>
-              <X size={18} />
-            </button>
-          )}
+          <button className="settings-close" onClick={handleClose}>
+            <X size={18} />
+          </button>
         </div>
 
         <div className="settings-body">
           <div className="settings-section">
             <label className="settings-label">
               <Key size={14} />
-              <span>OpenRouter API Key</span>
+              <span>OpenRouter API Key (optional override)</span>
             </label>
             <input
               type="password"
               className="settings-input"
-              placeholder="sk-or-..."
+              placeholder="sk-or-... (optional)"
               value={keyInput}
               onChange={e => setKeyInput(e.target.value)}
               autoFocus={!apiKey}
@@ -110,7 +107,7 @@ export default function SettingsModal() {
               <span>Remember key on this device</span>
             </label>
             <p className="settings-hint">
-              Get your key at{' '}
+              Server-side API keys are recommended. Optional OpenRouter override:{' '}
               <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">
                 openrouter.ai/keys
               </a>
@@ -140,7 +137,7 @@ export default function SettingsModal() {
               <input
                 type="text"
                 className="settings-input"
-                placeholder="provider/model-name"
+                placeholder="openrouter-model or anthropic:claude-3.7-sonnet"
                 value={newModel}
                 onChange={e => setNewModel(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addModel()}
@@ -150,6 +147,13 @@ export default function SettingsModal() {
                 Add
               </button>
             </div>
+            <p className="settings-hint">
+              Prefix direct providers with <code>anthropic:</code>, <code>openai:</code>, or <code>gemini:</code>.
+              Unprefixed models route through OpenRouter.
+            </p>
+            <p className="settings-hint">
+              Examples: <code>anthropic:claude-3.7-sonnet</code>, <code>openai:gpt-4.1</code>, <code>gemini:gemini-2.5-flash</code>.
+            </p>
           </div>
 
           <div className="settings-section">
@@ -233,7 +237,6 @@ export default function SettingsModal() {
           <button
             className="settings-btn-primary"
             onClick={handleSave}
-            disabled={!keyInput.trim()}
           >
             Save Settings
           </button>

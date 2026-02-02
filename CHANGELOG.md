@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Backend API proxy with provider routing for Anthropic, OpenAI, Gemini, and OpenRouter
+- Provider-prefix model routing (`anthropic:`, `openai:`, `gemini:`) with OpenRouter as default
+- `dev:all` script to run server and client together
+
+### Changed
+- OpenRouter API key is now optional (server-owned keys recommended)
+- Frontend now calls the backend proxy for chat and model metadata
+
 ## [0.3.3] - 2026-02-02
 
 ### Added

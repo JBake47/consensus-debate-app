@@ -10,6 +10,7 @@ import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import EnsembleResultPanel from './EnsembleResultPanel';
+import AttachmentViewer from './AttachmentViewer';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { formatDuration, formatCost, computeTurnCost } from '../lib/formatTokens';
@@ -67,6 +68,7 @@ function WebSearchPanel({ webSearchResult }) {
 export default function DebateView({ turn, isLastTurn }) {
   const { editLastTurn, retryLastTurn, debateInProgress } = useDebate();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
+  const [viewerAttachment, setViewerAttachment] = useState(null);
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
   // Ensemble turns have multiple streams in their round or an ensembleResult
@@ -117,16 +119,25 @@ export default function DebateView({ turn, isLastTurn }) {
           {turn.attachments && turn.attachments.length > 0 && (
             <div className="user-attachments">
               {turn.attachments.map((att, i) => (
-                <div key={i} className={`user-attachment-chip ${att.category}`}>
+                <button
+                  key={i}
+                  className={`user-attachment-chip ${att.category}`}
+                  onClick={() => setViewerAttachment(att)}
+                  title="View attachment"
+                >
                   {att.category === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
                   <span className="user-attachment-name">{att.name}</span>
                   <span className="user-attachment-size">{formatFileSize(att.size)}</span>
-                </div>
+                </button>
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {viewerAttachment && (
+        <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+      )}
 
       {turn.webSearchResult && (
         <WebSearchPanel webSearchResult={turn.webSearchResult} />

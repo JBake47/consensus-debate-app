@@ -121,6 +121,18 @@
   padding: 2px 8px;
   font-size: 11px;
   color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.user-attachment-chip:hover {
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.user-attachment-chip:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
 }
 
 .user-attachment-chip.image {

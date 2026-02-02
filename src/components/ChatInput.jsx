@@ -11,7 +11,6 @@ export default function ChatInput() {
     startDirect,
     cancelDebate,
     debateInProgress,
-    apiKey,
     webSearchEnabled,
     chatMode,
     focusedMode,
@@ -207,7 +206,7 @@ export default function ChatInput() {
             <button
               className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
               onClick={toggleWebSearch}
-              disabled={debateInProgress || !apiKey}
+              disabled={debateInProgress}
               title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
             >
               <Globe size={15} />
@@ -216,7 +215,7 @@ export default function ChatInput() {
             <button
               className={`chat-toggle ${chatMode === 'debate' ? 'active' : ''}`}
               onClick={toggleChatMode}
-              disabled={debateInProgress || !apiKey}
+              disabled={debateInProgress}
               title={chatMode === 'debate' ? 'Debate mode: multi-round discussion' : 'Ensemble mode: vote-weighted synthesis'}
             >
               {chatMode === 'debate' ? <Swords size={15} /> : <MessageSquare size={15} />}
@@ -225,7 +224,7 @@ export default function ChatInput() {
             <button
               className={`chat-toggle ${focusedMode ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
-              disabled={debateInProgress || !apiKey}
+              disabled={debateInProgress}
               title={focusedMode ? 'Focused mode: concise, direct responses' : 'Enable focused mode for shorter, sharper outputs'}
             >
               <Zap size={15} />
@@ -234,7 +233,7 @@ export default function ChatInput() {
             <button
               className="chat-toggle"
               onClick={() => fileInputRef.current?.click()}
-              disabled={debateInProgress || !apiKey || processing}
+              disabled={debateInProgress || processing}
               title="Attach files"
             >
               <Paperclip size={15} />
@@ -253,15 +252,13 @@ export default function ChatInput() {
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder={apiKey
-              ? (chatMode === 'debate' ? 'Ask a question to debate across models...' : 'Ask a question...')
-              : 'Set your API key in Settings to begin...'}
+            placeholder={chatMode === 'debate' ? 'Ask a question to debate across models...' : 'Ask a question...'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             rows={1}
-            disabled={!apiKey}
+            disabled={false}
           />
           <div className="chat-input-actions">
             {debateInProgress ? (
@@ -287,7 +284,7 @@ export default function ChatInput() {
                 <button
                   className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''}`}
                   onClick={handleSubmit}
-                  disabled={(!input.trim() && attachments.length === 0) || !apiKey}
+                  disabled={!input.trim() && attachments.length === 0}
                 >
                   {chatMode === 'debate' ? <Swords size={16} /> : <Send size={16} />}
                   <span>{chatMode === 'debate' ? 'Debate' : 'Send'}</span>
