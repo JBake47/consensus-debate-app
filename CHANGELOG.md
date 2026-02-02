@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- PDF canvas viewer with paging/zoom controls
+- Warning when selected models do not support image attachments
+- OpenRouter model catalog fetch for capability checks
+
+### Changed
+- PDF inline limit increased to 40 MB
+- Web search requests now include text attachments
+
+### Fixed
+- PDF text extraction now uses bundled pdf.js worker (no CDN dependency)
+- PDF preview falls back to extracted text when inline data is unavailable
+
 ## [0.3.1] - 2026-02-02
 
 ### Added
