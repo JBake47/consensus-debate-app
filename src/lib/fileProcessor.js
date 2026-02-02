@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import mammoth from 'mammoth';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
@@ -98,13 +98,32 @@ function readAsArrayBuffer(file) {
 
 async function readExcel(file) {
   const buffer = await readAsArrayBuffer(file);
-  const workbook = XLSX.read(buffer, { type: 'array' });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
   const sheets = [];
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const csv = XLSX.utils.sheet_to_csv(sheet);
-    sheets.push(`--- Sheet: ${sheetName} ---\n${csv}`);
-  }
+  workbook.eachSheet((worksheet) => {
+    const rows = [];
+    worksheet.eachRow((row) => {
+      const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+      const cells = values.map((value) => {
+        if (value == null) return '';
+        if (typeof value === 'object') {
+          if (value.richText) {
+            return value.richText.map(part => part.text || '').join('');
+          }
+          if (value.text) return String(value.text);
+          if (value.result != null) return String(value.result);
+          if (value.formula) return String(value.formula);
+          if (value.hyperlink) return value.text || value.hyperlink;
+          if (value instanceof Date) return value.toISOString();
+          if (value.error) return String(value.error);
+        }
+        return String(value);
+      });
+      rows.push(cells.join(','));
+    });
+    sheets.push(`--- Sheet: ${worksheet.name} ---\n${rows.join('\n')}`);
+  });
   return sheets.join('\n\n');
 }
 

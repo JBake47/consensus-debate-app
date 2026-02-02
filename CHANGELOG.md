@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - OpenRouter API key is now optional (server-owned keys recommended)
 - Frontend now calls the backend proxy for chat and model metadata
+- Excel parsing now uses `exceljs` instead of `xlsx`
 
 ## [0.3.3] - 2026-02-02
 
