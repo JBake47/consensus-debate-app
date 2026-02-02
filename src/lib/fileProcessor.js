@@ -3,12 +3,14 @@ import mammoth from 'mammoth';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
 const TEXT_EXTENSIONS = [
-  '.txt', '.md', '.json', '.csv', '.xml', '.html', '.htm', '.css', '.js', '.jsx',
+  '.txt', '.md', '.mdx', '.json', '.csv', '.xml', '.html', '.htm', '.css', '.js', '.jsx',
   '.ts', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.rb',
   '.php', '.sh', '.bash', '.zsh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
   '.log', '.sql', '.r', '.swift', '.kt', '.scala', '.lua', '.pl', '.m', '.env',
-  '.gitignore', '.dockerfile', '.makefile',
+  '.gitignore', '.dockerfile', '.makefile', '.rtf', '.csv', '.tsv',
 ];
+const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
+const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 
 /**
  * Determine the category of a file.
@@ -19,6 +21,7 @@ export function getFileCategory(file) {
   if (['.xlsx', '.xls', '.xlsm'].includes(ext)) return 'excel';
   if (['.docx'].includes(ext)) return 'word';
   if (['.pdf'].includes(ext)) return 'pdf';
+  if (BINARY_EXTENSIONS.includes(ext)) return 'binary';
   if (TEXT_EXTENSIONS.includes(ext) || file.type.startsWith('text/')) return 'text';
   // Fallback: try to read as text
   return 'text';
@@ -38,22 +41,28 @@ function getExtension(filename) {
  */
 export async function processFile(file) {
   const category = getFileCategory(file);
+  const canInline = file.size <= MAX_INLINE_BYTES || category === 'image';
+  const dataUrl = canInline ? await readAsDataURL(file) : null;
   const base = {
     name: file.name,
     size: file.size,
     type: file.type,
     category,
+    dataUrl,
+    inlineWarning: canInline ? null : 'File too large to store for preview. Reattach to view or download.',
   };
 
   switch (category) {
     case 'image':
-      return { ...base, content: await readAsDataURL(file), preview: 'image' };
+      return { ...base, content: dataUrl, preview: 'image' };
     case 'excel':
       return { ...base, content: await readExcel(file), preview: 'text' };
     case 'word':
       return { ...base, content: await readWord(file), preview: 'text' };
     case 'pdf':
       return { ...base, content: await readPdf(file), preview: 'text' };
+    case 'binary':
+      return { ...base, content: '', preview: 'binary' };
     case 'text':
     default:
       return { ...base, content: await readAsText(file), preview: 'text' };
@@ -105,12 +114,24 @@ async function readWord(file) {
   return result.value;
 }
 
+let pdfjsLibPromise;
+
+async function loadPdfjs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ]).then(([pdfjsLib, workerUrl]) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.default || workerUrl;
+      return pdfjsLib;
+    });
+  }
+  return pdfjsLibPromise;
+}
+
 async function readPdf(file) {
   try {
-    const pdfjsLib = await import('pdfjs-dist');
-    // Set worker source
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-
+    const pdfjsLib = await loadPdfjs();
     const buffer = await readAsArrayBuffer(file);
     const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
     const pages = [];
@@ -124,7 +145,7 @@ async function readPdf(file) {
     }
     return pages.join('\n\n') || '(No text content extracted from PDF)';
   } catch {
-    return '(Failed to parse PDF — the file may be scanned or encrypted)';
+    return '(Failed to parse PDF -- the file may be scanned or encrypted)';
   }
 }
 
@@ -143,7 +164,12 @@ export function buildAttachmentContent(text, attachments) {
   const textAttachments = attachments.filter(a => a.category !== 'image');
   if (textAttachments.length > 0) {
     const attachmentText = textAttachments
-      .map(a => `\n\n---\n**Attached file: ${a.name}**\n\`\`\`\n${truncateContent(a.content, 50000)}\n\`\`\``)
+      .map(a => {
+        if (a.content) {
+          return `\n\n---\n**Attached file: ${a.name}**\n\`\`\`\n${truncateContent(a.content, 50000)}\n\`\`\``;
+        }
+        return `\n\n---\n**Attached file: ${a.name}**\n(Unable to extract text content from this file.)`;
+      })
       .join('');
     text += attachmentText;
   }
@@ -159,6 +185,36 @@ export function buildAttachmentContent(text, attachments) {
       });
     }
     return parts;
+  }
+
+  return text;
+}
+
+/**
+ * Build text-only attachment content (no image parts) for text-only models.
+ */
+export function buildAttachmentTextContent(text, attachments) {
+  if (!attachments || attachments.length === 0) {
+    return text;
+  }
+
+  const textAttachments = attachments.filter(a => a.category !== 'image');
+  if (textAttachments.length > 0) {
+    const attachmentText = textAttachments
+      .map(a => {
+        if (a.content) {
+          return `\n\n---\n**Attached file: ${a.name}**\n\`\`\`\n${truncateContent(a.content, 50000)}\n\`\`\``;
+        }
+        return `\n\n---\n**Attached file: ${a.name}**\n(Unable to extract text content from this file.)`;
+      })
+      .join('');
+    text += attachmentText;
+  }
+
+  const imageAttachments = attachments.filter(a => a.category === 'image');
+  if (imageAttachments.length > 0) {
+    const imageList = imageAttachments.map(a => a.name).join(', ');
+    text += `\n\n---\n**Attached images (not included inline):** ${imageList}`;
   }
 
   return text;

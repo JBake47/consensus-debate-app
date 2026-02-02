@@ -202,14 +202,25 @@
 }
 
 .model-card-reasoning-text {
-  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Fira Mono', monospace);
+  font-family: var(--font-sans);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: var(--text-secondary);
-  white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
   opacity: 0.85;
+}
+
+.model-card-reasoning-text p {
+  margin: 0 0 var(--space-xs);
+}
+
+.model-card-reasoning-text p:last-child {
+  margin-bottom: 0;
+}
+
+.model-card-reasoning-text code {
+  font-size: 0.95em;
 }
 
 /* Side-by-side layout for reasoning + content */

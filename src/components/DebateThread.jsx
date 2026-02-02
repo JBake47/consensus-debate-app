@@ -63,7 +63,9 @@ function ThreadMessage({ stream, roundNumber, roundLabel }) {
               )}
             </div>
             {reasoningOpen && (
-              <pre className="thread-reasoning-text">{reasoning}</pre>
+              <div className="thread-reasoning-text markdown-content">
+                <MarkdownRenderer>{reasoning}</MarkdownRenderer>
+              </div>
             )}
           </div>
         )}

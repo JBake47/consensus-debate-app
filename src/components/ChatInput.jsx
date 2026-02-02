@@ -1,11 +1,27 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, MessageSquare, Send, Zap } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { processFile, formatFileSize } from '../lib/fileProcessor';
+import { getImageIncompatibleModels } from '../lib/modelCapabilities';
 import './ChatInput.css';
 
 export default function ChatInput() {
-  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, focusedMode, editingTurn, activeConversation, dispatch } = useDebate();
+  const {
+    startDebate,
+    startDirect,
+    cancelDebate,
+    debateInProgress,
+    apiKey,
+    webSearchEnabled,
+    chatMode,
+    focusedMode,
+    editingTurn,
+    activeConversation,
+    selectedModels,
+    modelCatalog,
+    modelCatalogStatus,
+    dispatch,
+  } = useDebate();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -134,6 +150,16 @@ export default function ChatInput() {
     }
   };
 
+  const hasImageAttachment = useMemo(
+    () => attachments.some(att => att.category === 'image'),
+    [attachments]
+  );
+
+  const imageIncompatibleModels = useMemo(() => {
+    if (!hasImageAttachment || modelCatalogStatus !== 'ready') return [];
+    return getImageIncompatibleModels(selectedModels, modelCatalog);
+  }, [hasImageAttachment, modelCatalogStatus, selectedModels, modelCatalog]);
+
   return (
     <div className="chat-input-wrapper">
       <div
@@ -167,6 +193,12 @@ export default function ChatInput() {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {hasImageAttachment && imageIncompatibleModels.length > 0 && (
+          <div className="attachment-warning">
+            Images will not be sent to: {imageIncompatibleModels.join(', ')}
           </div>
         )}
 

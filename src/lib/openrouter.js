@@ -35,6 +35,21 @@ function extractReasoningText(details) {
     .join('\n');
 }
 
+function updateReasoningAccumulated(accumulated, incoming) {
+  if (!incoming) return accumulated;
+  if (!accumulated) return incoming;
+  if (incoming.startsWith(accumulated)) return incoming;
+  if (accumulated.startsWith(incoming)) return accumulated;
+
+  const maxOverlap = Math.min(accumulated.length, incoming.length);
+  for (let i = maxOverlap; i > 0; i -= 1) {
+    if (accumulated.slice(-i) === incoming.slice(0, i)) {
+      return accumulated + incoming.slice(i);
+    }
+  }
+  return accumulated + incoming;
+}
+
 /**
  * Stream a chat completion from OpenRouter.
  * Calls onChunk with each text delta as it arrives.
@@ -117,7 +132,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
 
         // Reasoning delta (streamed reasoning text)
         if (delta?.reasoning) {
-          accumulatedReasoning += delta.reasoning;
+          accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, delta.reasoning);
           onReasoning?.(accumulatedReasoning);
         }
 
@@ -125,7 +140,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
         if (delta?.reasoning_details) {
           const text = extractReasoningText(delta.reasoning_details);
           if (text) {
-            accumulatedReasoning += text;
+            accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, text);
             onReasoning?.(accumulatedReasoning);
           }
         }

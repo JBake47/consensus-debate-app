@@ -139,7 +139,9 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
                 </div>
                 {!reasoningCollapsed && (
                   <div className="model-card-reasoning-content" ref={reasoningRef}>
-                    <pre className="model-card-reasoning-text">{reasoning}</pre>
+                    <div className="model-card-reasoning-text markdown-content">
+                      <MarkdownRenderer>{reasoning}</MarkdownRenderer>
+                    </div>
                   </div>
                 )}
               </div>
@@ -188,7 +190,9 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
                   </div>
                   {!reasoningCollapsed && (
                     <div className="model-card-reasoning-content" ref={reasoningRef}>
-                      <pre className="model-card-reasoning-text">{reasoning}</pre>
+                      <div className="model-card-reasoning-text markdown-content">
+                        <MarkdownRenderer>{reasoning}</MarkdownRenderer>
+                      </div>
                       {status === 'streaming' && !content && <span className="cursor-blink" />}
                     </div>
                   )}

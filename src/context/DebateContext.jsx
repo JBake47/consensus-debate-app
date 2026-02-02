@@ -2,6 +2,7 @@ import { createContext, useContext, useReducer, useCallback, useRef, useEffect }
 import {
   streamChat,
   chatCompletion,
+  fetchModels,
   DEFAULT_DEBATE_MODELS,
   DEFAULT_SYNTHESIZER_MODEL,
   DEFAULT_CONVERGENCE_MODEL,
@@ -20,7 +21,7 @@ import {
   parseEnsembleVoteResponse,
   getFocusedEnsembleAnalysisPrompt,
 } from '../lib/debateEngine';
-import { buildAttachmentContent } from '../lib/fileProcessor';
+import { buildAttachmentContent, buildAttachmentTextContent } from '../lib/fileProcessor';
 import {
   buildConversationContext,
   buildSummaryPrompt,
@@ -120,6 +121,9 @@ const initialState = {
   chatMode: loadFromStorage('chat_mode', 'debate'),
   focusedMode: loadFromStorage('focused_mode', false),
   webSearchEnabled: false,
+  modelCatalog: {},
+  modelCatalogStatus: 'idle',
+  modelCatalogError: null,
   conversations: migratedConversations,
   activeConversationId: null,
   debateInProgress: false,
@@ -198,6 +202,16 @@ function reducer(state, action) {
       });
       saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
+    }
+    case 'SET_MODEL_CATALOG': {
+      return { ...state, modelCatalog: action.payload };
+    }
+    case 'SET_MODEL_CATALOG_STATUS': {
+      return {
+        ...state,
+        modelCatalogStatus: action.payload.status,
+        modelCatalogError: action.payload.error || null,
+      };
     }
     case 'SET_ACTIVE_CONVERSATION': {
       return { ...state, activeConversationId: action.payload };
@@ -402,6 +416,38 @@ export function DebateProvider({ children }) {
     }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!state.apiKey) {
+      dispatch({ type: 'SET_MODEL_CATALOG', payload: {} });
+      dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'idle', error: null } });
+      return undefined;
+    }
+
+    dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'loading', error: null } });
+
+    fetchModels(state.apiKey)
+      .then((models) => {
+        if (cancelled) return;
+        const catalog = {};
+        for (const model of models) {
+          const id = model.id || model.name || model.model;
+          if (id) catalog[id] = model;
+        }
+        dispatch({ type: 'SET_MODEL_CATALOG', payload: catalog });
+        dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'ready', error: null } });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'error', error: err.message || 'Failed to load models' } });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.apiKey]);
+
   const activeConversation = state.conversations.find(
     c => c.id === state.activeConversationId
   );
@@ -578,6 +624,7 @@ export function DebateProvider({ children }) {
       });
 
       try {
+        const searchPrompt = buildAttachmentTextContent(userPrompt, attachments);
         const { content: searchContent, durationMs: searchDurationMs } = await chatCompletion({
           model: webSearchModel,
           messages: [
@@ -585,7 +632,7 @@ export function DebateProvider({ children }) {
               role: 'system',
               content: 'Search the web to find current, accurate information relevant to the user\'s query. Provide a comprehensive summary of what you find, including key facts, data, and sources.',
             },
-            { role: 'user', content: userPrompt },
+            { role: 'user', content: searchPrompt },
           ],
           apiKey,
           signal: abortController.signal,
@@ -1126,6 +1173,7 @@ export function DebateProvider({ children }) {
       });
 
       try {
+        const searchPrompt = buildAttachmentTextContent(userPrompt, attachments);
         const { content: searchContent, durationMs: searchDurationMs } = await chatCompletion({
           model: webSearchModel,
           messages: [
@@ -1133,7 +1181,7 @@ export function DebateProvider({ children }) {
               role: 'system',
               content: 'Search the web to find current, accurate information relevant to the user\'s query. Provide a comprehensive summary of what you find, including key facts, data, and sources.',
             },
-            { role: 'user', content: userPrompt },
+            { role: 'user', content: searchPrompt },
           ],
           apiKey,
           signal: abortController.signal,
