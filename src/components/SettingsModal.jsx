@@ -8,6 +8,7 @@ import {
   DEFAULT_MAX_DEBATE_ROUNDS,
   DEFAULT_WEB_SEARCH_MODEL,
 } from '../lib/openrouter';
+import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
 
 export default function SettingsModal() {
@@ -25,19 +26,7 @@ export default function SettingsModal() {
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
-
-  useEffect(() => {
-    if (!showSettings) return;
-    setKeyInput(apiKey);
-    setModels(selectedModels);
-    setSynth(synthesizerModel);
-    setConvModel(convergenceModel);
-    setMaxRounds(maxDebateRounds);
-    setSearchModel(webSearchModel);
-    setRememberKey(rememberApiKey);
-  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
-
-  if (!showSettings) return null;
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleSave = () => {
     dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
@@ -62,6 +51,13 @@ export default function SettingsModal() {
     if (!models.includes(modelId)) {
       setModels([...models, modelId]);
       setNewModel('');
+    }
+  };
+
+  const addModelId = (modelId) => {
+    if (!modelId) return;
+    if (!models.includes(modelId)) {
+      setModels([...models, modelId]);
     }
   };
 
@@ -90,6 +86,19 @@ export default function SettingsModal() {
     setMaxRounds(DEFAULT_MAX_DEBATE_ROUNDS);
     setSearchModel(DEFAULT_WEB_SEARCH_MODEL);
   };
+
+  useEffect(() => {
+    if (!showSettings) return;
+    setKeyInput(apiKey);
+    setModels(selectedModels);
+    setSynth(synthesizerModel);
+    setConvModel(convergenceModel);
+    setMaxRounds(maxDebateRounds);
+    setSearchModel(webSearchModel);
+    setRememberKey(rememberApiKey);
+  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
+
+  if (!showSettings) return null;
 
   return (
     <div className="settings-overlay" onClick={handleClose}>
@@ -178,6 +187,14 @@ export default function SettingsModal() {
                 <Plus size={14} />
                 Add
               </button>
+              {providerOptions.some(p => p.id === 'openrouter') && (
+                <button
+                  className="model-browse-btn"
+                  onClick={() => setPickerOpen(true)}
+                >
+                  Browse
+                </button>
+              )}
             </div>
             {newModelProvider === 'openrouter' && modelCatalogStatus === 'ready' && (
               <datalist id="openrouter-models">
@@ -291,6 +308,14 @@ export default function SettingsModal() {
           </button>
         </div>
       </div>
+      <ModelPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onAdd={(modelId) => {
+          addModelId(modelId);
+          setPickerOpen(false);
+        }}
+      />
     </div>
   );
 }

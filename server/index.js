@@ -519,6 +519,53 @@ app.get('/api/models', async (_req, res) => {
   }
 });
 
+app.get('/api/models/search', async (req, res) => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    res.json({ data: [] });
+    return;
+  }
+
+  const query = String(req.query.q || '').toLowerCase().trim();
+  const provider = String(req.query.provider || '').toLowerCase().trim();
+  const limit = Math.min(Number(req.query.limit || 200), 500);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+    if (!response.ok) {
+      const bodyText = await response.text();
+      res.status(500).json({ error: bodyText || 'Failed to fetch models' });
+      return;
+    }
+    const data = await response.json();
+    let models = data.data || [];
+    if (provider) {
+      models = models.filter(m => {
+        const id = (m.id || '').toLowerCase();
+        return id.startsWith(`${provider}/`);
+      });
+    }
+    if (query) {
+      models = models.filter(m => {
+        const id = (m.id || '').toLowerCase();
+        const name = (m.name || '').toLowerCase();
+        const description = (m.description || '').toLowerCase();
+        return id.includes(query) || name.includes(query) || description.includes(query);
+      });
+    }
+    const total = models.length;
+    const sliced = models.slice(offset, offset + limit);
+    res.json({ data: sliced, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to fetch models' });
+  }
+});
+
 app.get('/api/providers', (_req, res) => {
   res.json({
     openrouter: Boolean(process.env.OPENROUTER_API_KEY),

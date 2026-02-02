@@ -215,6 +215,26 @@
   color: var(--text-primary);
 }
 
+.model-browse-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  background: rgba(79, 143, 247, 0.12);
+  border: 1px solid rgba(79, 143, 247, 0.35);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  color: var(--accent-blue);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.model-browse-btn:hover {
+  background: rgba(79, 143, 247, 0.2);
+  color: var(--text-primary);
+}
+
 .settings-divider {
   height: 1px;
   background: var(--border-subtle);

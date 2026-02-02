@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Provider-prefix model routing (`anthropic:`, `openai:`, `gemini:`) with OpenRouter as default
 - `dev:all` script to run server and client together
 - Provider-aware model picker that only lists enabled providers
+- OpenRouter model browser with search + pagination
 
 ### Changed
 - OpenRouter API key is now optional (server-owned keys recommended)

@@ -1,5 +1,6 @@
 const API_PROXY_URL = '/api/chat';
 const MODELS_PROXY_URL = '/api/models';
+const MODELS_SEARCH_URL = '/api/models/search';
 const PROVIDERS_PROXY_URL = '/api/providers';
 
 export class OpenRouterError extends Error {
@@ -218,6 +219,19 @@ export async function fetchModels() {
 
   const data = await response.json();
   return data.data || [];
+}
+
+export async function searchModels({ query = '', provider = '', limit = 200, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  if (provider) params.set('provider', provider);
+  if (limit != null) params.set('limit', String(limit));
+  if (offset != null) params.set('offset', String(offset));
+  const response = await fetch(`${MODELS_SEARCH_URL}?${params.toString()}`);
+  if (!response.ok) {
+    throw new OpenRouterError('Failed to search models', response.status);
+  }
+  return response.json();
 }
 
 export async function fetchProviders() {
