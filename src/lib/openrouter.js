@@ -1,5 +1,6 @@
 const API_PROXY_URL = '/api/chat';
 const MODELS_PROXY_URL = '/api/models';
+const PROVIDERS_PROXY_URL = '/api/providers';
 
 export class OpenRouterError extends Error {
   constructor(message, status, code) {
@@ -208,7 +209,7 @@ export async function chatCompletion({ model, messages, apiKey, signal }) {
 /**
  * Fetch available models from OpenRouter.
  */
-export async function fetchModels(apiKey) {
+export async function fetchModels() {
   const response = await fetch(MODELS_PROXY_URL);
 
   if (!response.ok) {
@@ -217,6 +218,14 @@ export async function fetchModels(apiKey) {
 
   const data = await response.json();
   return data.data || [];
+}
+
+export async function fetchProviders() {
+  const response = await fetch(PROVIDERS_PROXY_URL);
+  if (!response.ok) {
+    throw new OpenRouterError('Failed to fetch providers', response.status);
+  }
+  return response.json();
 }
 
 export const DEFAULT_DEBATE_MODELS = [

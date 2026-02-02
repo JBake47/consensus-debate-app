@@ -3,6 +3,7 @@ import {
   streamChat,
   chatCompletion,
   fetchModels,
+  fetchProviders,
   DEFAULT_DEBATE_MODELS,
   DEFAULT_SYNTHESIZER_MODEL,
   DEFAULT_CONVERGENCE_MODEL,
@@ -124,6 +125,9 @@ const initialState = {
   modelCatalog: {},
   modelCatalogStatus: 'idle',
   modelCatalogError: null,
+  providerStatus: { openrouter: false, anthropic: false, openai: false, gemini: false },
+  providerStatusState: 'idle',
+  providerStatusError: null,
   conversations: migratedConversations,
   activeConversationId: null,
   debateInProgress: false,
@@ -211,6 +215,16 @@ function reducer(state, action) {
         ...state,
         modelCatalogStatus: action.payload.status,
         modelCatalogError: action.payload.error || null,
+      };
+    }
+    case 'SET_PROVIDER_STATUS': {
+      return { ...state, providerStatus: action.payload };
+    }
+    case 'SET_PROVIDER_STATUS_STATE': {
+      return {
+        ...state,
+        providerStatusState: action.payload.status,
+        providerStatusError: action.payload.error || null,
       };
     }
     case 'SET_ACTIVE_CONVERSATION': {
@@ -433,7 +447,28 @@ export function DebateProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [state.apiKey]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'loading', error: null } });
+
+    fetchProviders()
+      .then((providers) => {
+        if (cancelled) return;
+        dispatch({ type: 'SET_PROVIDER_STATUS', payload: providers });
+        dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'ready', error: null } });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'error', error: err.message || 'Failed to load providers' } });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const activeConversation = state.conversations.find(
     c => c.id === state.activeConversationId

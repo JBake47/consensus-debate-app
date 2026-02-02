@@ -94,6 +94,7 @@ npm run preview
 - Configure synthesis model (default: GPT-4o)
 - Prefix direct providers with `anthropic:`, `openai:`, or `gemini:` (e.g. `anthropic:claude-3.7-sonnet`)
 - Unprefixed model IDs route through OpenRouter
+- The model picker only shows providers that have server-side keys configured
 
 ### Debate Settings
 - Max rounds: Control debate depth

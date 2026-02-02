@@ -189,6 +189,12 @@
   flex: 1;
 }
 
+.settings-select {
+  max-width: 140px;
+  text-transform: capitalize;
+  padding-right: var(--space-md);
+}
+
 .model-add-btn {
   display: flex;
   align-items: center;

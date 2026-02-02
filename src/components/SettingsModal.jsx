@@ -14,7 +14,7 @@ export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, maxDebateRounds, webSearchModel,
-    showSettings, rememberApiKey, dispatch,
+    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
@@ -24,6 +24,7 @@ export default function SettingsModal() {
   const [searchModel, setSearchModel] = useState(webSearchModel);
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
+  const [newModelProvider, setNewModelProvider] = useState('openrouter');
 
   useEffect(() => {
     if (!showSettings) return;
@@ -55,11 +56,27 @@ export default function SettingsModal() {
 
   const addModel = () => {
     const trimmed = newModel.trim();
-    if (trimmed && !models.includes(trimmed)) {
-      setModels([...models, trimmed]);
+    if (!trimmed) return;
+    const provider = newModelProvider;
+    const modelId = provider === 'openrouter' ? trimmed : `${provider}:${trimmed}`;
+    if (!models.includes(modelId)) {
+      setModels([...models, modelId]);
       setNewModel('');
     }
   };
+
+  const providerOptions = [
+    { id: 'openrouter', label: 'OpenRouter', enabled: providerStatus?.openrouter || Boolean(apiKey) },
+    { id: 'anthropic', label: 'Anthropic', enabled: providerStatus?.anthropic },
+    { id: 'openai', label: 'OpenAI', enabled: providerStatus?.openai },
+    { id: 'gemini', label: 'Gemini', enabled: providerStatus?.gemini },
+  ].filter(p => p.enabled);
+
+  useEffect(() => {
+    if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
+      setNewModelProvider(providerOptions[0].id);
+    }
+  }, [providerOptions, newModelProvider]);
 
   const removeModel = (index) => {
     if (models.length <= 1) return;
@@ -134,19 +151,46 @@ export default function SettingsModal() {
               ))}
             </div>
             <div className="model-add-row">
+              <select
+                className="settings-input settings-select"
+                value={newModelProvider}
+                onChange={e => setNewModelProvider(e.target.value)}
+                disabled={providerOptions.length === 0}
+              >
+                {providerOptions.map(option => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
               <input
                 type="text"
                 className="settings-input"
-                placeholder="openrouter-model or anthropic:claude-3.7-sonnet"
+                placeholder={newModelProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={newModel}
                 onChange={e => setNewModel(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addModel()}
+                list={newModelProvider === 'openrouter' && modelCatalogStatus === 'ready' ? 'openrouter-models' : undefined}
               />
-              <button className="model-add-btn" onClick={addModel}>
+              <button
+                className="model-add-btn"
+                onClick={addModel}
+                disabled={providerOptions.length === 0}
+              >
                 <Plus size={14} />
                 Add
               </button>
             </div>
+            {newModelProvider === 'openrouter' && modelCatalogStatus === 'ready' && (
+              <datalist id="openrouter-models">
+                {Object.keys(modelCatalog || {}).slice(0, 200).map((modelId) => (
+                  <option key={modelId} value={modelId} />
+                ))}
+              </datalist>
+            )}
+            {providerOptions.length === 0 && (
+              <p className="settings-hint">
+                No providers are enabled on the server. Add API keys to the backend environment.
+              </p>
+            )}
             <p className="settings-hint">
               Prefix direct providers with <code>anthropic:</code>, <code>openai:</code>, or <code>gemini:</code>.
               Unprefixed models route through OpenRouter.
@@ -154,6 +198,11 @@ export default function SettingsModal() {
             <p className="settings-hint">
               Examples: <code>anthropic:claude-3.7-sonnet</code>, <code>openai:gpt-4.1</code>, <code>gemini:gemini-2.5-flash</code>.
             </p>
+            {providerStatusState === 'error' && (
+              <p className="settings-hint">
+                Provider status unavailable: {providerStatusError || 'check the backend'}.
+              </p>
+            )}
           </div>
 
           <div className="settings-section">
