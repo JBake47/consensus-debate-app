@@ -122,7 +122,7 @@ function AppContent() {
           ) : (
             <div className="turns-container">
               {turns.map((turn, i) => (
-                <DebateView key={i} turn={turn} index={i} isLastTurn={i === turns.length - 1} />
+                <DebateView key={turn.id || turn.timestamp || i} turn={turn} index={i} isLastTurn={i === turns.length - 1} />
               ))}
             </div>
           )}

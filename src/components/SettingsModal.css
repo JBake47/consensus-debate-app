@@ -126,6 +126,18 @@
   text-decoration: underline;
 }
 
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.settings-checkbox input {
+  accent-color: var(--accent-blue);
+}
+
 .model-list {
   display: flex;
   flex-direction: column;

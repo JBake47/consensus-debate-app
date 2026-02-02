@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import {
@@ -14,7 +14,7 @@ export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, maxDebateRounds, webSearchModel,
-    showSettings, dispatch,
+    showSettings, rememberApiKey, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
@@ -22,11 +22,24 @@ export default function SettingsModal() {
   const [convModel, setConvModel] = useState(convergenceModel);
   const [maxRounds, setMaxRounds] = useState(maxDebateRounds);
   const [searchModel, setSearchModel] = useState(webSearchModel);
+  const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
+
+  useEffect(() => {
+    if (!showSettings) return;
+    setKeyInput(apiKey);
+    setModels(selectedModels);
+    setSynth(synthesizerModel);
+    setConvModel(convergenceModel);
+    setMaxRounds(maxDebateRounds);
+    setSearchModel(webSearchModel);
+    setRememberKey(rememberApiKey);
+  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
 
   if (!showSettings) return null;
 
   const handleSave = () => {
+    dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
     dispatch({ type: 'SET_API_KEY', payload: keyInput.trim() });
     dispatch({ type: 'SET_MODELS', payload: models });
     dispatch({ type: 'SET_SYNTHESIZER', payload: synth });
@@ -88,6 +101,14 @@ export default function SettingsModal() {
               onChange={e => setKeyInput(e.target.value)}
               autoFocus={!apiKey}
             />
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={rememberKey}
+                onChange={e => setRememberKey(e.target.checked)}
+              />
+              <span>Remember key on this device</span>
+            </label>
             <p className="settings-hint">
               Get your key at{' '}
               <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">

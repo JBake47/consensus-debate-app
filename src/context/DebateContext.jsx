@@ -102,8 +102,16 @@ if (migrated) {
   saveToStorage('debate_conversations', migratedConversations);
 }
 
+const rememberApiKey = loadFromStorage('remember_api_key', false);
+if (!rememberApiKey) {
+  localStorage.removeItem('openrouter_api_key');
+}
+
 const initialState = {
-  apiKey: localStorage.getItem('openrouter_api_key') || '',
+  apiKey: rememberApiKey
+    ? (localStorage.getItem('openrouter_api_key') || '')
+    : (sessionStorage.getItem('openrouter_api_key') || ''),
+  rememberApiKey,
   selectedModels: loadFromStorage('debate_models', DEFAULT_DEBATE_MODELS),
   synthesizerModel: loadFromStorage('synthesizer_model', DEFAULT_SYNTHESIZER_MODEL),
   convergenceModel: loadFromStorage('convergence_model', DEFAULT_CONVERGENCE_MODEL),
@@ -133,8 +141,24 @@ function updateLastTurn(conversations, conversationId, updater) {
 function reducer(state, action) {
   switch (action.type) {
     case 'SET_API_KEY': {
-      localStorage.setItem('openrouter_api_key', action.payload);
+      sessionStorage.setItem('openrouter_api_key', action.payload);
+      if (state.rememberApiKey) {
+        localStorage.setItem('openrouter_api_key', action.payload);
+      } else {
+        localStorage.removeItem('openrouter_api_key');
+      }
       return { ...state, apiKey: action.payload };
+    }
+    case 'SET_REMEMBER_API_KEY': {
+      saveToStorage('remember_api_key', action.payload);
+      if (action.payload) {
+        if (state.apiKey) {
+          localStorage.setItem('openrouter_api_key', state.apiKey);
+        }
+      } else {
+        localStorage.removeItem('openrouter_api_key');
+      }
+      return { ...state, rememberApiKey: action.payload };
     }
     case 'SET_MODELS': {
       saveToStorage('debate_models', action.payload);
@@ -214,7 +238,8 @@ function reducer(state, action) {
         const rounds = [...lastTurn.rounds];
         const round = { ...rounds[roundIndex] };
         const streams = [...round.streams];
-        const updates = { ...streams[streamIndex], content, status, error };
+        const updates = { ...streams[streamIndex], status, error };
+        if (content !== undefined) updates.content = content;
         if (usage !== undefined) updates.usage = usage;
         if (durationMs !== undefined) updates.durationMs = durationMs;
         if (reasoning !== undefined) updates.reasoning = reasoning;
@@ -428,7 +453,6 @@ export function DebateProvider({ children }) {
                   conversationId: convId,
                   roundIndex,
                   streamIndex: index,
-                  content: '',
                   status: 'streaming',
                   error: null,
                   reasoning: accumulatedReasoning,
@@ -454,7 +478,20 @@ export function DebateProvider({ children }) {
 
           return { model, content, index };
         } catch (err) {
-          if (err.name === 'AbortError') throw err;
+          if (err.name === 'AbortError') {
+            dispatch({
+              type: 'UPDATE_ROUND_STREAM',
+              payload: {
+                conversationId: convId,
+                roundIndex,
+                streamIndex: index,
+                content: '',
+                status: 'error',
+                error: 'Cancelled',
+              },
+            });
+            return { model, content: '', index, error: 'Cancelled' };
+          }
           const errorMsg = err.message || 'An error occurred';
           dispatch({
             type: 'UPDATE_ROUND_STREAM',
@@ -505,6 +542,7 @@ export function DebateProvider({ children }) {
 
     // Build new turn with rounds structure
     const turn = {
+      id: Date.now().toString(),
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -920,7 +958,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.activeConversationId, state.conversations]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.activeConversationId, state.conversations, state.focusedMode]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -1051,6 +1089,7 @@ export function DebateProvider({ children }) {
 
     // Build ensemble vote turn
     const turn = {
+      id: Date.now().toString(),
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -1243,17 +1282,32 @@ export function DebateProvider({ children }) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    if (activeConversation?.turns?.length) {
+      const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+      if (lastTurn.rounds?.length) {
+        const lastRoundIndex = lastTurn.rounds.length - 1;
+        if (lastTurn.rounds[lastRoundIndex].status === 'streaming') {
+          dispatch({
+            type: 'UPDATE_ROUND_STATUS',
+            payload: {
+              conversationId: activeConversation.id,
+              roundIndex: lastRoundIndex,
+              status: 'error',
+            },
+          });
+        }
+      }
+    }
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, []);
+  }, [activeConversation, dispatch]);
 
   const editLastTurn = useCallback(() => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     dispatch({
       type: 'SET_EDITING_TURN',
-      payload: { prompt: lastTurn.userPrompt, attachments: lastTurn.attachments },
+      payload: { prompt: lastTurn.userPrompt, attachments: lastTurn.attachments, conversationId: activeConversation.id },
     });
-    dispatch({ type: 'REMOVE_LAST_TURN', payload: activeConversation.id });
   }, [activeConversation]);
 
   const retryLastTurn = useCallback(() => {
@@ -1587,7 +1641,7 @@ export function DebateProvider({ children }) {
               dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: accumulated, status: 'streaming', error: null } });
             },
             onReasoning: (accumulatedReasoning) => {
-              dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: '', status: 'streaming', error: null, reasoning: accumulatedReasoning } });
+              dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, status: 'streaming', error: null, reasoning: accumulatedReasoning } });
             },
           });
           dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content, status: 'complete', error: null, usage, durationMs, reasoning: reasoning || null } });
@@ -1829,7 +1883,7 @@ export function DebateProvider({ children }) {
         onReasoning: (accumulatedReasoning) => {
           dispatch({
             type: 'UPDATE_ROUND_STREAM',
-            payload: { conversationId: convId, roundIndex, streamIndex, content: '', status: 'streaming', error: null, reasoning: accumulatedReasoning },
+            payload: { conversationId: convId, roundIndex, streamIndex, status: 'streaming', error: null, reasoning: accumulatedReasoning },
           });
         },
       });

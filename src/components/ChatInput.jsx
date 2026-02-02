@@ -5,11 +5,12 @@ import { processFile, formatFileSize } from '../lib/fileProcessor';
 import './ChatInput.css';
 
 export default function ChatInput() {
-  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, focusedMode, editingTurn, dispatch } = useDebate();
+  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, focusedMode, editingTurn, activeConversation, dispatch } = useDebate();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [editMeta, setEditMeta] = useState(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -27,6 +28,7 @@ export default function ChatInput() {
     if (editingTurn) {
       setInput(editingTurn.prompt || '');
       setAttachments(editingTurn.attachments || []);
+      setEditMeta({ conversationId: editingTurn.conversationId });
       dispatch({ type: 'SET_EDITING_TURN', payload: null });
       // Focus textarea after populating
       setTimeout(() => textareaRef.current?.focus(), 0);
@@ -69,6 +71,10 @@ export default function ChatInput() {
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
     };
     const prompt = trimmed || '(see attachments)';
+    if (editMeta?.conversationId && editMeta.conversationId === activeConversation?.id) {
+      dispatch({ type: 'REMOVE_LAST_TURN', payload: editMeta.conversationId });
+      setEditMeta(null);
+    }
     if (chatMode === 'direct') {
       startDirect(prompt, opts);
     } else {
@@ -140,6 +146,12 @@ export default function ChatInput() {
           <div className="drag-overlay">
             <Paperclip size={24} />
             <span>Drop files here</span>
+          </div>
+        )}
+
+        {editMeta && (
+          <div className="edit-mode-banner">
+            <span>Editing last message</span>
           </div>
         )}
 
@@ -226,14 +238,29 @@ export default function ChatInput() {
                 <span>Stop</span>
               </button>
             ) : (
-              <button
-                className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''}`}
-                onClick={handleSubmit}
-                disabled={(!input.trim() && attachments.length === 0) || !apiKey}
-              >
-                {chatMode === 'debate' ? <Swords size={16} /> : <Send size={16} />}
-                <span>{chatMode === 'debate' ? 'Debate' : 'Send'}</span>
-              </button>
+              <>
+                {editMeta && (
+                  <button
+                    className="chat-btn chat-btn-cancel-edit"
+                    onClick={() => {
+                      setInput('');
+                      setAttachments([]);
+                      setEditMeta(null);
+                    }}
+                  >
+                    <X size={16} />
+                    <span>Cancel Edit</span>
+                  </button>
+                )}
+                <button
+                  className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''}`}
+                  onClick={handleSubmit}
+                  disabled={(!input.trim() && attachments.length === 0) || !apiKey}
+                >
+                  {chatMode === 'debate' ? <Swords size={16} /> : <Send size={16} />}
+                  <span>{chatMode === 'debate' ? 'Debate' : 'Send'}</span>
+                </button>
+              </>
             )}
           </div>
         </div>
