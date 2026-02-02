@@ -7,8 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-01
+
 ### Added
-- CHANGELOG.md to track version history
+- **Ensemble Vote Mode** (replaces simple Direct mode):
+  - Phase 1: All debate models run independently in parallel
+  - Phase 2: Vote analysis produces confidence scores (0-100), outlier detection, agreement/disagreement areas, and model quality weights
+  - Phase 3: Streaming synthesis weighted by vote analysis results
+  - New `EnsembleResultPanel` component with confidence meter, outlier badges, and expandable details
+  - Backward compatible with old single-stream direct turns
+  - Full retry support (re-runs vote analysis and synthesis)
+- **Focused Mode** for both Debate and Ensemble modes:
+  - Toggle for concise, direct responses across all modes
+  - Debate mode: sharp, brief rebuttals (half the typical length)
+  - Ensemble mode: concise analyses and synthesis
+  - Persistent setting stored in localStorage
+- **Disagreement Mapping** in debates:
+  - New `ConvergencePanel` component showing per-round convergence analysis
+  - Displays confidence scores with colored mini-bars
+  - Expandable sections for agreement lists and disagreement cards
+  - Disagreement cards show per-model positions for each point of contention
+- **Confidence Levels** per debate round:
+  - 0-100 confidence scores shown under each round step in progress bar
+  - Color-coded by level (high/mid/low)
+  - Consensus trend mini-chart visualizes confidence progression across rounds
+- **Prominent Reasoning** for o1/o3/reasoning models:
+  - Auto-detect reasoning models (o1, o3, deepseek-r1, qwq, reasoner)
+  - Auto-expand reasoning sections by default for these models
+  - Side-by-side layout option: reasoning on left, response on right
+  - Layout toggle button to switch between stacked and side-by-side views
+
+### Changed
+- Direct mode renamed to "Ensemble" in user interface
+- Round label changes to "Focused Analyses" when focused mode is enabled in ensemble
+- Focused mode toggle now visible in both Debate and Ensemble modes
+- Ensemble cost tracking includes vote analysis phase costs
+
+### Technical
+- Added ensemble-specific prompts and focused variants to `debateEngine.js`
+- Rewrote `startDirect` to implement 3-phase ensemble flow
+- Added `SET_ENSEMBLE_RESULT` and `SET_FOCUSED_MODE` reducer actions
+- Created `runEnsembleAnalysisAndSynthesis` helper for vote analysis and synthesis
+- Updated all retry functions to support ensemble mode
+- Added ensemble CSS variables (`--accent-ensemble`, `--ensemble-confidence-*`)
+- Enhanced `ModelCard` with side-by-side reasoning layout
+- Updated convergence prompt to request structured JSON with confidence and disagreements
 
 ## [0.2.0] - 2026-02-01
 
@@ -86,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JBake47/openrouter-debate-app/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JBake47/openrouter-debate-app/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JBake47/openrouter-debate-app/releases/tag/v0.1.0
