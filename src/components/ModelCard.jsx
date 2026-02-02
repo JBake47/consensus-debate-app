@@ -7,11 +7,18 @@ import { getModelDisplayName, getProviderName, getModelColor } from '../lib/open
 import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './ModelCard.css';
 
+function isReasoningModel(modelId) {
+  const id = modelId.toLowerCase();
+  return /\bo[13]\b/.test(id) || id.includes('deepseek-r1') || id.includes('qwq') || id.includes('reasoner');
+}
+
 export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn }) {
   const { retryStream, debateInProgress } = useDebate();
   const { model, content, status, error, usage, durationMs, reasoning } = stream;
   const [collapsed, setCollapsed] = useState(false);
-  const [reasoningCollapsed, setReasoningCollapsed] = useState(true);
+  const reasoningModel = isReasoningModel(model);
+  const [reasoningCollapsed, setReasoningCollapsed] = useState(!reasoningModel);
+  const [sideBySide, setSideBySide] = useState(reasoningModel);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
@@ -103,62 +110,115 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
 
       {!collapsed && (
         <>
-          {reasoning && (
-            <div className="model-card-reasoning">
-              <div
-                className="model-card-reasoning-header"
-                onClick={() => setReasoningCollapsed(!reasoningCollapsed)}
-              >
-                <div className="model-card-reasoning-label">
-                  <Brain size={13} />
-                  <span>Thinking</span>
-                  {status === 'streaming' && reasoning && !content && (
-                    <Loader2 size={12} className="spinning" />
-                  )}
-                  {usage?.reasoningTokens != null && (
-                    <span className="model-card-reasoning-tokens">
-                      {formatTokenCount(usage.reasoningTokens)} tokens
-                    </span>
-                  )}
+          {reasoning && sideBySide && content ? (
+            <div className="model-card-side-by-side">
+              <div className="model-card-reasoning side-by-side">
+                <div
+                  className="model-card-reasoning-header"
+                  onClick={() => setReasoningCollapsed(!reasoningCollapsed)}
+                >
+                  <div className="model-card-reasoning-label">
+                    <Brain size={13} />
+                    <span>Thinking</span>
+                    {usage?.reasoningTokens != null && (
+                      <span className="model-card-reasoning-tokens">
+                        {formatTokenCount(usage.reasoningTokens)} tokens
+                      </span>
+                    )}
+                  </div>
+                  <div className="model-card-reasoning-actions">
+                    {status === 'complete' && <CopyButton text={reasoning} />}
+                    <button
+                      className="model-card-layout-toggle"
+                      onClick={(e) => { e.stopPropagation(); setSideBySide(false); }}
+                      title="Stack vertically"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div className="model-card-reasoning-actions">
-                  {!reasoningCollapsed && status === 'complete' && (
-                    <CopyButton text={reasoning} />
-                  )}
-                  {reasoningCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                {!reasoningCollapsed && (
+                  <div className="model-card-reasoning-content" ref={reasoningRef}>
+                    <pre className="model-card-reasoning-text">{reasoning}</pre>
+                  </div>
+                )}
+              </div>
+              <div className="model-card-content side-by-side" ref={contentRef}>
+                <div className="markdown-content">
+                  <MarkdownRenderer>{content}</MarkdownRenderer>
+                  {status === 'streaming' && <span className="cursor-blink" />}
                 </div>
               </div>
-              {!reasoningCollapsed && (
-                <div className="model-card-reasoning-content" ref={reasoningRef}>
-                  <pre className="model-card-reasoning-text">{reasoning}</pre>
-                  {status === 'streaming' && !content && <span className="cursor-blink" />}
+            </div>
+          ) : (
+            <>
+              {reasoning && (
+                <div className="model-card-reasoning">
+                  <div
+                    className="model-card-reasoning-header"
+                    onClick={() => setReasoningCollapsed(!reasoningCollapsed)}
+                  >
+                    <div className="model-card-reasoning-label">
+                      <Brain size={13} />
+                      <span>Thinking</span>
+                      {status === 'streaming' && reasoning && !content && (
+                        <Loader2 size={12} className="spinning" />
+                      )}
+                      {usage?.reasoningTokens != null && (
+                        <span className="model-card-reasoning-tokens">
+                          {formatTokenCount(usage.reasoningTokens)} tokens
+                        </span>
+                      )}
+                    </div>
+                    <div className="model-card-reasoning-actions">
+                      {!reasoningCollapsed && status === 'complete' && (
+                        <CopyButton text={reasoning} />
+                      )}
+                      {content && reasoning && (
+                        <button
+                          className="model-card-layout-toggle"
+                          onClick={(e) => { e.stopPropagation(); setSideBySide(true); }}
+                          title="Show side by side"
+                        >
+                          <ChevronUp size={14} />
+                        </button>
+                      )}
+                      {reasoningCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                    </div>
+                  </div>
+                  {!reasoningCollapsed && (
+                    <div className="model-card-reasoning-content" ref={reasoningRef}>
+                      <pre className="model-card-reasoning-text">{reasoning}</pre>
+                      {status === 'streaming' && !content && <span className="cursor-blink" />}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
+              <div className="model-card-content" ref={contentRef}>
+                {status === 'pending' && (
+                  <div className="model-card-pending">
+                    <div className="pulse-dots">
+                      <span /><span /><span />
+                    </div>
+                  </div>
+                )}
+
+                {status === 'error' && (
+                  <div className="model-card-error">
+                    <AlertCircle size={16} />
+                    <span>{error || 'An error occurred'}</span>
+                  </div>
+                )}
+
+                {(status === 'streaming' || status === 'complete') && content && (
+                  <div className="markdown-content">
+                    <MarkdownRenderer>{content}</MarkdownRenderer>
+                    {status === 'streaming' && <span className="cursor-blink" />}
+                  </div>
+                )}
+              </div>
+            </>
           )}
-          <div className="model-card-content" ref={contentRef}>
-            {status === 'pending' && (
-              <div className="model-card-pending">
-                <div className="pulse-dots">
-                  <span /><span /><span />
-                </div>
-              </div>
-            )}
-
-            {status === 'error' && (
-              <div className="model-card-error">
-                <AlertCircle size={16} />
-                <span>{error || 'An error occurred'}</span>
-              </div>
-            )}
-
-            {(status === 'streaming' || status === 'complete') && content && (
-              <div className="markdown-content">
-                <MarkdownRenderer>{content}</MarkdownRenderer>
-                {status === 'streaming' && <span className="cursor-blink" />}
-              </div>
-            )}
-          </div>
         </>
       )}
     </div>

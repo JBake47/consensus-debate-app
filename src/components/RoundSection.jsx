@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Loader2, CheckCircle2, AlertCircle, RotateCcw }
 import { useDebate } from '../context/DebateContext';
 import ModelCard from './ModelCard';
 import ConvergenceBadge from './ConvergenceBadge';
+import ConvergencePanel from './ConvergencePanel';
 import { formatCost } from '../lib/formatTokens';
 import './RoundSection.css';
 
@@ -59,6 +60,9 @@ export default function RoundSection({ round, isLatest, roundIndex, isLastTurn }
               <ModelCard key={`${stream.model}-${i}`} stream={stream} roundIndex={roundIndex} streamIndex={i} isLastTurn={isLastTurn} />
             ))}
           </div>
+          {convergenceCheck && (convergenceCheck.agreements?.length > 0 || convergenceCheck.disagreements?.length > 0 || convergenceCheck.confidence != null) && (
+            <ConvergencePanel convergenceCheck={convergenceCheck} roundNumber={roundNumber} />
+          )}
         </div>
       )}
     </div>

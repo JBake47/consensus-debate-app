@@ -34,6 +34,7 @@ export function computeTurnCost(turn) {
     }
   }
   if (turn.synthesis?.usage?.cost != null) total += turn.synthesis.usage.cost;
+  if (turn.ensembleResult?.usage?.cost != null) total += turn.ensembleResult.usage.cost;
   return total;
 }
 

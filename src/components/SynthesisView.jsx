@@ -121,7 +121,7 @@ function DebateInternals({ rounds, debateMetadata }) {
   );
 }
 
-export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds }) {
+export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult }) {
   const { retrySynthesis, debateInProgress } = useDebate();
   const { model, content, status, error } = synthesis;
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
@@ -145,7 +145,7 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
           <Sparkles size={16} />
         </div>
         <div className="synthesis-title-area">
-          <span className="synthesis-title">Synthesized Answer</span>
+          <span className="synthesis-title">{ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}</span>
           <span className="synthesis-model">{getModelDisplayName(model)}</span>
         </div>
         <div className="synthesis-badges">
@@ -167,7 +167,13 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
               {debateMetadata.totalRounds} round{debateMetadata.totalRounds !== 1 ? 's' : ''}
             </div>
           )}
-          {debateMetadata?.converged && (
+          {ensembleResult?.status === 'complete' && ensembleResult.confidence != null && (
+            <div className={`synthesis-meta-badge ${ensembleResult.confidence >= 70 ? 'converged' : ''}`}>
+              <CheckCircle2 size={11} />
+              {ensembleResult.confidence}% confidence
+            </div>
+          )}
+          {debateMetadata?.converged && !ensembleResult && (
             <div className="synthesis-meta-badge converged">
               <CheckCircle2 size={11} />
               Converged

@@ -27,6 +27,14 @@
   /* Synthesis accent */
   --accent-synthesis: linear-gradient(135deg, #4f8ff7, #a855f7, #ec4899);
 
+  /* Ensemble Vote */
+  --accent-ensemble: #f59e0b;
+  --ensemble-bg: rgba(245, 158, 11, 0.06);
+  --ensemble-border: rgba(245, 158, 11, 0.2);
+  --ensemble-confidence-high: #22c55e;
+  --ensemble-confidence-mid: #f59e0b;
+  --ensemble-confidence-low: #ef4444;
+
   /* Status */
   --status-error: #ef4444;
   --status-success: #22c55e;

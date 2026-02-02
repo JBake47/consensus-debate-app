@@ -9,6 +9,7 @@ import RoundSection from './RoundSection';
 import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
+import EnsembleResultPanel from './EnsembleResultPanel';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { formatDuration, formatCost, computeTurnCost } from '../lib/formatTokens';
@@ -68,6 +69,11 @@ export default function DebateView({ turn, isLastTurn }) {
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
+  // Ensemble turns have multiple streams in their round or an ensembleResult
+  const isEnsembleTurn = isDirectMode && (
+    turn.ensembleResult != null ||
+    (hasRounds && turn.rounds[0]?.streams?.length > 1)
+  );
 
   return (
     <div className="debate-turn">
@@ -126,7 +132,36 @@ export default function DebateView({ turn, isLastTurn }) {
         <WebSearchPanel webSearchResult={turn.webSearchResult} />
       )}
 
-      {isDirectMode && hasRounds && (
+      {isDirectMode && hasRounds && isEnsembleTurn && (
+        <>
+          <EnsembleResultPanel ensembleResult={turn.ensembleResult} />
+
+          <RoundSection
+            round={turn.rounds[0]}
+            isLatest
+            roundIndex={0}
+            isLastTurn={isLastTurn}
+          />
+
+          {turn.synthesis && turn.synthesis.status !== 'pending' && (
+            <SynthesisView
+              synthesis={turn.synthesis}
+              debateMetadata={turn.debateMetadata}
+              isLastTurn={isLastTurn}
+              rounds={turn.rounds}
+              ensembleResult={turn.ensembleResult}
+            />
+          )}
+
+          {turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+            <div className="turn-cost-summary">
+              Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {isDirectMode && hasRounds && !isEnsembleTurn && (
         <>
           <div className="direct-response">
             {turn.rounds[0]?.streams[0] && (

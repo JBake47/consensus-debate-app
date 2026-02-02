@@ -203,8 +203,8 @@
   color: white;
 }
 
-.chat-btn-submit.direct {
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+.chat-btn-submit.ensemble {
+  background: linear-gradient(135deg, var(--accent-ensemble), var(--accent-orange));
 }
 
 .chat-btn-submit:hover:not(:disabled) {

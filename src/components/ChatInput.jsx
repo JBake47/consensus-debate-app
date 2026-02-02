@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, MessageSquare, Send } from 'lucide-react';
+import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, MessageSquare, Send, Zap } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { processFile, formatFileSize } from '../lib/fileProcessor';
 import './ChatInput.css';
 
 export default function ChatInput() {
-  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, editingTurn, dispatch } = useDebate();
+  const { startDebate, startDirect, cancelDebate, debateInProgress, apiKey, webSearchEnabled, chatMode, focusedMode, editingTurn, dispatch } = useDebate();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -173,10 +173,19 @@ export default function ChatInput() {
               className={`chat-toggle ${chatMode === 'debate' ? 'active' : ''}`}
               onClick={toggleChatMode}
               disabled={debateInProgress || !apiKey}
-              title={chatMode === 'debate' ? 'Debate mode: queries multiple models' : 'Direct mode: queries single model'}
+              title={chatMode === 'debate' ? 'Debate mode: multi-round discussion' : 'Ensemble mode: vote-weighted synthesis'}
             >
               {chatMode === 'debate' ? <Swords size={15} /> : <MessageSquare size={15} />}
-              <span>{chatMode === 'debate' ? 'Debate' : 'Direct'}</span>
+              <span>{chatMode === 'debate' ? 'Debate' : 'Ensemble'}</span>
+            </button>
+            <button
+              className={`chat-toggle ${focusedMode ? 'active' : ''}`}
+              onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
+              disabled={debateInProgress || !apiKey}
+              title={focusedMode ? 'Focused mode: concise, direct responses' : 'Enable focused mode for shorter, sharper outputs'}
+            >
+              <Zap size={15} />
+              <span>Focused</span>
             </button>
             <button
               className="chat-toggle"
@@ -218,7 +227,7 @@ export default function ChatInput() {
               </button>
             ) : (
               <button
-                className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'direct' : ''}`}
+                className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''}`}
                 onClick={handleSubmit}
                 disabled={(!input.trim() && attachments.length === 0) || !apiKey}
               >

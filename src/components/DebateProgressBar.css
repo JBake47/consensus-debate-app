@@ -77,10 +77,79 @@
   text-align: center;
 }
 
+.progress-step-confidence {
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-step-confidence.high {
+  color: var(--ensemble-confidence-high);
+}
+
+.progress-step-confidence.mid {
+  color: var(--ensemble-confidence-mid);
+}
+
+.progress-step-confidence.low {
+  color: var(--ensemble-confidence-low);
+}
+
+.progress-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
 .progress-termination {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   padding: 2px 10px;
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.03);
+}
+
+/* Consensus trend mini chart */
+.consensus-trend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.consensus-trend-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.consensus-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 24px;
+}
+
+.consensus-trend-bar-wrapper {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+}
+
+.consensus-trend-bar {
+  width: 6px;
+  min-height: 4px;
+  border-radius: 2px;
+  transition: height 0.3s ease;
+}
+
+.consensus-trend-bar.high {
+  background: var(--ensemble-confidence-high);
+}
+
+.consensus-trend-bar.mid {
+  background: var(--ensemble-confidence-mid);
+}
+
+.consensus-trend-bar.low {
+  background: var(--ensemble-confidence-low);
 }

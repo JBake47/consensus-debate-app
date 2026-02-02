@@ -212,6 +212,55 @@
   opacity: 0.85;
 }
 
+/* Side-by-side layout for reasoning + content */
+.model-card-side-by-side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--border-subtle);
+  min-height: 0;
+}
+
+.model-card-side-by-side .model-card-reasoning.side-by-side {
+  border-top: none;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.model-card-side-by-side .model-card-reasoning.side-by-side .model-card-reasoning-content {
+  max-height: 400px;
+}
+
+.model-card-side-by-side .model-card-content.side-by-side {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: var(--space-xs) var(--space-md) var(--space-md);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.model-card-layout-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  opacity: 0;
+}
+
+.model-card-reasoning-header:hover .model-card-layout-toggle {
+  opacity: 1;
+}
+
+.model-card-layout-toggle:hover {
+  color: var(--accent-purple);
+  background: rgba(168, 85, 247, 0.1);
+}
+
 .model-card-content {
   max-height: 400px;
   overflow-y: auto;
