@@ -459,7 +459,7 @@ export function DebateProvider({ children }) {
 
     dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'loading', error: null } });
 
-    fetchModels()
+    fetchModels(state.apiKey)
       .then((models) => {
         if (cancelled) return;
         const catalog = {};
@@ -478,7 +478,55 @@ export function DebateProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [state.apiKey]);
+
+  useEffect(() => {
+    if (state.modelCatalogStatus !== 'ready') return;
+    const availableIds = Object.keys(state.modelCatalog || {});
+    if (availableIds.length === 0) return;
+    const availableSet = new Set(availableIds);
+
+    const filterAvailable = (models) => models.filter((model) => availableSet.has(model));
+    const unique = (models) => Array.from(new Set(models));
+    const fallbackDebate = unique(filterAvailable(DEFAULT_DEBATE_MODELS));
+
+    let nextSelected = filterAvailable(state.selectedModels);
+    if (nextSelected.length === 0) {
+      nextSelected = fallbackDebate.length > 0 ? fallbackDebate : availableIds.slice(0, 3);
+    }
+    if (nextSelected.join('|') !== state.selectedModels.join('|')) {
+      dispatch({ type: 'SET_MODELS', payload: nextSelected });
+    }
+
+    const pickSingle = (current, fallbackList) => {
+      if (availableSet.has(current)) return current;
+      const fallback = fallbackList.find((model) => availableSet.has(model));
+      if (fallback) return fallback;
+      return availableIds[0] || current;
+    };
+
+    const nextSynth = pickSingle(state.synthesizerModel, [DEFAULT_SYNTHESIZER_MODEL, ...nextSelected]);
+    if (nextSynth !== state.synthesizerModel) {
+      dispatch({ type: 'SET_SYNTHESIZER', payload: nextSynth });
+    }
+
+    const nextConv = pickSingle(state.convergenceModel, [DEFAULT_CONVERGENCE_MODEL, ...nextSelected]);
+    if (nextConv !== state.convergenceModel) {
+      dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: nextConv });
+    }
+
+    const nextSearch = pickSingle(state.webSearchModel, [DEFAULT_WEB_SEARCH_MODEL, ...nextSelected]);
+    if (nextSearch !== state.webSearchModel) {
+      dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: nextSearch });
+    }
+  }, [
+    state.modelCatalogStatus,
+    state.modelCatalog,
+    state.selectedModels,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.webSearchModel,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,6 +557,29 @@ export function DebateProvider({ children }) {
    * Run one round of streaming from all models in parallel.
    * Returns an array of { model, content, index, error? } results.
    */
+  const isAbortLikeError = (err) => {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    const message = String(err.message || '').toLowerCase();
+    return message.includes('aborted') || message.includes('canceled') || message.includes('cancelled');
+  };
+
+  const runStreamWithFallback = async ({ model, messages, apiKey, signal, onChunk, onReasoning }) => {
+    try {
+      return await streamChat({ model, messages, apiKey, signal, onChunk, onReasoning });
+    } catch (err) {
+      if (signal?.aborted || !isAbortLikeError(err)) throw err;
+      const result = await chatCompletion({ model, messages, apiKey, signal });
+      if (result?.content) {
+        onChunk?.(result.content, result.content);
+      }
+      if (result?.reasoning) {
+        onReasoning?.(result.reasoning);
+      }
+      return result;
+    }
+  };
+
   const runRound = async ({ models, messages, messagesPerModel, convId, roundIndex, apiKey, signal }) => {
     const streamResults = await Promise.allSettled(
       models.map(async (model, index) => {
@@ -527,7 +598,7 @@ export function DebateProvider({ children }) {
         const modelMessages = messagesPerModel ? messagesPerModel[index] : messages;
 
         try {
-          const { content, reasoning, usage, durationMs } = await streamChat({
+          const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
             model,
             messages: modelMessages,
             apiKey,
@@ -982,7 +1053,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel,
         messages: synthesisMessages,
         apiKey,
@@ -1127,7 +1198,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel,
         messages: synthesisMessages,
         apiKey,
@@ -1658,7 +1729,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel,
         messages: synthesisMessages,
         apiKey,
@@ -1868,7 +1939,7 @@ export function DebateProvider({ children }) {
         conversationHistory,
       });
       try {
-        const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+        const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
           model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
           onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
         });
@@ -1903,7 +1974,7 @@ export function DebateProvider({ children }) {
         dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex, streamIndex: si, content: '', status: 'streaming', error: null } });
 
         try {
-          const { content, reasoning, usage, durationMs } = await streamChat({
+          const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
             model,
             messages: modelMessages,
             apiKey,
@@ -2057,7 +2128,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
         onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
       });
@@ -2140,7 +2211,7 @@ export function DebateProvider({ children }) {
     let retryResult = { content: '', succeeded: false };
 
     try {
-      const { content, reasoning, usage, durationMs } = await streamChat({
+      const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
         model: targetModel,
         messages: modelMessages,
         apiKey,
@@ -2312,7 +2383,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await streamChat({
+      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
         onChunk: (_delta, accumulated) => {
           dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } });

@@ -544,6 +544,7 @@ export default function SettingsModal() {
       <ModelPickerModal
         open={Boolean(pickerOpen)}
         onClose={() => setPickerOpen(false)}
+        apiKey={apiKey}
         provider={pickerOpen === 'synth'
           ? synthProvider
           : pickerOpen === 'convergence'

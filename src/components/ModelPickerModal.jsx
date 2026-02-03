@@ -5,7 +5,7 @@ import './ModelPickerModal.css';
 
 const PAGE_SIZE = 60;
 
-export default function ModelPickerModal({ open, onClose, onAdd, provider = 'openrouter' }) {
+export default function ModelPickerModal({ open, onClose, onAdd, provider = 'openrouter', apiKey = '' }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [total, setTotal] = useState(0);
@@ -28,7 +28,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
     setLoading(true);
     setError('');
     const providerFilter = provider === 'openrouter' ? '' : (provider === 'gemini' ? 'google' : provider);
-    searchModels({ query, provider: providerFilter, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+    searchModels({ query, provider: providerFilter, limit: PAGE_SIZE, offset: page * PAGE_SIZE, apiKey })
       .then((data) => {
         if (cancelled) return;
         setResults(data.data || []);
@@ -44,7 +44,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
     return () => {
       cancelled = true;
     };
-  }, [open, query, page]);
+  }, [open, query, page, apiKey, provider]);
 
   const pageCount = useMemo(() => {
     if (!total) return 1;

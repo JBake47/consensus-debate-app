@@ -210,8 +210,12 @@ export async function chatCompletion({ model, messages, apiKey, signal }) {
 /**
  * Fetch available models from OpenRouter.
  */
-export async function fetchModels() {
-  const response = await fetch(MODELS_PROXY_URL);
+export async function fetchModels(apiKey) {
+  const headers = {};
+  if (apiKey) {
+    headers['x-openrouter-api-key'] = apiKey;
+  }
+  const response = await fetch(MODELS_PROXY_URL, { headers });
 
   if (!response.ok) {
     throw new OpenRouterError('Failed to fetch models', response.status);
@@ -221,13 +225,17 @@ export async function fetchModels() {
   return data.data || [];
 }
 
-export async function searchModels({ query = '', provider = '', limit = 200, offset = 0 } = {}) {
+export async function searchModels({ query = '', provider = '', limit = 200, offset = 0, apiKey } = {}) {
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (provider) params.set('provider', provider);
   if (limit != null) params.set('limit', String(limit));
   if (offset != null) params.set('offset', String(offset));
-  const response = await fetch(`${MODELS_SEARCH_URL}?${params.toString()}`);
+  const headers = {};
+  if (apiKey) {
+    headers['x-openrouter-api-key'] = apiKey;
+  }
+  const response = await fetch(`${MODELS_SEARCH_URL}?${params.toString()}`, { headers });
   if (!response.ok) {
     throw new OpenRouterError('Failed to search models', response.status);
   }
@@ -243,14 +251,14 @@ export async function fetchProviders() {
 }
 
 export const DEFAULT_DEBATE_MODELS = [
-  'anthropic/claude-3-opus',
-  'google/gemini-2.0-flash-exp',
-  'meta-llama/llama-3-70b-instruct',
+  'anthropic/claude-3.7-sonnet',
+  'google/gemini-2.0-flash-001',
+  'meta-llama/llama-3.3-70b-instruct',
 ];
 
-export const DEFAULT_SYNTHESIZER_MODEL = 'anthropic/claude-3.5-sonnet';
+export const DEFAULT_SYNTHESIZER_MODEL = 'anthropic/claude-3.7-sonnet';
 
-export const DEFAULT_CONVERGENCE_MODEL = 'google/gemini-2.0-flash-exp';
+export const DEFAULT_CONVERGENCE_MODEL = 'google/gemini-2.0-flash-001';
 
 export const DEFAULT_MAX_DEBATE_ROUNDS = 3;
 

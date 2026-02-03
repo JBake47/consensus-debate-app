@@ -456,7 +456,15 @@ app.post('/api/chat', async (req, res) => {
   const { provider, model: providerModel } = parseModelTarget(model);
   const abortController = new AbortController();
 
-  req.on('close', () => abortController.abort());
+  const abortIfOpen = () => {
+    if (!abortController.signal.aborted) abortController.abort();
+  };
+
+  // Abort upstream only if the client disconnects mid-request.
+  req.on('aborted', abortIfOpen);
+  res.on('close', () => {
+    if (!res.writableEnded) abortIfOpen();
+  });
 
   try {
     if (stream) {
@@ -485,17 +493,28 @@ app.post('/api/chat', async (req, res) => {
       res.end();
     }
   } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('API /api/chat error', {
+      provider,
+      model: providerModel,
+      stream: Boolean(stream),
+      message: err?.message || String(err),
+    });
     if (stream) {
       sendSse(res, { type: 'error', message: err.message || 'Request failed' });
       res.end();
       return;
     }
-    res.status(500).json({ error: err.message || 'Request failed' });
+    res.status(500).json({
+      error: err.message || 'Request failed',
+      provider,
+      model: providerModel,
+    });
   }
 });
 
 app.get('/api/models', async (_req, res) => {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = _req.get('x-openrouter-api-key') || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     res.json({ data: [] });
     return;
@@ -520,7 +539,7 @@ app.get('/api/models', async (_req, res) => {
 });
 
 app.get('/api/models/search', async (req, res) => {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = req.get('x-openrouter-api-key') || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     res.json({ data: [] });
     return;
