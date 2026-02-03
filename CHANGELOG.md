@@ -8,16 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Backend API proxy with provider routing for Anthropic, OpenAI, Gemini, and OpenRouter
-- Provider-prefix model routing (`anthropic:`, `openai:`, `gemini:`) with OpenRouter as default
-- `dev:all` script to run server and client together
-- Provider-aware model picker that only lists enabled providers
-- OpenRouter model browser with search + pagination
 
 ### Changed
-- OpenRouter API key is now optional (server-owned keys recommended)
-- Frontend now calls the backend proxy for chat and model metadata
-- Excel parsing now uses `exceljs` instead of `xlsx`
+
+## [0.3.5] - 2026-02-03
+
+### Added
+- Model presets with custom names for quick model lineup switching
+- Provider-filtered model browse list and datalist suggestions
+- Backend health endpoint for provider status (`/api/health`)
+
+### Changed
+- Increased default Anthropic max tokens to 64,000
+- Improved Settings model controls layout and dropdown readability
 
 ## [0.3.4] - 2026-02-03
 
@@ -183,7 +186,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.1...v0.3.2
