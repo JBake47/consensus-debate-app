@@ -1126,6 +1126,184 @@ export function DebateProvider({ children }) {
     }
   };
 
+  const startParallel = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
+    const models = state.selectedModels;
+    const synthModel = state.synthesizerModel;
+    const webSearchModel = state.webSearchModel;
+    const apiKey = state.apiKey;
+    const focused = state.focusedMode;
+
+    // Create new conversation if none active
+    let convId = state.activeConversationId;
+    if (!convId) {
+      convId = Date.now().toString();
+      const title = userPrompt.length > 50
+        ? userPrompt.slice(0, 50) + '...'
+        : userPrompt;
+      dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
+    }
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
+
+    const turn = {
+      id: Date.now().toString(),
+      userPrompt,
+      timestamp: Date.now(),
+      attachments: attachments || null,
+      mode: 'parallel',
+      rounds: [],
+      synthesis: null,
+      ensembleResult: null,
+      debateMetadata: {
+        totalRounds: 1,
+        converged: false,
+        terminationReason: 'parallel_only',
+      },
+    };
+
+    dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // ===== WEB SEARCH (optional) =====
+    let webSearchContext = '';
+    if (webSearch && webSearchModel) {
+      dispatch({
+        type: 'SET_WEB_SEARCH_RESULT',
+        payload: {
+          conversationId: convId,
+          result: { status: 'searching', content: '', model: webSearchModel, error: null },
+        },
+      });
+
+      try {
+        const searchPrompt = buildAttachmentTextContent(userPrompt, attachments);
+        const { content: searchContent, durationMs: searchDurationMs } = await chatCompletion({
+          model: webSearchModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'Search the web to find current, accurate information relevant to the user\'s query. Provide a comprehensive summary of what you find, including key facts, data, and sources.',
+            },
+            { role: 'user', content: searchPrompt },
+          ],
+          apiKey,
+          signal: abortController.signal,
+        });
+
+        webSearchContext = searchContent;
+        dispatch({
+          type: 'SET_WEB_SEARCH_RESULT',
+          payload: {
+            conversationId: convId,
+            result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, durationMs: searchDurationMs },
+          },
+        });
+      } catch (err) {
+        if (abortController.signal.aborted) {
+          dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+          return;
+        }
+        dispatch({
+          type: 'SET_WEB_SEARCH_RESULT',
+          payload: {
+            conversationId: convId,
+            result: { status: 'error', content: '', model: webSearchModel, error: err.message },
+          },
+        });
+      }
+    }
+
+    // Build conversation context
+    const currentConv = state.conversations.find(c => c.id === convId);
+    const { messages: contextMessages, needsSummary, turnsToSummarize } = buildConversationContext({
+      conversation: currentConv,
+      runningSummary: currentConv?.runningSummary || null,
+    });
+
+    // Background summarization if needed
+    if (needsSummary && currentConv && turnsToSummarize > 0) {
+      const turnsForSummary = currentConv.turns.slice(0, turnsToSummarize);
+      const summaryMessages = buildSummaryPrompt({
+        existingSummary: currentConv.runningSummary || null,
+        turnsToSummarize: turnsForSummary,
+      });
+      chatCompletion({
+        model: synthModel,
+        messages: summaryMessages,
+        apiKey,
+        signal: abortController.signal,
+      }).then(({ content: summary }) => {
+        dispatch({
+          type: 'SET_RUNNING_SUMMARY',
+          payload: { conversationId: convId, summary },
+        });
+      }).catch(() => {});
+    }
+
+    const userMessageContent = webSearchContext
+      ? `${userPrompt}\n\n---\n**Web Search Context (from ${webSearchModel}):**\n${webSearchContext}`
+      : userPrompt;
+
+    const conversationHistory = contextMessages;
+    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
+    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
+
+    // ===== PARALLEL RESPONSES =====
+    const roundLabel = focused ? 'Focused Responses' : 'Parallel Responses';
+    const round = createRound({ roundNumber: 1, label: roundLabel, models });
+
+    dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
+    dispatch({
+      type: 'UPDATE_ROUND_STATUS',
+      payload: { conversationId: convId, roundIndex: 0, status: 'streaming' },
+    });
+
+    const results = await runRound({
+      models,
+      messages: initialMessages,
+      convId,
+      roundIndex: 0,
+      apiKey,
+      signal: abortController.signal,
+    });
+
+    if (abortController.signal.aborted) {
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    const completedStreams = results
+      .filter(r => r.content && !r.error)
+      .map(r => ({ model: r.model, content: r.content, status: 'complete' }));
+
+    if (completedStreams.length === 0) {
+      dispatch({
+        type: 'UPDATE_ROUND_STATUS',
+        payload: { conversationId: convId, roundIndex: 0, status: 'error' },
+      });
+      dispatch({
+        type: 'SET_DEBATE_METADATA',
+        payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'all_models_failed' } },
+      });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+
+    dispatch({
+      type: 'UPDATE_ROUND_STATUS',
+      payload: { conversationId: convId, roundIndex: 0, status: 'complete' },
+    });
+    dispatch({
+      type: 'SET_DEBATE_METADATA',
+      payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' } },
+    });
+
+    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.activeConversationId, state.conversations, state.focusedMode]);
+
   const startDirect = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
@@ -1383,10 +1561,12 @@ export function DebateProvider({ children }) {
     };
     if (turnMode === 'direct') {
       startDirect(prompt, opts);
+    } else if (turnMode === 'parallel') {
+      startParallel(prompt, opts);
     } else {
       startDebate(prompt, opts);
     }
-  }, [activeConversation, startDebate, startDirect, state.webSearchEnabled]);
+  }, [activeConversation, startDebate, startDirect, startParallel, state.webSearchEnabled]);
 
   const retrySynthesis = useCallback(async () => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -2123,6 +2303,7 @@ export function DebateProvider({ children }) {
     dispatch,
     startDebate,
     startDirect,
+    startParallel,
     cancelDebate,
     editLastTurn,
     retryLastTurn,

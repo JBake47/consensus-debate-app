@@ -55,6 +55,7 @@ export default function DebateProgressBar({ rounds, debateMetadata }) {
             {debateMetadata.terminationReason === 'max_rounds_reached' && 'Max rounds reached'}
             {debateMetadata.terminationReason === 'cancelled' && 'Cancelled'}
             {debateMetadata.terminationReason === 'all_models_failed' && 'All models failed'}
+            {debateMetadata.terminationReason === 'parallel_only' && 'Parallel responses only'}
           </div>
         )}
         {confidenceScores.length >= 2 && (

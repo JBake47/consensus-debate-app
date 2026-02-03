@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { MessageSquare, Plus, Settings, Trash2, Swords, Download, Upload, Search, X, Pencil, Check } from 'lucide-react';
+import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { searchConversations } from '../lib/searchConversations';
@@ -159,8 +159,8 @@ export default function Sidebar({ open, onClose }) {
       <aside className={`sidebar ${open ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
-            <Swords size={20} />
-            <span>Debate</span>
+            <img className="sidebar-logo-mark" src="/consensus.svg" alt="Consensus logo" />
+            <span>Consensus</span>
           </div>
           <button className="sidebar-btn" onClick={handleNew} title="New debate">
             <Plus size={18} />

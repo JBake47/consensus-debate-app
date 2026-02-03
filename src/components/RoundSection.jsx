@@ -7,7 +7,7 @@ import ConvergencePanel from './ConvergencePanel';
 import { formatCost } from '../lib/formatTokens';
 import './RoundSection.css';
 
-export default function RoundSection({ round, isLatest, roundIndex, isLastTurn }) {
+export default function RoundSection({ round, isLatest, roundIndex, isLastTurn, allowRetry = true }) {
   const { retryRound, debateInProgress } = useDebate();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
@@ -18,7 +18,7 @@ export default function RoundSection({ round, isLatest, roundIndex, isLastTurn }
   }
 
   const hasFailedStreams = streams.some(s => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming'));
-  const canRetry = isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
+  const canRetry = allowRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
 
   const statusIcon = {
     pending: null,
@@ -57,7 +57,14 @@ export default function RoundSection({ round, isLatest, roundIndex, isLastTurn }
         <div className="round-body">
           <div className="round-streams">
             {streams.map((stream, i) => (
-              <ModelCard key={`${stream.model}-${i}`} stream={stream} roundIndex={roundIndex} streamIndex={i} isLastTurn={isLastTurn} />
+              <ModelCard
+                key={`${stream.model}-${i}`}
+                stream={stream}
+                roundIndex={roundIndex}
+                streamIndex={i}
+                isLastTurn={isLastTurn}
+                allowRetry={allowRetry}
+              />
             ))}
           </div>
           {convergenceCheck && (convergenceCheck.agreements?.length > 0 || convergenceCheck.disagreements?.length > 0 || convergenceCheck.confidence != null) && (

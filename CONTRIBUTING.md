@@ -1,6 +1,6 @@
-# Contributing to OpenRouter Debate App
+# Contributing to Consensus
 
-Thank you for your interest in contributing to the OpenRouter Debate App! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Consensus! This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 

@@ -12,7 +12,7 @@ function isReasoningModel(modelId) {
   return /\bo[13]\b/.test(id) || id.includes('deepseek-r1') || id.includes('qwq') || id.includes('reasoner');
 }
 
-export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn }) {
+export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
   const { retryStream, debateInProgress } = useDebate();
   const { model, content, status, error, usage, durationMs, reasoning } = stream;
   const [collapsed, setCollapsed] = useState(false);
@@ -21,7 +21,7 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn 
   const [sideBySide, setSideBySide] = useState(reasoningModel);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
-  const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
+  const canRetry = allowRetry && isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Consensus logo">
+  <defs>
+    <linearGradient id="consensusGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399" />
+      <stop offset="1" stop-color="#60a5fa" />
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="104" fill="none" stroke="url(#consensusGradient)" stroke-width="12" />
+  <circle cx="128" cy="128" r="14" fill="url(#consensusGradient)" />
+  <circle cx="60" cy="98" r="12" fill="#22c55e" />
+  <circle cx="196" cy="98" r="12" fill="#38bdf8" />
+  <circle cx="128" cy="196" r="12" fill="#a78bfa" />
+  <path d="M72 104 L118 124" stroke="#22c55e" stroke-width="8" stroke-linecap="round" />
+  <path d="M184 104 L138 124" stroke="#38bdf8" stroke-width="8" stroke-linecap="round" />
+  <path d="M128 182 L128 142" stroke="#a78bfa" stroke-width="8" stroke-linecap="round" />
+</svg>

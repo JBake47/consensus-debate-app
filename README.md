@@ -1,4 +1,4 @@
-# OpenRouter Debate App
+# Consensus
 
 A React application with an optional Node proxy that can route requests to OpenRouter, Anthropic, OpenAI, and Gemini while preserving the same debate workflow.
 

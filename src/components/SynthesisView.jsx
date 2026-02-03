@@ -17,6 +17,7 @@ function DebateInternals({ rounds, debateMetadata }) {
     max_rounds_reached: 'Maximum debate rounds reached',
     all_models_failed: 'All models failed',
     cancelled: 'Debate was cancelled',
+    parallel_only: 'Parallel responses only',
   };
 
   const totalDebateCost = rounds.reduce((sum, round) =>

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, MessageSquare, Send, Zap } from 'lucide-react';
+import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { processFile, formatFileSize } from '../lib/fileProcessor';
 import { getImageIncompatibleModels } from '../lib/modelCapabilities';
@@ -9,6 +9,7 @@ export default function ChatInput() {
   const {
     startDebate,
     startDirect,
+    startParallel,
     cancelDebate,
     debateInProgress,
     webSearchEnabled,
@@ -26,8 +27,10 @@ export default function ChatInput() {
   const [processing, setProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [editMeta, setEditMeta] = useState(null);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const modeMenuRef = useRef(null);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -92,6 +95,8 @@ export default function ChatInput() {
     }
     if (chatMode === 'direct') {
       startDirect(prompt, opts);
+    } else if (chatMode === 'parallel') {
+      startParallel(prompt, opts);
     } else {
       startDebate(prompt, opts);
     }
@@ -108,9 +113,38 @@ export default function ChatInput() {
     dispatch({ type: 'SET_WEB_SEARCH_ENABLED', payload: !webSearchEnabled });
   };
 
-  const toggleChatMode = () => {
-    dispatch({ type: 'SET_CHAT_MODE', payload: chatMode === 'debate' ? 'direct' : 'debate' });
+  const setChatMode = (mode) => {
+    dispatch({ type: 'SET_CHAT_MODE', payload: mode });
   };
+
+  const placeholderByMode = {
+    debate: 'Ask a question to debate across models...',
+    direct: 'Ask a question...',
+    parallel: 'Ask a question for parallel responses...',
+  };
+
+  const modeOptions = [
+    { id: 'debate', label: 'Debate', icon: <Swords size={14} /> },
+    { id: 'direct', label: 'Ensemble', icon: <MessageSquare size={14} /> },
+    { id: 'parallel', label: 'Parallel', icon: <Layers size={14} /> },
+  ];
+
+  const submitLabelByMode = {
+    debate: 'Debate',
+    direct: 'Send',
+    parallel: 'Parallel',
+  };
+
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const handleClickOutside = (event) => {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(event.target)) {
+        setModeMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [modeMenuOpen]);
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -212,15 +246,42 @@ export default function ChatInput() {
               <Globe size={15} />
               <span>Search</span>
             </button>
-            <button
-              className={`chat-toggle ${chatMode === 'debate' ? 'active' : ''}`}
-              onClick={toggleChatMode}
-              disabled={debateInProgress}
-              title={chatMode === 'debate' ? 'Debate mode: multi-round discussion' : 'Ensemble mode: vote-weighted synthesis'}
-            >
-              {chatMode === 'debate' ? <Swords size={15} /> : <MessageSquare size={15} />}
-              <span>{chatMode === 'debate' ? 'Debate' : 'Ensemble'}</span>
-            </button>
+            <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
+              <button
+                className="chat-mode-select"
+                onClick={() => setModeMenuOpen((open) => !open)}
+                disabled={debateInProgress}
+                aria-haspopup="listbox"
+                aria-expanded={modeMenuOpen}
+                type="button"
+              >
+                <span className="chat-mode-select-icon">
+                  {modeOptions.find(option => option.id === chatMode)?.icon}
+                </span>
+                <span>{modeOptions.find(option => option.id === chatMode)?.label || 'Mode'}</span>
+                <ChevronDown size={12} className="chat-mode-select-caret" />
+              </button>
+              {modeMenuOpen && !debateInProgress && (
+                <div className="chat-mode-menu" role="listbox" aria-label="Chat mode">
+                  {modeOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setChatMode(option.id);
+                        setModeMenuOpen(false);
+                      }}
+                      role="option"
+                      aria-selected={chatMode === option.id}
+                      type="button"
+                    >
+                      <span className="chat-mode-option-icon">{option.icon}</span>
+                      <span>{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               className={`chat-toggle ${focusedMode ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
@@ -252,7 +313,7 @@ export default function ChatInput() {
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder={chatMode === 'debate' ? 'Ask a question to debate across models...' : 'Ask a question...'}
+            placeholder={placeholderByMode[chatMode] || 'Ask a question...'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -282,12 +343,14 @@ export default function ChatInput() {
                   </button>
                 )}
                 <button
-                  className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''}`}
+                  className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
                   onClick={handleSubmit}
                   disabled={!input.trim() && attachments.length === 0}
                 >
-                  {chatMode === 'debate' ? <Swords size={16} /> : <Send size={16} />}
-                  <span>{chatMode === 'debate' ? 'Debate' : 'Send'}</span>
+                  {chatMode === 'debate' && <Swords size={16} />}
+                  {chatMode === 'direct' && <Send size={16} />}
+                  {chatMode === 'parallel' && <Layers size={16} />}
+                  <span>{submitLabelByMode[chatMode] || 'Send'}</span>
                 </button>
               </>
             )}

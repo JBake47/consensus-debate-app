@@ -1,4 +1,4 @@
-import { Swords, Cpu, RotateCcw, Sparkles, ArrowRight } from 'lucide-react';
+import { Cpu, RotateCcw, Sparkles, ArrowRight } from 'lucide-react';
 import './WelcomeScreen.css';
 
 export default function WelcomeScreen() {
@@ -6,11 +6,11 @@ export default function WelcomeScreen() {
     <div className="welcome-screen">
       <div className="welcome-content">
         <div className="welcome-icon">
-          <Swords size={40} />
+          <img src="/consensus.svg" alt="Consensus logo" />
         </div>
-        <h1 className="welcome-title">AI Debate Arena</h1>
+        <h1 className="welcome-title">Consensus</h1>
         <p className="welcome-subtitle">
-          Send a prompt to multiple AI models, watch them debate across rounds, and get a synthesized answer from their best insights.
+          Send a prompt to multiple AI models, watch them debate across rounds, and get a consensus answer from their best insights.
         </p>
 
         <div className="welcome-steps">

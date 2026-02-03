@@ -1,4 +1,4 @@
-# Project: OpenRouter Debate App
+# Project: Consensus
 **Mission**: Build a client-side React application that allows users to prompt multiple AI models via OpenRouter, visualize their individual responses, and synthesizes a final "Debate" answer.
 
 ## 1. Technology Stack

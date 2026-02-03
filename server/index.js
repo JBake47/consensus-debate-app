@@ -162,7 +162,7 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'HTTP-Referer': process.env.OPENROUTER_REFERER || 'http://localhost',
-      'X-Title': process.env.OPENROUTER_TITLE || 'OpenRouter Debate App',
+      'X-Title': process.env.OPENROUTER_TITLE || 'Consensus',
     },
     body: JSON.stringify({
       model,

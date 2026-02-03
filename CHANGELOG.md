@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the OpenRouter Debate App will be documented in this file.
+All notable changes to Consensus will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Parallel mode for independent, no-synthesis multi-model responses
+- Mode selector dropdown with icons
+- Consensus logo and favicon
 - Backend API proxy with provider routing for Anthropic, OpenAI, Gemini, and OpenRouter
 - Provider-prefix model routing (`anthropic:`, `openai:`, `gemini:`) with OpenRouter as default
 - `dev:all` script to run server and client together
@@ -15,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenRouter model browser with search + pagination
 
 ### Changed
+- App name updated to Consensus across UI and metadata
 - OpenRouter API key is now optional (server-owned keys recommended)
 - Frontend now calls the backend proxy for chat and model metadata
 - Excel parsing now uses `exceljs` instead of `xlsx`

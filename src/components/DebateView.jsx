@@ -71,6 +71,7 @@ export default function DebateView({ turn, isLastTurn }) {
   const [viewerAttachment, setViewerAttachment] = useState(null);
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
+  const isParallelMode = turn.mode === 'parallel';
   // Ensemble turns have multiple streams in their round or an ensembleResult
   const isEnsembleTurn = isDirectMode && (
     turn.ensembleResult != null ||
@@ -152,6 +153,7 @@ export default function DebateView({ turn, isLastTurn }) {
             isLatest
             roundIndex={0}
             isLastTurn={isLastTurn}
+            allowRetry={!isParallelMode}
           />
 
           {turn.synthesis && turn.synthesis.status !== 'pending' && (
@@ -181,6 +183,7 @@ export default function DebateView({ turn, isLastTurn }) {
                 roundIndex={0}
                 streamIndex={0}
                 isLastTurn={isLastTurn}
+                allowRetry
               />
             )}
           </div>
@@ -227,6 +230,7 @@ export default function DebateView({ turn, isLastTurn }) {
                   isLatest={i === turn.rounds.length - 1}
                   roundIndex={i}
                   isLastTurn={isLastTurn}
+                  allowRetry={!isParallelMode}
                 />
               ))}
             </div>
@@ -236,11 +240,11 @@ export default function DebateView({ turn, isLastTurn }) {
         </>
       )}
 
-      {!isDirectMode && turn.synthesis && turn.synthesis.status !== 'pending' && (
+      {!isDirectMode && !isParallelMode && turn.synthesis && turn.synthesis.status !== 'pending' && (
         <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} isLastTurn={isLastTurn} rounds={turn.rounds} />
       )}
 
-      {!isDirectMode && turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+      {!isDirectMode && !isParallelMode && turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
         <div className="turn-cost-summary">
           Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
         </div>

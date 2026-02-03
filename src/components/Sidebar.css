@@ -43,6 +43,12 @@
   background-clip: text;
 }
 
+.sidebar-logo-mark {
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.35));
+}
+
 .sidebar-btn {
   background: none;
   border: 1px solid var(--border-subtle);
