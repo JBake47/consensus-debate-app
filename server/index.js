@@ -575,6 +575,18 @@ app.get('/api/providers', (_req, res) => {
   });
 });
 
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    providers: {
+      openrouter: Boolean(process.env.OPENROUTER_API_KEY),
+      anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+      openai: Boolean(process.env.OPENAI_API_KEY),
+      gemini: Boolean(process.env.GEMINI_API_KEY),
+    },
+  });
+});
+
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`API server listening on http://localhost:${PORT}`);
