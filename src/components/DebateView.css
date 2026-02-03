@@ -234,6 +234,47 @@
   gap: var(--space-md);
 }
 
+/* Turn Error Summary */
+.turn-error-panel {
+  border-left: 2px solid rgba(239, 68, 68, 0.8);
+  background: rgba(239, 68, 68, 0.08);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.turn-error-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--status-error);
+  margin-bottom: var(--space-xs);
+}
+
+.turn-error-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.turn-error-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm);
+}
+
+.turn-error-model {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.turn-error-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
 /* Web Search Panel */
 .web-search-panel {
   border-left: 2px solid var(--accent-cyan);

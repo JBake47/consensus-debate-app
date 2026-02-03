@@ -78,6 +78,28 @@ export default function DebateView({ turn, isLastTurn }) {
     (hasRounds && turn.rounds[0]?.streams?.length > 1)
   );
 
+  const failedStreams = hasRounds
+    ? turn.rounds.flatMap((round, roundIndex) =>
+      (round.streams || [])
+        .filter(stream => stream.status === 'error' || stream.error)
+        .map((stream, streamIndex) => ({
+          roundIndex,
+          streamIndex,
+          model: stream.model,
+          error: stream.error || 'Unknown error',
+        }))
+    )
+    : [];
+
+  const formatError = (message) => {
+    if (!message) return 'Unknown error';
+    const lowered = message.toLowerCase();
+    if (lowered.includes('aborted')) {
+      return 'Request aborted — check provider model IDs, API keys, or server connectivity.';
+    }
+    return message;
+  };
+
   return (
     <div className="debate-turn">
       <div className="user-message">
@@ -142,6 +164,20 @@ export default function DebateView({ turn, isLastTurn }) {
 
       {turn.webSearchResult && (
         <WebSearchPanel webSearchResult={turn.webSearchResult} />
+      )}
+
+      {failedStreams.length > 0 && (
+        <div className="turn-error-panel glass-panel">
+          <div className="turn-error-title">Some models failed</div>
+          <div className="turn-error-list">
+            {failedStreams.map((failure, idx) => (
+              <div key={`${failure.model}-${idx}`} className="turn-error-item">
+                <span className="turn-error-model">{getModelDisplayName(failure.model)}</span>
+                <span className="turn-error-message">{formatError(failure.error)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {isDirectMode && hasRounds && isEnsembleTurn && (

@@ -54,6 +54,12 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
   if (!open) return null;
 
   const titleSuffix = provider === 'openrouter' ? 'OpenRouter' : provider[0].toUpperCase() + provider.slice(1);
+  const formatModelId = (id) => {
+    if (!id) return '';
+    if (provider === 'openrouter') return id;
+    const parts = id.split('/');
+    return parts.length > 1 ? parts.slice(1).join('/') : id;
+  };
 
   return (
     <div className="model-picker-overlay" onClick={onClose}>
@@ -84,8 +90,10 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
               {results.map((model) => (
                 <div key={model.id} className="model-picker-item">
                   <div className="model-picker-info">
-                    <div className="model-picker-name">{model.id}</div>
-                    {model.name && <div className="model-picker-desc">{model.name}</div>}
+                    <div className="model-picker-name">{formatModelId(model.id)}</div>
+                    <div className="model-picker-desc">
+                      {provider === 'openrouter' ? model.name || model.id : model.id}
+                    </div>
                   </div>
                   <button className="model-picker-add" onClick={() => onAdd(model.id)}>
                     <Plus size={14} />
