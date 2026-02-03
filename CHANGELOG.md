@@ -8,9 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Parallel mode for independent, no-synthesis multi-model responses
-- Mode selector dropdown with icons
-- Consensus logo and favicon
 - Backend API proxy with provider routing for Anthropic, OpenAI, Gemini, and OpenRouter
 - Provider-prefix model routing (`anthropic:`, `openai:`, `gemini:`) with OpenRouter as default
 - `dev:all` script to run server and client together
@@ -18,10 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenRouter model browser with search + pagination
 
 ### Changed
-- App name updated to Consensus across UI and metadata
 - OpenRouter API key is now optional (server-owned keys recommended)
 - Frontend now calls the backend proxy for chat and model metadata
 - Excel parsing now uses `exceljs` instead of `xlsx`
+
+## [0.3.4] - 2026-02-03
+
+### Added
+- Parallel mode for independent, no-synthesis multi-model responses
+- Mode selector dropdown with icons
+- Consensus logo and favicon
+
+### Changed
+- App name updated to Consensus across UI and metadata
 
 ## [0.3.3] - 2026-02-02
 
@@ -177,7 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.0...v0.3.1

@@ -4,9 +4,10 @@ A React application with an optional Node proxy that can route requests to OpenR
 
 ## Features
 
-### 🎭 Dual Query Modes
+### 🎭 Query Modes
 - **Debate Mode**: Query multiple AI models simultaneously, engage in multi-round debates with convergence checking, and receive a synthesized final answer
-- **Direct Mode**: Quick single-model queries for straightforward questions
+- **Ensemble Mode**: Run parallel responses, analyze agreement, and synthesize a vote-weighted answer
+- **Parallel Mode**: Run independent model responses only (no debate rounds or synthesis)
 
 ### 💬 Advanced Chat Features
 - **Multi-Round Debates**: Models debate across multiple rounds until convergence or max rounds
@@ -63,21 +64,17 @@ npm install
 
 3. Configure server environment variables (example in `.env.example`).
 
-4. Start the backend API proxy (recommended):
-```bash
-npm run server
-```
-
-5. Start the frontend dev server:
-```bash
-npm run dev
-```
-
-6. Open your browser to `http://localhost:5173`
-
-Tip: run both with one command:
+4. Start both backend and frontend together:
 ```bash
 npm run dev:all
+```
+
+5. Open your browser to `http://localhost:5173`
+
+Alternative (separate terminals):
+```bash
+npm run server
+npm run dev
 ```
 
 ### Build for Production
