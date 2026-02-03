@@ -63,6 +63,8 @@ npm install
 ```
 
 3. Configure server environment variables (example in `.env.example`).
+   - Recommended: set provider API keys in `.env` and run the backend so keys stay off the client.
+   - Optional: you can also add an OpenRouter override key in the in-app **Settings** modal (stored in the browser).
 
 4. Start both backend and frontend together:
 ```bash
