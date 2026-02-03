@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import {
@@ -67,6 +67,18 @@ export default function SettingsModal() {
     { id: 'openai', label: 'OpenAI', enabled: providerStatus?.openai },
     { id: 'gemini', label: 'Gemini', enabled: providerStatus?.gemini },
   ].filter(p => p.enabled);
+
+  const providerModelOptions = useMemo(() => {
+    if (modelCatalogStatus !== 'ready') return [];
+    const ids = Object.keys(modelCatalog || {});
+    if (newModelProvider === 'openrouter') return ids;
+    const allowedProviders = newModelProvider === 'gemini' ? ['google', 'gemini'] : [newModelProvider];
+    const filtered = ids.filter((id) => allowedProviders.includes(id.split('/')[0]));
+    const stripped = filtered
+      .map((id) => id.split('/').slice(1).join('/'))
+      .filter(Boolean);
+    return Array.from(new Set(stripped)).sort();
+  }, [modelCatalog, modelCatalogStatus, newModelProvider]);
 
   useEffect(() => {
     if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
@@ -177,7 +189,7 @@ export default function SettingsModal() {
                 value={newModel}
                 onChange={e => setNewModel(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addModel()}
-                list={newModelProvider === 'openrouter' && modelCatalogStatus === 'ready' ? 'openrouter-models' : undefined}
+                list={providerModelOptions.length > 0 ? `provider-models-${newModelProvider}` : undefined}
               />
               <button
                 className="model-add-btn"
@@ -187,7 +199,7 @@ export default function SettingsModal() {
                 <Plus size={14} />
                 Add
               </button>
-              {providerOptions.some(p => p.id === 'openrouter') && (
+              {providerOptions.length > 0 && (
                 <button
                   className="model-browse-btn"
                   onClick={() => setPickerOpen(true)}
@@ -196,9 +208,9 @@ export default function SettingsModal() {
                 </button>
               )}
             </div>
-            {newModelProvider === 'openrouter' && modelCatalogStatus === 'ready' && (
-              <datalist id="openrouter-models">
-                {Object.keys(modelCatalog || {}).slice(0, 200).map((modelId) => (
+            {providerModelOptions.length > 0 && (
+              <datalist id={`provider-models-${newModelProvider}`}>
+                {providerModelOptions.slice(0, 200).map((modelId) => (
                   <option key={modelId} value={modelId} />
                 ))}
               </datalist>
@@ -311,8 +323,15 @@ export default function SettingsModal() {
       <ModelPickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
+        provider={newModelProvider}
         onAdd={(modelId) => {
-          addModelId(modelId);
+          if (!modelId) return;
+          let resolvedId = modelId;
+          if (newModelProvider !== 'openrouter') {
+            const nameOnly = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+            resolvedId = `${newModelProvider}:${nameOnly}`;
+          }
+          addModelId(resolvedId);
           setPickerOpen(false);
         }}
       />

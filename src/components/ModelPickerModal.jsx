@@ -5,7 +5,7 @@ import './ModelPickerModal.css';
 
 const PAGE_SIZE = 60;
 
-export default function ModelPickerModal({ open, onClose, onAdd }) {
+export default function ModelPickerModal({ open, onClose, onAdd, provider = 'openrouter' }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [total, setTotal] = useState(0);
@@ -27,7 +27,8 @@ export default function ModelPickerModal({ open, onClose, onAdd }) {
     let cancelled = false;
     setLoading(true);
     setError('');
-    searchModels({ query, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+    const providerFilter = provider === 'openrouter' ? '' : (provider === 'gemini' ? 'google' : provider);
+    searchModels({ query, provider: providerFilter, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
       .then((data) => {
         if (cancelled) return;
         setResults(data.data || []);
@@ -52,11 +53,13 @@ export default function ModelPickerModal({ open, onClose, onAdd }) {
 
   if (!open) return null;
 
+  const titleSuffix = provider === 'openrouter' ? 'OpenRouter' : provider[0].toUpperCase() + provider.slice(1);
+
   return (
     <div className="model-picker-overlay" onClick={onClose}>
       <div className="model-picker-modal glass-panel" onClick={(e) => e.stopPropagation()}>
         <div className="model-picker-header">
-          <h3>Browse OpenRouter Models</h3>
+          <h3>Browse {titleSuffix} Models</h3>
           <button className="model-picker-close" onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
