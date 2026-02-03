@@ -98,7 +98,7 @@ function AppContent() {
           ) : (
             <div className="main-header-title-group" onClick={activeConversation ? startHeaderEdit : undefined}>
               <h1 className="main-title">
-                {activeConversation?.title || 'New Debate'}
+                {activeConversation?.title || 'New Chat'}
               </h1>
               {activeConversation?.description && (
                 <span className="main-description">{activeConversation.description}</span>

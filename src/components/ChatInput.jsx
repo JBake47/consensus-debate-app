@@ -119,7 +119,7 @@ export default function ChatInput() {
 
   const placeholderByMode = {
     debate: 'Ask a question to debate across models...',
-    direct: 'Ask a question...',
+    direct: 'Ask a question for a synthesized consensus...',
     parallel: 'Ask a question for parallel responses...',
   };
 

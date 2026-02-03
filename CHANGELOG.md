@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.6] - 2026-02-03
+
+### Added
+- Richer settings presets with details and extra model selectors
+
+### Changed
+- Settings layout adjustments for presets, debate models, and max rounds placement
+- Welcome screen copy updated for Debate, Ensemble, and Parallel modes
+- Default header label updated to "New Chat"
+- Ensemble placeholder text updated for synthesis
+
 ## [0.3.5] - 2026-02-03
 
 ### Added
@@ -186,7 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.2...v0.3.3

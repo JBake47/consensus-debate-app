@@ -183,6 +183,12 @@ function reducer(state, action) {
         id: existing?.id || Date.now().toString(),
         name,
         models,
+        synthesizerModel: action.payload.synthesizerModel || state.synthesizerModel,
+        convergenceModel: action.payload.convergenceModel || state.convergenceModel,
+        maxDebateRounds: Number.isFinite(action.payload.maxDebateRounds)
+          ? action.payload.maxDebateRounds
+          : state.maxDebateRounds,
+        webSearchModel: action.payload.webSearchModel || state.webSearchModel,
         updatedAt: Date.now(),
       };
       const next = [

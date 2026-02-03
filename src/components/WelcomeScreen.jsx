@@ -10,7 +10,7 @@ export default function WelcomeScreen() {
         </div>
         <h1 className="welcome-title">Consensus</h1>
         <p className="welcome-subtitle">
-          Send a prompt to multiple AI models, watch them debate across rounds, and get a consensus answer from their best insights.
+          Compare multiple AI models in three ways: parallel responses, ensemble synthesis, or multi-round debate.
         </p>
 
         <div className="welcome-steps">
@@ -19,8 +19,8 @@ export default function WelcomeScreen() {
               <ArrowRight size={16} />
             </div>
             <div className="welcome-step-text">
-              <strong>Ask a Question</strong>
-              <span>Type your prompt and hit Debate</span>
+              <strong>Choose a Mode</strong>
+              <span>Debate, Ensemble, or Parallel</span>
             </div>
           </div>
           <div className="welcome-step glass-panel">
@@ -28,8 +28,17 @@ export default function WelcomeScreen() {
               <Cpu size={16} />
             </div>
             <div className="welcome-step-text">
-              <strong>Models Respond</strong>
-              <span>Multiple AI models stream their initial answers</span>
+              <strong>Parallel Responses</strong>
+              <span>Independent answers from multiple models</span>
+            </div>
+          </div>
+          <div className="welcome-step glass-panel">
+            <div className="welcome-step-icon">
+              <Sparkles size={16} />
+            </div>
+            <div className="welcome-step-text">
+              <strong>Ensemble Synthesis</strong>
+              <span>Weighted consensus answer based on agreement</span>
             </div>
           </div>
           <div className="welcome-step glass-panel">
@@ -38,16 +47,7 @@ export default function WelcomeScreen() {
             </div>
             <div className="welcome-step-text">
               <strong>Multi-Round Debate</strong>
-              <span>Models challenge each other and refine positions until they converge</span>
-            </div>
-          </div>
-          <div className="welcome-step glass-panel">
-            <div className="welcome-step-icon">
-              <Sparkles size={16} />
-            </div>
-            <div className="welcome-step-text">
-              <strong>Synthesis</strong>
-              <span>A synthesizer reviews the full debate and produces the best answer</span>
+              <span>Optional rebuttals and convergence checks</span>
             </div>
           </div>
         </div>

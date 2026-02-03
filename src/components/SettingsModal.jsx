@@ -26,8 +26,12 @@ export default function SettingsModal() {
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(null);
   const [presetName, setPresetName] = useState('');
+  const [expandedPresets, setExpandedPresets] = useState([]);
+  const [synthProvider, setSynthProvider] = useState('openrouter');
+  const [convProvider, setConvProvider] = useState('openrouter');
+  const [searchProvider, setSearchProvider] = useState('openrouter');
 
   const handleSave = () => {
     dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
@@ -69,17 +73,32 @@ export default function SettingsModal() {
     { id: 'gemini', label: 'Gemini', enabled: providerStatus?.gemini },
   ].filter(p => p.enabled);
 
-  const providerModelOptions = useMemo(() => {
-    if (modelCatalogStatus !== 'ready') return [];
+  const getProviderModelOptions = useMemo(() => {
+    if (modelCatalogStatus !== 'ready') return () => [];
     const ids = Object.keys(modelCatalog || {});
-    if (newModelProvider === 'openrouter') return ids;
-    const allowedProviders = newModelProvider === 'gemini' ? ['google', 'gemini'] : [newModelProvider];
-    const filtered = ids.filter((id) => allowedProviders.includes(id.split('/')[0]));
-    const stripped = filtered
-      .map((id) => id.split('/').slice(1).join('/'))
-      .filter(Boolean);
-    return Array.from(new Set(stripped)).sort();
-  }, [modelCatalog, modelCatalogStatus, newModelProvider]);
+    return (providerId) => {
+      if (providerId === 'openrouter') return ids;
+      const allowedProviders = providerId === 'gemini' ? ['google', 'gemini'] : [providerId];
+      const filtered = ids.filter((id) => allowedProviders.includes(id.split('/')[0]));
+      const stripped = filtered
+        .map((id) => id.split('/').slice(1).join('/'))
+        .filter(Boolean);
+      return Array.from(new Set(stripped)).sort();
+    };
+  }, [modelCatalog, modelCatalogStatus]);
+
+  const providerModelOptions = getProviderModelOptions(newModelProvider);
+
+  const getDirectProviderFromValue = (value) => {
+    if (!value) return 'openrouter';
+    if (value.includes(':')) return value.split(':')[0];
+    return 'openrouter';
+  };
+
+  const buildProviderValue = (providerId, value) => {
+    if (!value) return '';
+    return providerId === 'openrouter' ? value : `${providerId}:${value}`;
+  };
 
   useEffect(() => {
     if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
@@ -95,17 +114,42 @@ export default function SettingsModal() {
   const savePreset = () => {
     const trimmed = presetName.trim();
     if (!trimmed || models.length === 0) return;
-    dispatch({ type: 'ADD_MODEL_PRESET', payload: { name: trimmed, models } });
+    dispatch({
+      type: 'ADD_MODEL_PRESET',
+      payload: {
+        name: trimmed,
+        models,
+        synthesizerModel: synth,
+        convergenceModel: convModel,
+        maxDebateRounds: maxRounds,
+        webSearchModel: searchModel,
+      },
+    });
     setPresetName('');
   };
 
   const usePreset = (preset) => {
     if (!preset?.models?.length) return;
     setModels(preset.models);
+    if (preset.synthesizerModel) setSynth(preset.synthesizerModel);
+    if (preset.convergenceModel) setConvModel(preset.convergenceModel);
+    if (preset.maxDebateRounds) setMaxRounds(preset.maxDebateRounds);
+    if (preset.webSearchModel) setSearchModel(preset.webSearchModel);
+    if (preset.synthesizerModel) setSynthProvider(getDirectProviderFromValue(preset.synthesizerModel));
+    if (preset.convergenceModel) setConvProvider(getDirectProviderFromValue(preset.convergenceModel));
+    if (preset.webSearchModel) setSearchProvider(getDirectProviderFromValue(preset.webSearchModel));
   };
 
   const deletePreset = (presetId) => {
     dispatch({ type: 'DELETE_MODEL_PRESET', payload: presetId });
+  };
+
+  const togglePreset = (presetId) => {
+    setExpandedPresets((prev) => (
+      prev.includes(presetId)
+        ? prev.filter(id => id !== presetId)
+        : [...prev, presetId]
+    ));
   };
 
   const resetDefaults = () => {
@@ -126,6 +170,9 @@ export default function SettingsModal() {
     setSearchModel(webSearchModel);
     setRememberKey(rememberApiKey);
     setPresetName('');
+    setSynthProvider(getDirectProviderFromValue(synthesizerModel));
+    setConvProvider(getDirectProviderFromValue(convergenceModel));
+    setSearchProvider(getDirectProviderFromValue(webSearchModel));
   }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
 
   if (!showSettings) return null;
@@ -168,6 +215,84 @@ export default function SettingsModal() {
                 openrouter.ai/keys
               </a>
             </p>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <span>Model Presets</span>
+            </label>
+            <div className="preset-row">
+              <input
+                type="text"
+                className="settings-input"
+                placeholder="Preset name (e.g. fast, deep-reasoning)"
+                value={presetName}
+                onChange={e => setPresetName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && savePreset()}
+              />
+              <button
+                className="model-add-btn"
+                onClick={savePreset}
+                disabled={!presetName.trim() || models.length === 0}
+              >
+                <Plus size={14} />
+                Save Preset
+              </button>
+            </div>
+            {modelPresets && modelPresets.length > 0 ? (
+              <div className="preset-list">
+                {modelPresets.map((preset) => (
+                  <div key={preset.id} className="preset-item">
+                    <div className="preset-info">
+                      <span className="preset-name">{preset.name}</span>
+                      <span className="preset-count">{preset.models.length} models</span>
+                    </div>
+                    <div className="preset-actions">
+                      <button className="model-add-btn" onClick={() => usePreset(preset)}>
+                        Use
+                      </button>
+                      <button
+                        className="settings-btn-secondary preset-details-btn"
+                        onClick={() => togglePreset(preset.id)}
+                      >
+                        {expandedPresets.includes(preset.id) ? 'Hide' : 'Details'}
+                      </button>
+                      <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    {expandedPresets.includes(preset.id) && (
+                      <div className="preset-details">
+                        <div className="preset-detail-row">
+                          <span className="preset-detail-label">Models</span>
+                          <span className="preset-detail-value">
+                            {preset.models.join(', ')}
+                          </span>
+                        </div>
+                        <div className="preset-detail-row">
+                          <span className="preset-detail-label">Synthesizer</span>
+                          <span className="preset-detail-value">{preset.synthesizerModel || '—'}</span>
+                        </div>
+                        <div className="preset-detail-row">
+                          <span className="preset-detail-label">Convergence</span>
+                          <span className="preset-detail-value">{preset.convergenceModel || '—'}</span>
+                        </div>
+                        <div className="preset-detail-row">
+                          <span className="preset-detail-label">Web search</span>
+                          <span className="preset-detail-value">{preset.webSearchModel || '—'}</span>
+                        </div>
+                        <div className="preset-detail-row">
+                          <span className="preset-detail-label">Max rounds</span>
+                          <span className="preset-detail-value">{preset.maxDebateRounds || '—'}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="settings-hint">Save a preset to quickly switch model lineups.</p>
+            )}
           </div>
 
           <div className="settings-section">
@@ -220,7 +345,7 @@ export default function SettingsModal() {
               {providerOptions.length > 0 && (
                 <button
                   className="model-browse-btn"
-                  onClick={() => setPickerOpen(true)}
+                onClick={() => setPickerOpen('debate')}
                 >
                   Browse
                 </button>
@@ -254,62 +379,128 @@ export default function SettingsModal() {
 
           <div className="settings-section">
             <label className="settings-label">
-              <span>Model Presets</span>
+              <Sparkles size={14} />
+              <span>Synthesizer Model</span>
             </label>
-            <div className="preset-row">
+            <div className="model-add-row">
+              <select
+                className="settings-input settings-select"
+                value={synthProvider}
+                onChange={e => setSynthProvider(e.target.value)}
+                disabled={providerOptions.length === 0}
+              >
+                {providerOptions.map(option => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
               <input
                 type="text"
                 className="settings-input"
-                placeholder="Preset name (e.g. fast, deep-reasoning)"
-                value={presetName}
-                onChange={e => setPresetName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && savePreset()}
+                placeholder={synthProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
+                value={synth}
+                onChange={e => setSynth(e.target.value)}
+                list={getProviderModelOptions(synthProvider).length > 0 ? `provider-models-synth-${synthProvider}` : undefined}
               />
               <button
-                className="model-add-btn"
-                onClick={savePreset}
-                disabled={!presetName.trim() || models.length === 0}
+                className="model-browse-btn"
+                onClick={() => setPickerOpen('synth')}
               >
-                <Plus size={14} />
-                Save Preset
+                Browse
               </button>
             </div>
-            {modelPresets && modelPresets.length > 0 ? (
-              <div className="preset-list">
-                {modelPresets.map((preset) => (
-                  <div key={preset.id} className="preset-item">
-                    <div className="preset-info">
-                      <span className="preset-name">{preset.name}</span>
-                      <span className="preset-count">{preset.models.length} models</span>
-                    </div>
-                    <div className="preset-actions">
-                      <button className="model-add-btn" onClick={() => usePreset(preset)}>
-                        Use
-                      </button>
-                      <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
+            {getProviderModelOptions(synthProvider).length > 0 && (
+              <datalist id={`provider-models-synth-${synthProvider}`}>
+                {getProviderModelOptions(synthProvider).slice(0, 200).map((modelId) => (
+                  <option key={modelId} value={modelId} />
                 ))}
-              </div>
-            ) : (
-              <p className="settings-hint">Save a preset to quickly switch model lineups.</p>
+              </datalist>
             )}
           </div>
 
           <div className="settings-section">
             <label className="settings-label">
-              <Sparkles size={14} />
-              <span>Synthesizer Model</span>
+              <GitCompareArrows size={14} />
+              <span>Convergence Check Model</span>
             </label>
-            <input
-              type="text"
-              className="settings-input"
-              placeholder="openai/gpt-4o"
-              value={synth}
-              onChange={e => setSynth(e.target.value)}
-            />
+            <div className="model-add-row">
+              <select
+                className="settings-input settings-select"
+                value={convProvider}
+                onChange={e => setConvProvider(e.target.value)}
+                disabled={providerOptions.length === 0}
+              >
+                {providerOptions.map(option => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                className="settings-input"
+                placeholder={convProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
+                value={convModel}
+                onChange={e => setConvModel(e.target.value)}
+                list={getProviderModelOptions(convProvider).length > 0 ? `provider-models-conv-${convProvider}` : undefined}
+              />
+              <button
+                className="model-browse-btn"
+                onClick={() => setPickerOpen('convergence')}
+              >
+                Browse
+              </button>
+            </div>
+            {getProviderModelOptions(convProvider).length > 0 && (
+              <datalist id={`provider-models-conv-${convProvider}`}>
+                {getProviderModelOptions(convProvider).slice(0, 200).map((modelId) => (
+                  <option key={modelId} value={modelId} />
+                ))}
+              </datalist>
+            )}
+            <p className="settings-hint">
+              A fast model used to check if debaters have reached consensus between rounds.
+            </p>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <Globe size={14} />
+              <span>Web Search Model</span>
+            </label>
+            <div className="model-add-row">
+              <select
+                className="settings-input settings-select"
+                value={searchProvider}
+                onChange={e => setSearchProvider(e.target.value)}
+                disabled={providerOptions.length === 0}
+              >
+                {providerOptions.map(option => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                className="settings-input"
+                placeholder={searchProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
+                value={searchModel}
+                onChange={e => setSearchModel(e.target.value)}
+                list={getProviderModelOptions(searchProvider).length > 0 ? `provider-models-search-${searchProvider}` : undefined}
+              />
+              <button
+                className="model-browse-btn"
+                onClick={() => setPickerOpen('search')}
+              >
+                Browse
+              </button>
+            </div>
+            {getProviderModelOptions(searchProvider).length > 0 && (
+              <datalist id={`provider-models-search-${searchProvider}`}>
+                {getProviderModelOptions(searchProvider).slice(0, 200).map((modelId) => (
+                  <option key={modelId} value={modelId} />
+                ))}
+              </datalist>
+            )}
+            <p className="settings-hint">
+              A model with web search capabilities (e.g. Perplexity Sonar via OpenRouter). Used when the Search toggle is active.
+            </p>
           </div>
 
           <div className="settings-divider" />
@@ -336,40 +527,6 @@ export default function SettingsModal() {
                 : `Up to ${maxRounds} rounds — models debate and refine positions.`}
             </p>
           </div>
-
-          <div className="settings-section">
-            <label className="settings-label">
-              <GitCompareArrows size={14} />
-              <span>Convergence Check Model</span>
-            </label>
-            <input
-              type="text"
-              className="settings-input"
-              placeholder="google/gemini-2.0-flash-exp"
-              value={convModel}
-              onChange={e => setConvModel(e.target.value)}
-            />
-            <p className="settings-hint">
-              A fast model used to check if debaters have reached consensus between rounds.
-            </p>
-          </div>
-
-          <div className="settings-section">
-            <label className="settings-label">
-              <Globe size={14} />
-              <span>Web Search Model</span>
-            </label>
-            <input
-              type="text"
-              className="settings-input"
-              placeholder="perplexity/sonar"
-              value={searchModel}
-              onChange={e => setSearchModel(e.target.value)}
-            />
-            <p className="settings-hint">
-              A model with web search capabilities (e.g. Perplexity Sonar via OpenRouter). Used when the Search toggle is active.
-            </p>
-          </div>
         </div>
 
         <div className="settings-footer">
@@ -385,17 +542,31 @@ export default function SettingsModal() {
         </div>
       </div>
       <ModelPickerModal
-        open={pickerOpen}
+        open={Boolean(pickerOpen)}
         onClose={() => setPickerOpen(false)}
-        provider={newModelProvider}
+        provider={pickerOpen === 'synth'
+          ? synthProvider
+          : pickerOpen === 'convergence'
+            ? convProvider
+            : pickerOpen === 'search'
+              ? searchProvider
+              : newModelProvider}
         onAdd={(modelId) => {
           if (!modelId) return;
-          let resolvedId = modelId;
-          if (newModelProvider !== 'openrouter') {
-            const nameOnly = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
-            resolvedId = `${newModelProvider}:${nameOnly}`;
+          const nameOnly = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+          if (pickerOpen === 'synth') {
+            setSynth(buildProviderValue(synthProvider, synthProvider === 'openrouter' ? modelId : nameOnly));
+          } else if (pickerOpen === 'convergence') {
+            setConvModel(buildProviderValue(convProvider, convProvider === 'openrouter' ? modelId : nameOnly));
+          } else if (pickerOpen === 'search') {
+            setSearchModel(buildProviderValue(searchProvider, searchProvider === 'openrouter' ? modelId : nameOnly));
+          } else {
+            let resolvedId = modelId;
+            if (newModelProvider !== 'openrouter') {
+              resolvedId = `${newModelProvider}:${nameOnly}`;
+            }
+            addModelId(resolvedId);
           }
-          addModelId(resolvedId);
           setPickerOpen(false);
         }}
       />

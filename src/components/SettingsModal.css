@@ -302,6 +302,45 @@
   gap: var(--space-xs);
 }
 
+.preset-details-btn {
+  padding: 6px 10px;
+}
+
+.preset-details {
+  width: 100%;
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preset-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.preset-detail-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.preset-detail-value {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+
 .settings-divider {
   height: 1px;
   background: var(--border-subtle);
