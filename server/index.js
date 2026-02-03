@@ -225,7 +225,7 @@ async function handleAnthropic({ model, messages, stream, res, signal }) {
   const { system, messages: filtered } = splitSystemMessages(messages);
   const body = {
     model,
-    max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS || 2048),
+    max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS || 64000),
     messages: buildAnthropicMessages(filtered),
     stream,
   };
