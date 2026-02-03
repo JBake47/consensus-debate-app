@@ -122,6 +122,7 @@ const initialState = {
   chatMode: loadFromStorage('chat_mode', 'debate'),
   focusedMode: loadFromStorage('focused_mode', false),
   webSearchEnabled: false,
+  modelPresets: loadFromStorage('model_presets', []),
   modelCatalog: {},
   modelCatalogStatus: 'idle',
   modelCatalogError: null,
@@ -171,6 +172,30 @@ function reducer(state, action) {
     case 'SET_MODELS': {
       saveToStorage('debate_models', action.payload);
       return { ...state, selectedModels: action.payload };
+    }
+    case 'ADD_MODEL_PRESET': {
+      const name = action.payload.name.trim();
+      if (!name) return state;
+      const models = Array.isArray(action.payload.models) ? action.payload.models : [];
+      const normalized = name.toLowerCase();
+      const existing = state.modelPresets.find(p => p.name.toLowerCase() === normalized);
+      const preset = {
+        id: existing?.id || Date.now().toString(),
+        name,
+        models,
+        updatedAt: Date.now(),
+      };
+      const next = [
+        preset,
+        ...state.modelPresets.filter(p => p.id !== preset.id),
+      ];
+      saveToStorage('model_presets', next);
+      return { ...state, modelPresets: next };
+    }
+    case 'DELETE_MODEL_PRESET': {
+      const next = state.modelPresets.filter(p => p.id !== action.payload);
+      saveToStorage('model_presets', next);
+      return { ...state, modelPresets: next };
     }
     case 'SET_SYNTHESIZER': {
       saveToStorage('synthesizer_model', action.payload);

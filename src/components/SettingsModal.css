@@ -183,16 +183,29 @@
 .model-add-row {
   display: flex;
   gap: var(--space-sm);
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .model-add-row .settings-input {
   flex: 1;
+  min-width: 180px;
 }
 
 .settings-select {
-  max-width: 140px;
+  min-width: 140px;
+  max-width: 180px;
   text-transform: capitalize;
-  padding-right: var(--space-md);
+  padding-right: var(--space-lg);
+  color: var(--text-primary);
+  background: rgba(18, 18, 18, 0.95);
+  border-color: var(--border-medium);
+  appearance: none;
+}
+
+.settings-select option {
+  color: var(--text-primary);
+  background: #0f0f0f;
 }
 
 .model-add-btn {
@@ -208,6 +221,7 @@
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .model-add-btn:hover {
@@ -228,11 +242,64 @@
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .model-browse-btn:hover {
   background: rgba(79, 143, 247, 0.2);
   color: var(--text-primary);
+}
+
+.preset-row {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.preset-row .settings-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.preset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.preset-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preset-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.preset-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.preset-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
 }
 
 .settings-divider {

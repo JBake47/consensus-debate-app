@@ -15,7 +15,7 @@ export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, maxDebateRounds, webSearchModel,
-    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, dispatch,
+    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
@@ -27,6 +27,7 @@ export default function SettingsModal() {
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [presetName, setPresetName] = useState('');
 
   const handleSave = () => {
     dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
@@ -91,6 +92,22 @@ export default function SettingsModal() {
     setModels(models.filter((_, i) => i !== index));
   };
 
+  const savePreset = () => {
+    const trimmed = presetName.trim();
+    if (!trimmed || models.length === 0) return;
+    dispatch({ type: 'ADD_MODEL_PRESET', payload: { name: trimmed, models } });
+    setPresetName('');
+  };
+
+  const usePreset = (preset) => {
+    if (!preset?.models?.length) return;
+    setModels(preset.models);
+  };
+
+  const deletePreset = (presetId) => {
+    dispatch({ type: 'DELETE_MODEL_PRESET', payload: presetId });
+  };
+
   const resetDefaults = () => {
     setModels(DEFAULT_DEBATE_MODELS);
     setSynth(DEFAULT_SYNTHESIZER_MODEL);
@@ -108,6 +125,7 @@ export default function SettingsModal() {
     setMaxRounds(maxDebateRounds);
     setSearchModel(webSearchModel);
     setRememberKey(rememberApiKey);
+    setPresetName('');
   }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
 
   if (!showSettings) return null;
@@ -231,6 +249,52 @@ export default function SettingsModal() {
               <p className="settings-hint">
                 Provider status unavailable: {providerStatusError || 'check the backend'}.
               </p>
+            )}
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <span>Model Presets</span>
+            </label>
+            <div className="preset-row">
+              <input
+                type="text"
+                className="settings-input"
+                placeholder="Preset name (e.g. fast, deep-reasoning)"
+                value={presetName}
+                onChange={e => setPresetName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && savePreset()}
+              />
+              <button
+                className="model-add-btn"
+                onClick={savePreset}
+                disabled={!presetName.trim() || models.length === 0}
+              >
+                <Plus size={14} />
+                Save Preset
+              </button>
+            </div>
+            {modelPresets && modelPresets.length > 0 ? (
+              <div className="preset-list">
+                {modelPresets.map((preset) => (
+                  <div key={preset.id} className="preset-item">
+                    <div className="preset-info">
+                      <span className="preset-name">{preset.name}</span>
+                      <span className="preset-count">{preset.models.length} models</span>
+                    </div>
+                    <div className="preset-actions">
+                      <button className="model-add-btn" onClick={() => usePreset(preset)}>
+                        Use
+                      </button>
+                      <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="settings-hint">Save a preset to quickly switch model lineups.</p>
             )}
           </div>
 
