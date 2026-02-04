@@ -106,6 +106,43 @@ export default function SettingsModal() {
     }
   }, [providerOptions, newModelProvider]);
 
+  const coerceDirectModelToOpenRouter = (value) => {
+    if (!value || !value.includes(':')) return value;
+    const [prefix, rest] = value.split(':');
+    const mapped = prefix === 'gemini' ? 'google' : prefix;
+    return rest ? `${mapped}/${rest}` : value;
+  };
+
+  useEffect(() => {
+    if (providerOptions.length === 0) return;
+    const enabledIds = providerOptions.map(p => p.id);
+    const nextProvider = (current) => (enabledIds.includes(current) ? current : enabledIds[0]);
+
+    const resolvedSynthProvider = nextProvider(synthProvider);
+    if (resolvedSynthProvider !== synthProvider) {
+      setSynthProvider(resolvedSynthProvider);
+      if (resolvedSynthProvider === 'openrouter') {
+        setSynth(coerceDirectModelToOpenRouter(synth));
+      }
+    }
+
+    const resolvedConvProvider = nextProvider(convProvider);
+    if (resolvedConvProvider !== convProvider) {
+      setConvProvider(resolvedConvProvider);
+      if (resolvedConvProvider === 'openrouter') {
+        setConvModel(coerceDirectModelToOpenRouter(convModel));
+      }
+    }
+
+    const resolvedSearchProvider = nextProvider(searchProvider);
+    if (resolvedSearchProvider !== searchProvider) {
+      setSearchProvider(resolvedSearchProvider);
+      if (resolvedSearchProvider === 'openrouter') {
+        setSearchModel(coerceDirectModelToOpenRouter(searchModel));
+      }
+    }
+  }, [providerOptions, synthProvider, convProvider, searchProvider, synth, convModel, searchModel]);
+
   const removeModel = (index) => {
     if (models.length <= 1) return;
     setModels(models.filter((_, i) => i !== index));

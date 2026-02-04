@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.7] - 2026-02-03
+
+### Added
+- Inline delete confirmation for conversations in the sidebar
+
+### Changed
+- Settings providers now auto-resolve to enabled providers and coerce OpenRouter model IDs when switching
+
 ## [0.3.6] - 2026-02-03
 
 ### Added
@@ -197,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.3...v0.3.4

@@ -16,6 +16,7 @@ export default function Sidebar({ open, onClose }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDesc, setEditDesc] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const editTitleRef = useRef(null);
 
   const sortedConversations = useMemo(
@@ -30,6 +31,17 @@ export default function Sidebar({ open, onClose }) {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 150);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        closeDeleteModal();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [deleteTarget]);
 
   const searchResults = useMemo(
     () => searchConversations(conversations, debouncedQuery),
@@ -53,9 +65,19 @@ export default function Sidebar({ open, onClose }) {
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: id });
   };
 
-  const handleDelete = (e, id) => {
+  const handleDelete = (e, conv) => {
     e.stopPropagation();
-    dispatch({ type: 'DELETE_CONVERSATION', payload: id });
+    setDeleteTarget(conv);
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteTarget(null);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    dispatch({ type: 'DELETE_CONVERSATION', payload: deleteTarget.id });
+    setDeleteTarget(null);
   };
 
   const handleSettings = () => {
@@ -279,12 +301,28 @@ export default function Sidebar({ open, onClose }) {
                   </button>
                   <button
                     className="sidebar-item-action delete"
-                    onClick={e => handleDelete(e, conv.id)}
+                    onClick={e => handleDelete(e, conv)}
                     title="Delete"
                   >
                     <Trash2 size={12} />
                   </button>
                 </div>
+                {deleteTarget?.id === conv.id && (
+                  <div className="sidebar-inline-confirm" onClick={(e) => e.stopPropagation()}>
+                    <div className="sidebar-inline-confirm-title">Delete chat?</div>
+                    <div className="sidebar-inline-confirm-meta">
+                      {conv.title || 'Untitled chat'}
+                    </div>
+                    <div className="sidebar-inline-confirm-actions">
+                      <button className="sidebar-inline-confirm-btn ghost" onClick={closeDeleteModal}>
+                        Cancel
+                      </button>
+                      <button className="sidebar-inline-confirm-btn danger" onClick={confirmDelete}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))
           )}
