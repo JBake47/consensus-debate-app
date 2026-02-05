@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.8] - 2026-02-05
+
+### Added
+- Server-side API access controls for localhost-only mode with optional token-auth remote access
+- Configurable server bind host and trust-proxy toggle for deployment networking
+
+### Changed
+- Debate synthesis now incorporates content from all completed rounds instead of only the final round
+- Retry and edit flows now preserve per-turn focused mode and web search settings
+- Settings model ID normalization now consistently maps provider prefixes for model, synthesis, convergence, and web search fields
+- `/api/models/search` now validates and clamps `limit` and `offset` query parameters
+
+### Fixed
+- Cancellations now mark in-progress synthesis and ensemble analysis as cancelled error states
+- Convergence and ensemble vote JSON parsing now more reliably extracts valid nested objects
+
 ## [0.3.7] - 2026-02-03
 
 ### Added
@@ -205,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.4...v0.3.5

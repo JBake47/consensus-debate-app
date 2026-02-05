@@ -33,14 +33,62 @@ export default function SettingsModal() {
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
 
+  const normalizeModelForProvider = (providerId, rawValue) => {
+    const trimmed = String(rawValue || '').trim();
+    if (!trimmed) return '';
+
+    if (providerId === 'openrouter') {
+      if (trimmed.includes(':')) {
+        const [prefixRaw, ...restParts] = trimmed.split(':');
+        const rest = restParts.join(':').trim();
+        const prefix = prefixRaw.toLowerCase();
+        const mappedPrefix = prefix === 'gemini' ? 'google' : prefix;
+        if (rest) return `${mappedPrefix}/${rest}`;
+      }
+      return trimmed;
+    }
+
+    const acceptedPrefixes = providerId === 'gemini' ? ['gemini', 'google'] : [providerId];
+
+    if (trimmed.includes(':')) {
+      const [prefixRaw, ...restParts] = trimmed.split(':');
+      const rest = restParts.join(':').trim();
+      if (rest) {
+        const prefix = prefixRaw.toLowerCase();
+        if (acceptedPrefixes.includes(prefix)) {
+          return `${providerId}:${rest}`;
+        }
+        return `${providerId}:${rest}`;
+      }
+    }
+
+    if (trimmed.includes('/')) {
+      const [prefixRaw, ...restParts] = trimmed.split('/');
+      const rest = restParts.join('/').trim();
+      if (rest) {
+        const prefix = prefixRaw.toLowerCase();
+        if (acceptedPrefixes.includes(prefix)) {
+          return `${providerId}:${rest}`;
+        }
+        return `${providerId}:${rest}`;
+      }
+    }
+
+    return `${providerId}:${trimmed}`;
+  };
+
   const handleSave = () => {
+    const normalizedSynth = normalizeModelForProvider(synthProvider, synth);
+    const normalizedConvergence = normalizeModelForProvider(convProvider, convModel);
+    const normalizedSearch = normalizeModelForProvider(searchProvider, searchModel);
+
     dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
     dispatch({ type: 'SET_API_KEY', payload: keyInput.trim() });
     dispatch({ type: 'SET_MODELS', payload: models });
-    dispatch({ type: 'SET_SYNTHESIZER', payload: synth });
-    dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: convModel });
+    dispatch({ type: 'SET_SYNTHESIZER', payload: normalizedSynth || synth.trim() });
+    dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergence || convModel.trim() });
     dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
-    dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: searchModel });
+    dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearch || searchModel.trim() });
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -51,8 +99,7 @@ export default function SettingsModal() {
   const addModel = () => {
     const trimmed = newModel.trim();
     if (!trimmed) return;
-    const provider = newModelProvider;
-    const modelId = provider === 'openrouter' ? trimmed : `${provider}:${trimmed}`;
+    const modelId = normalizeModelForProvider(newModelProvider, trimmed);
     if (!models.includes(modelId)) {
       setModels([...models, modelId]);
       setNewModel('');
@@ -156,10 +203,10 @@ export default function SettingsModal() {
       payload: {
         name: trimmed,
         models,
-        synthesizerModel: synth,
-        convergenceModel: convModel,
+        synthesizerModel: normalizeModelForProvider(synthProvider, synth) || synth,
+        convergenceModel: normalizeModelForProvider(convProvider, convModel) || convModel,
         maxDebateRounds: maxRounds,
-        webSearchModel: searchModel,
+        webSearchModel: normalizeModelForProvider(searchProvider, searchModel) || searchModel,
       },
     });
     setPresetName('');

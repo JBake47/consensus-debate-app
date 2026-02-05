@@ -1,12 +1,73 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import { timingSafeEqual } from 'node:crypto';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '127.0.0.1';
+const ALLOW_REMOTE_API = process.env.ALLOW_REMOTE_API === 'true';
+const SERVER_AUTH_TOKEN = process.env.SERVER_AUTH_TOKEN || '';
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+
+if (TRUST_PROXY) {
+  app.set('trust proxy', true);
+}
 
 app.use(express.json({ limit: '60mb' }));
+
+function normalizeIp(value) {
+  if (!value) return '';
+  let ip = String(value).trim();
+  if (ip.includes(',')) ip = ip.split(',')[0].trim();
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+  if (ip.startsWith('[') && ip.includes(']')) {
+    ip = ip.slice(1, ip.indexOf(']'));
+  }
+  if (ip.includes(':') && ip.includes('.') && ip.lastIndexOf(':') > ip.lastIndexOf('.')) {
+    ip = ip.slice(0, ip.lastIndexOf(':'));
+  }
+  return ip;
+}
+
+function isLoopbackIp(ip) {
+  const normalized = normalizeIp(ip);
+  return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function constantTimeEquals(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  if (left.length !== right.length || left.length === 0) return false;
+  return timingSafeEqual(left, right);
+}
+
+function hasValidServerToken(req) {
+  if (!SERVER_AUTH_TOKEN) return false;
+  const token = req.get('x-server-auth-token');
+  return constantTimeEquals(token, SERVER_AUTH_TOKEN);
+}
+
+app.use('/api', (req, res, next) => {
+  if (ALLOW_REMOTE_API) {
+    next();
+    return;
+  }
+
+  const directIp = req.socket?.remoteAddress || '';
+  const clientIp = normalizeIp(req.ip || directIp);
+  const localRequest = isLoopbackIp(clientIp) || isLoopbackIp(directIp);
+
+  if (localRequest || hasValidServerToken(req)) {
+    next();
+    return;
+  }
+
+  res.status(403).json({
+    error: 'Remote API access denied. Use localhost, set SERVER_AUTH_TOKEN, or set ALLOW_REMOTE_API=true.',
+  });
+});
 
 function sendSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -547,8 +608,14 @@ app.get('/api/models/search', async (req, res) => {
 
   const query = String(req.query.q || '').toLowerCase().trim();
   const provider = String(req.query.provider || '').toLowerCase().trim();
-  const limit = Math.min(Number(req.query.limit || 200), 500);
-  const offset = Math.max(Number(req.query.offset || 0), 0);
+  const parsedLimit = Number(req.query.limit);
+  const parsedOffset = Number(req.query.offset);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(Math.max(Math.floor(parsedLimit), 0), 500)
+    : 200;
+  const offset = Number.isFinite(parsedOffset)
+    ? Math.max(Math.floor(parsedOffset), 0)
+    : 0;
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/models', {
@@ -606,7 +673,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
-  console.log(`API server listening on http://localhost:${PORT}`);
+  console.log(`API server listening on http://${HOST}:${PORT}`);
 });

@@ -165,6 +165,59 @@ Now synthesize the best possible answer from this debate.`,
   ];
 }
 
+function sliceBalancedObject(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth += 1;
+    if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, i + 1);
+      }
+      if (depth < 0) return null;
+    }
+  }
+  return null;
+}
+
+function extractJsonObjectContainingKey(text, requiredKey) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const keyToken = `"${requiredKey}"`;
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    const candidate = sliceBalancedObject(text, i);
+    if (!candidate || !candidate.includes(keyToken)) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, requiredKey)) {
+        return parsed;
+      }
+    } catch {
+      // keep scanning
+    }
+  }
+
+  return null;
+}
+
 /**
  * Parse the convergence check response. Handles various formats
  * the model might return (raw JSON, markdown-wrapped, etc.).
@@ -184,14 +237,9 @@ export function parseConvergenceResponse(text) {
     const parsed = JSON.parse(text.trim());
     return extractFields(parsed);
   } catch {
-    const jsonMatch = text.match(/\{[\s\S]*?"converged"[\s\S]*?\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return extractFields(parsed);
-      } catch {
-        // fall through
-      }
+    const parsed = extractJsonObjectContainingKey(text, 'converged');
+    if (parsed) {
+      return extractFields(parsed);
     }
 
     return {
@@ -399,21 +447,15 @@ export function parseEnsembleVoteResponse(text) {
       modelWeights: parsed.modelWeights && typeof parsed.modelWeights === 'object' ? parsed.modelWeights : defaults.modelWeights,
     };
   } catch {
-    // Try extracting JSON from markdown code fences
-    const jsonMatch = text.match(/\{[\s\S]*?"confidence"[\s\S]*?\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(100, parsed.confidence)) : defaults.confidence,
-          outliers: Array.isArray(parsed.outliers) ? parsed.outliers : defaults.outliers,
-          agreementAreas: Array.isArray(parsed.agreementAreas) ? parsed.agreementAreas : defaults.agreementAreas,
-          disagreementAreas: Array.isArray(parsed.disagreementAreas) ? parsed.disagreementAreas : defaults.disagreementAreas,
-          modelWeights: parsed.modelWeights && typeof parsed.modelWeights === 'object' ? parsed.modelWeights : defaults.modelWeights,
-        };
-      } catch {
-        // fall through
-      }
+    const parsed = extractJsonObjectContainingKey(text, 'confidence');
+    if (parsed) {
+      return {
+        confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(100, parsed.confidence)) : defaults.confidence,
+        outliers: Array.isArray(parsed.outliers) ? parsed.outliers : defaults.outliers,
+        agreementAreas: Array.isArray(parsed.agreementAreas) ? parsed.agreementAreas : defaults.agreementAreas,
+        disagreementAreas: Array.isArray(parsed.disagreementAreas) ? parsed.disagreementAreas : defaults.disagreementAreas,
+        modelWeights: parsed.modelWeights && typeof parsed.modelWeights === 'object' ? parsed.modelWeights : defaults.modelWeights,
+      };
     }
 
     return defaults;

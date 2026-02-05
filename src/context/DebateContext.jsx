@@ -147,6 +147,33 @@ function updateLastTurn(conversations, conversationId, updater) {
   });
 }
 
+function toSynthesisStream(stream) {
+  if (!stream?.model || !stream?.content) return null;
+  return {
+    model: stream.model,
+    content: stream.content,
+    status: 'complete',
+  };
+}
+
+function toSynthesisRound(round) {
+  if (!round) return null;
+  const streams = (round.streams || []).map(toSynthesisStream).filter(Boolean);
+  if (streams.length === 0) return null;
+  return {
+    label: round.label || `Round ${round.roundNumber || 1}`,
+    streams,
+    convergenceCheck: round.convergenceCheck || null,
+  };
+}
+
+function toSynthesisRounds(rounds, count = rounds?.length || 0) {
+  return (rounds || [])
+    .slice(0, count)
+    .map(toSynthesisRound)
+    .filter(Boolean);
+}
+
 function reducer(state, action) {
   switch (action.type) {
     case 'SET_API_KEY': {
@@ -684,14 +711,14 @@ export function DebateProvider({ children }) {
     );
   };
 
-  const startDebate = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
+  const startDebate = useCallback(async (userPrompt, { webSearch = false, attachments, focusedOverride } = {}) => {
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
     const webSearchModel = state.webSearchModel;
     const apiKey = state.apiKey;
-    const focused = state.focusedMode;
+    const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
 
     // Create new conversation if none active
     let convId = state.activeConversationId;
@@ -702,6 +729,8 @@ export function DebateProvider({ children }) {
         : userPrompt;
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
+    const existingConversation = state.conversations.find(c => c.id === convId);
+    const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
@@ -712,6 +741,8 @@ export function DebateProvider({ children }) {
       timestamp: Date.now(),
       attachments: attachments || null,
       mode: 'debate',
+      focusedMode: focused,
+      webSearchEnabled: Boolean(webSearch),
       rounds: [],
       synthesis: {
         model: synthModel,
@@ -827,6 +858,7 @@ export function DebateProvider({ children }) {
     let converged = false;
     let terminationReason = null;
     let totalRounds = 0;
+    const synthesisRounds = [];
 
     // ===== MULTI-ROUND DEBATE LOOP =====
     for (let roundNum = 1; roundNum <= maxRounds; roundNum++) {
@@ -835,6 +867,7 @@ export function DebateProvider({ children }) {
       const roundLabel = getRoundLabel(roundNum);
       const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
       const roundIndex = roundNum - 1;
+      let roundConvergence = null;
 
       dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
       dispatch({
@@ -954,6 +987,7 @@ export function DebateProvider({ children }) {
 
           const parsed = parseConvergenceResponse(convergenceResponse);
           parsed.rawResponse = convergenceResponse;
+          roundConvergence = parsed;
 
           dispatch({
             type: 'SET_CONVERGENCE',
@@ -967,17 +1001,17 @@ export function DebateProvider({ children }) {
           if (parsed.converged) {
             converged = true;
             terminationReason = 'converged';
-            break;
           }
         } catch (err) {
           if (abortController.signal.aborted) break;
           // Convergence check failed — continue debating
+          roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
           dispatch({
             type: 'SET_CONVERGENCE',
             payload: {
               conversationId: convId,
               roundIndex,
-              convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message },
+              convergenceCheck: roundConvergence,
             },
           });
         }
@@ -986,6 +1020,18 @@ export function DebateProvider({ children }) {
       // If we've hit max rounds without convergence
       if (roundNum === maxRounds) {
         terminationReason = 'max_rounds_reached';
+      }
+
+      if (lastCompletedStreams?.length > 0) {
+        synthesisRounds.push({
+          label: roundLabel,
+          streams: lastCompletedStreams.map(stream => ({ ...stream })),
+          convergenceCheck: roundConvergence,
+        });
+      }
+
+      if (converged) {
+        break;
       }
     }
 
@@ -1041,14 +1087,17 @@ export function DebateProvider({ children }) {
       },
     });
 
-    // Build synthesis from final round's completed streams
-    const synthesisMessages = buildMultiRoundSynthesisMessages({
-      userPrompt,
-      rounds: [{
+    // Build synthesis from all completed rounds in this debate
+    const roundsForSynthesis = synthesisRounds.length > 0
+      ? synthesisRounds
+      : [{
         label: `Final positions after ${totalRounds} round(s)`,
         streams: lastCompletedStreams,
         convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
-      }],
+      }];
+    const synthesisMessages = buildMultiRoundSynthesisMessages({
+      userPrompt,
+      rounds: roundsForSynthesis,
       conversationHistory,
     });
 
@@ -1086,9 +1135,7 @@ export function DebateProvider({ children }) {
       });
 
       // Fire-and-forget title + description generation on first turn
-      const currentConvForTitle = state.conversations.find(c => c.id === convId);
-      const turnCount = currentConvForTitle ? currentConvForTitle.turns.length : 0;
-      if (turnCount <= 1) {
+      if (isFirstTurn) {
         generateTitle({
           userPrompt,
           synthesisContent,
@@ -1228,12 +1275,12 @@ export function DebateProvider({ children }) {
     }
   };
 
-  const startParallel = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
+  const startParallel = useCallback(async (userPrompt, { webSearch = false, attachments, focusedOverride } = {}) => {
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
     const webSearchModel = state.webSearchModel;
     const apiKey = state.apiKey;
-    const focused = state.focusedMode;
+    const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
 
     // Create new conversation if none active
     let convId = state.activeConversationId;
@@ -1253,6 +1300,8 @@ export function DebateProvider({ children }) {
       timestamp: Date.now(),
       attachments: attachments || null,
       mode: 'parallel',
+      focusedMode: focused,
+      webSearchEnabled: Boolean(webSearch),
       rounds: [],
       synthesis: null,
       ensembleResult: null,
@@ -1406,13 +1455,13 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.activeConversationId, state.conversations, state.focusedMode]);
 
-  const startDirect = useCallback(async (userPrompt, { webSearch = false, attachments } = {}) => {
+  const startDirect = useCallback(async (userPrompt, { webSearch = false, attachments, focusedOverride } = {}) => {
     const models = state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const webSearchModel = state.webSearchModel;
     const apiKey = state.apiKey;
-    const focused = state.focusedMode;
+    const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
 
     // Create new conversation if none active
     let convId = state.activeConversationId;
@@ -1423,6 +1472,8 @@ export function DebateProvider({ children }) {
         : userPrompt;
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
+    const existingConversation = state.conversations.find(c => c.id === convId);
+    const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
@@ -1433,6 +1484,8 @@ export function DebateProvider({ children }) {
       timestamp: Date.now(),
       attachments: attachments || null,
       mode: 'direct',
+      focusedMode: focused,
+      webSearchEnabled: Boolean(webSearch),
       rounds: [],
       synthesis: {
         model: synthModel,
@@ -1592,9 +1645,7 @@ export function DebateProvider({ children }) {
 
     // Generate title on first turn
     if (synthesisContent) {
-      const currentConvForTitle = state.conversations.find(c => c.id === convId);
-      const turnCount = currentConvForTitle ? currentConvForTitle.turns.length : 0;
-      if (turnCount <= 1) {
+      if (isFirstTurn) {
         generateTitle({
           userPrompt,
           synthesisContent,
@@ -1637,9 +1688,36 @@ export function DebateProvider({ children }) {
           });
         }
       }
+      if (lastTurn.synthesis?.status === 'streaming') {
+        dispatch({
+          type: 'UPDATE_SYNTHESIS',
+          payload: {
+            conversationId: activeConversation.id,
+            model: lastTurn.synthesis.model || state.synthesizerModel,
+            content: lastTurn.synthesis.content || '',
+            status: 'error',
+            error: 'Cancelled',
+            usage: lastTurn.synthesis.usage,
+            durationMs: lastTurn.synthesis.durationMs,
+          },
+        });
+      }
+      if (lastTurn.ensembleResult?.status === 'analyzing') {
+        dispatch({
+          type: 'SET_ENSEMBLE_RESULT',
+          payload: {
+            conversationId: activeConversation.id,
+            ensembleResult: {
+              ...lastTurn.ensembleResult,
+              status: 'error',
+              error: 'Cancelled',
+            },
+          },
+        });
+      }
     }
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, dispatch]);
+  }, [activeConversation, dispatch, state.synthesizerModel]);
 
   const editLastTurn = useCallback(() => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -1656,10 +1734,17 @@ export function DebateProvider({ children }) {
     const prompt = lastTurn.userPrompt;
     const turnAttachments = lastTurn.attachments;
     const turnMode = lastTurn.mode;
+    const webSearch = typeof lastTurn.webSearchEnabled === 'boolean'
+      ? lastTurn.webSearchEnabled
+      : state.webSearchEnabled;
+    const focusedOverride = typeof lastTurn.focusedMode === 'boolean'
+      ? lastTurn.focusedMode
+      : state.focusedMode;
     dispatch({ type: 'REMOVE_LAST_TURN', payload: activeConversation.id });
     const opts = {
-      webSearch: state.webSearchEnabled,
+      webSearch,
       attachments: turnAttachments || undefined,
+      focusedOverride,
     };
     if (turnMode === 'direct') {
       startDirect(prompt, opts);
@@ -1668,7 +1753,7 @@ export function DebateProvider({ children }) {
     } else {
       startDebate(prompt, opts);
     }
-  }, [activeConversation, startDebate, startDirect, startParallel, state.webSearchEnabled]);
+  }, [activeConversation, startDebate, startDirect, startParallel, state.webSearchEnabled, state.focusedMode]);
 
   const retrySynthesis = useCallback(async () => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -1680,6 +1765,9 @@ export function DebateProvider({ children }) {
     const apiKey = state.apiKey;
     const synthModel = state.synthesizerModel;
     const convergModel = state.convergenceModel;
+    const turnFocused = typeof lastTurn.focusedMode === 'boolean'
+      ? lastTurn.focusedMode
+      : state.focusedMode;
 
     // Gather completed streams from the final round
     const finalRound = lastTurn.rounds[lastTurn.rounds.length - 1];
@@ -1706,7 +1794,7 @@ export function DebateProvider({ children }) {
     if (lastTurn.mode === 'direct') {
       await runEnsembleAnalysisAndSynthesis({
         convId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
-        synthModel, convergenceModel: convergModel, apiKey, abortController, focused: state.focusedMode,
+        synthModel, convergenceModel: convergModel, apiKey, abortController, focused: turnFocused,
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
@@ -1715,16 +1803,19 @@ export function DebateProvider({ children }) {
     // Debate mode: use the original multi-round synthesis path
     const converged = lastTurn.debateMetadata?.converged || false;
     const totalRounds = lastTurn.debateMetadata?.totalRounds || lastTurn.rounds.length;
+    const roundsForSynthesis = toSynthesisRounds(lastTurn.rounds, totalRounds);
 
     dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
 
     const synthesisMessages = buildMultiRoundSynthesisMessages({
       userPrompt,
-      rounds: [{
-        label: `Final positions after ${totalRounds} round(s)`,
-        streams: lastCompletedStreams,
-        convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
-      }],
+      rounds: roundsForSynthesis.length > 0
+        ? roundsForSynthesis
+        : [{
+          label: `Final positions after ${totalRounds} round(s)`,
+          streams: lastCompletedStreams,
+          convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
+        }],
       conversationHistory,
     });
 
@@ -1746,7 +1837,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode]);
 
   const retryRound = useCallback(async (roundIndex) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -1763,6 +1854,9 @@ export function DebateProvider({ children }) {
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
+    const turnFocused = typeof lastTurn.focusedMode === 'boolean'
+      ? lastTurn.focusedMode
+      : state.focusedMode;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
     dispatch({ type: 'TRUNCATE_ROUNDS', payload: { conversationId: convId, keepCount: roundIndex + 1 } });
@@ -1787,7 +1881,10 @@ export function DebateProvider({ children }) {
       ? `${userPrompt}\n\n---\n**Web Search Context (from ${wsModel}):**\n${webSearchCtx}`
       : userPrompt;
     const userContent = buildAttachmentContent(userMessageContent, attachments);
-    const initialMessages = [...conversationHistory, { role: 'user', content: userContent }];
+    const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
+      ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
+      : [];
+    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
     // Get previous round streams for rebuttal context
     let previousRoundStreams = null;
@@ -1830,7 +1927,7 @@ export function DebateProvider({ children }) {
 
       await runEnsembleAnalysisAndSynthesis({
         convId, userPrompt, completedStreams, conversationHistory,
-        synthModel, convergenceModel, apiKey, abortController, focused: state.focusedMode,
+        synthModel, convergenceModel, apiKey, abortController, focused: turnFocused,
       });
 
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
@@ -1877,7 +1974,7 @@ export function DebateProvider({ children }) {
           dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
           dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
           const messagesPerModel = models.map(() =>
-            buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: state.focusedMode })
+            buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
           );
           const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
           if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
@@ -1933,9 +2030,15 @@ export function DebateProvider({ children }) {
         return;
       }
       dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+      const finalRoundSummary = {
+        label: `Final positions after ${totalRounds} round(s)`,
+        streams: lastCompletedStreams,
+        convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
+      };
+      const roundsForSynthesis = [...toSynthesisRounds(lastTurn.rounds, totalRounds), finalRoundSummary];
       const synthesisMessages = buildMultiRoundSynthesisMessages({
         userPrompt,
-        rounds: [{ label: `Final positions after ${totalRounds} round(s)`, streams: lastCompletedStreams, convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null }],
+        rounds: roundsForSynthesis,
         conversationHistory,
       });
       try {
@@ -1967,7 +2070,7 @@ export function DebateProvider({ children }) {
             previousRoundStreams,
             roundNumber: roundIndex + 1,
             conversationHistory,
-            focused: state.focusedMode,
+            focused: turnFocused,
           });
         }
 
@@ -2063,7 +2166,7 @@ export function DebateProvider({ children }) {
         dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
         const messagesPerModel = models.map(() =>
-          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: state.focusedMode })
+          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
         );
         const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
         if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
@@ -2120,10 +2223,16 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    const finalRoundSummary = {
+      label: `Final positions after ${totalRounds} round(s)`,
+      streams: lastCompletedStreams,
+      convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
+    };
+    const roundsForSynthesis = [...toSynthesisRounds(lastTurn.rounds, totalRounds), finalRoundSummary];
 
     const synthesisMessages = buildMultiRoundSynthesisMessages({
       userPrompt,
-      rounds: [{ label: `Final positions after ${totalRounds} round(s)`, streams: lastCompletedStreams, convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null }],
+      rounds: roundsForSynthesis,
       conversationHistory,
     });
 
@@ -2138,7 +2247,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode]);
 
   const retryStream = useCallback(async (roundIndex, streamIndex) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -2157,6 +2266,9 @@ export function DebateProvider({ children }) {
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
     const models = targetRound.streams.map(s => s.model);
+    const turnFocused = typeof lastTurn.focusedMode === 'boolean'
+      ? lastTurn.focusedMode
+      : state.focusedMode;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
     dispatch({ type: 'TRUNCATE_ROUNDS', payload: { conversationId: convId, keepCount: roundIndex + 1 } });
@@ -2181,7 +2293,10 @@ export function DebateProvider({ children }) {
       ? `${userPrompt}\n\n---\n**Web Search Context (from ${wsModel}):**\n${webSearchCtx}`
       : userPrompt;
     const userContent = buildAttachmentContent(userMessageContent, attachments);
-    const initialMessages = [...conversationHistory, { role: 'user', content: userContent }];
+    const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
+      ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
+      : [];
+    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
     // Build messages for this specific model in this round
     let modelMessages;
@@ -2197,7 +2312,7 @@ export function DebateProvider({ children }) {
         previousRoundStreams,
         roundNumber: roundIndex + 1,
         conversationHistory,
-        focused: state.focusedMode,
+        focused: turnFocused,
       });
     }
 
@@ -2268,7 +2383,7 @@ export function DebateProvider({ children }) {
     if (lastTurn.mode === 'direct') {
       await runEnsembleAnalysisAndSynthesis({
         convId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
-        synthModel, convergenceModel, apiKey, abortController, focused: state.focusedMode,
+        synthModel, convergenceModel, apiKey, abortController, focused: turnFocused,
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
@@ -2311,7 +2426,7 @@ export function DebateProvider({ children }) {
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
 
         const messagesPerModel = models.map(() =>
-          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: state.focusedMode })
+          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
         );
 
         const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
@@ -2375,10 +2490,16 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    const finalRoundSummary = {
+      label: `Final positions after ${totalRounds} round(s)`,
+      streams: lastCompletedStreams,
+      convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
+    };
+    const roundsForSynthesis = [...toSynthesisRounds(lastTurn.rounds, totalRounds), finalRoundSummary];
 
     const synthesisMessages = buildMultiRoundSynthesisMessages({
       userPrompt,
-      rounds: [{ label: `Final positions after ${totalRounds} round(s)`, streams: lastCompletedStreams, convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null }],
+      rounds: roundsForSynthesis,
       conversationHistory,
     });
 
@@ -2397,7 +2518,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode]);
 
   const value = {
     ...state,
