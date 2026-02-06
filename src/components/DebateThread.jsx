@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain, Globe } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
@@ -9,11 +9,27 @@ import './DebateThread.css';
 function ThreadMessage({ stream, roundNumber, roundLabel }) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const contentRef = useRef(null);
-  const { model, content, status, error, usage, durationMs, reasoning } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence } = stream;
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);
   const provider = getProviderName(model);
+  const searchEvidenceClass = searchEvidence?.verified
+    ? 'verified'
+    : searchEvidence?.strictBlocked
+      ? 'blocked'
+      : 'unverified';
+  const searchSummary = searchEvidence
+    ? `Search ${searchEvidence.searchUsed ? 'yes' : 'no'} | ${searchEvidence.sourceCount || 0} src`
+    : null;
+  const searchTitle = searchEvidence
+    ? [
+      searchEvidence.primaryIssue ? `Issue: ${searchEvidence.primaryIssue}` : null,
+      searchEvidence.fallbackApplied && searchEvidence.fallbackReason
+        ? `Fallback: ${searchEvidence.fallbackReason}`
+        : null,
+    ].filter(Boolean).join('\n')
+    : '';
 
   useEffect(() => {
     if (status === 'streaming' && contentRef.current) {
@@ -42,7 +58,19 @@ function ThreadMessage({ stream, roundNumber, roundLabel }) {
               {durationMs != null && <> · {formatDuration(durationMs)}</>}
             </span>
           )}
+          {searchEvidence && (
+            <span className={`thread-search-pill ${searchEvidenceClass}`} title={searchTitle}>
+              <Globe size={11} />
+              <span>{searchSummary}</span>
+            </span>
+          )}
         </div>
+
+        {searchEvidence?.fallbackApplied && searchEvidence.fallbackReason && (
+          <div className={`thread-search-meta ${searchEvidenceClass}`}>
+            Fallback: {searchEvidence.fallbackReason}
+          </div>
+        )}
 
         {reasoning && (
           <div className="thread-reasoning">

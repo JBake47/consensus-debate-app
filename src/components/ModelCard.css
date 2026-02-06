@@ -150,6 +150,55 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.model-card-search-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.model-card-search-pill.verified {
+  color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+}
+
+.model-card-search-pill.unverified {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.model-card-search-pill.blocked {
+  color: var(--status-error);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.model-card-search-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px var(--space-md) 0;
+  font-size: 11px;
+}
+
+.model-card-search-meta.verified {
+  color: var(--accent-cyan);
+}
+
+.model-card-search-meta.unverified {
+  color: #fbbf24;
+}
+
+.model-card-search-meta.blocked {
+  color: var(--status-error);
+}
+
 .spinning {
   animation: spin 1s linear infinite;
 }

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain } from 'lucide-react';
+import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
@@ -14,7 +14,7 @@ function isReasoningModel(modelId) {
 
 export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
   const { retryStream, debateInProgress } = useDebate();
-  const { model, content, status, error, usage, durationMs, reasoning } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence } = stream;
   const [collapsed, setCollapsed] = useState(false);
   const reasoningModel = isReasoningModel(model);
   const [reasoningCollapsed, setReasoningCollapsed] = useState(!reasoningModel);
@@ -26,6 +26,22 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);
   const provider = getProviderName(model);
+  const searchEvidenceClass = searchEvidence?.verified
+    ? 'verified'
+    : searchEvidence?.strictBlocked
+      ? 'blocked'
+      : 'unverified';
+  const searchSummary = searchEvidence
+    ? `Search ${searchEvidence.searchUsed ? 'yes' : 'no'} | ${searchEvidence.sourceCount || 0} src`
+    : null;
+  const searchTitle = searchEvidence
+    ? [
+      searchEvidence.primaryIssue ? `Issue: ${searchEvidence.primaryIssue}` : null,
+      searchEvidence.fallbackApplied && searchEvidence.fallbackReason
+        ? `Fallback: ${searchEvidence.fallbackReason}`
+        : null,
+    ].filter(Boolean).join('\n')
+    : '';
 
   // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
@@ -99,6 +115,12 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
               {durationMs != null && formatDuration(durationMs)}
             </span>
           )}
+          {searchEvidence && (
+            <span className={`model-card-search-pill ${searchEvidenceClass}`} title={searchTitle}>
+              <Globe size={11} />
+              <span>{searchSummary}</span>
+            </span>
+          )}
           <span className={`model-card-status ${status}`}>
             {status === 'streaming' && <Loader2 size={12} className="spinning" />}
             {status === 'error' && <AlertCircle size={12} />}
@@ -110,6 +132,17 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
 
       {!collapsed && (
         <>
+          {searchEvidence && (
+            <div className={`model-card-search-meta ${searchEvidenceClass}`}>
+              <span>{searchSummary}</span>
+              {searchEvidence.fallbackApplied && searchEvidence.fallbackReason && (
+                <span>Fallback: {searchEvidence.fallbackReason}</span>
+              )}
+              {!searchEvidence.verified && searchEvidence.primaryIssue && (
+                <span>{searchEvidence.primaryIssue}</span>
+              )}
+            </div>
+          )}
           {reasoning && sideBySide && content ? (
             <div className="model-card-side-by-side">
               <div className="model-card-reasoning side-by-side">

@@ -58,7 +58,7 @@ function updateReasoningAccumulated(accumulated, incoming) {
  * Calls onChunk with each text delta as it arrives.
  * Returns { content, reasoning, usage, durationMs }.
  */
-export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal }) {
+export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false }) {
   const startTime = performance.now();
 
   const response = await fetch(API_PROXY_URL, {
@@ -71,6 +71,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
       messages,
       stream: true,
       clientApiKey: apiKey || undefined,
+      nativeWebSearch: nativeWebSearch || undefined,
     }),
     signal,
   });
@@ -159,7 +160,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
  * Used for convergence checks and other quick evaluations.
  * Returns { content, usage, durationMs }.
  */
-export async function chatCompletion({ model, messages, apiKey, signal }) {
+export async function chatCompletion({ model, messages, apiKey, signal, nativeWebSearch = false }) {
   const startTime = performance.now();
 
   const response = await fetch(API_PROXY_URL, {
@@ -172,6 +173,7 @@ export async function chatCompletion({ model, messages, apiKey, signal }) {
       messages,
       stream: false,
       clientApiKey: apiKey || undefined,
+      nativeWebSearch: nativeWebSearch || undefined,
     }),
     signal,
   });

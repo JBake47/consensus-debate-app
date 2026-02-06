@@ -10,6 +10,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ALLOW_REMOTE_API = process.env.ALLOW_REMOTE_API === 'true';
 const SERVER_AUTH_TOKEN = process.env.SERVER_AUTH_TOKEN || '';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+const OPENROUTER_WEB_PLUGIN_ID = process.env.OPENROUTER_WEB_PLUGIN_ID || 'web';
+const ANTHROPIC_WEB_SEARCH_TOOL_TYPE = process.env.ANTHROPIC_WEB_SEARCH_TOOL_TYPE || 'web_search_20250305';
+const ANTHROPIC_WEB_SEARCH_BETA = process.env.ANTHROPIC_WEB_SEARCH_BETA || 'web-search-2025-03-05';
+const OPENAI_WEB_SEARCH_MODE = process.env.OPENAI_WEB_SEARCH_MODE || 'web_search_options';
 
 if (TRUST_PROXY) {
   app.set('trust proxy', true);
@@ -211,10 +215,20 @@ function extractReasoningText(details) {
     .join('\n');
 }
 
-async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey }) {
+async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false }) {
   const apiKey = clientApiKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('Missing OpenRouter API key');
+  }
+
+  const body = {
+    model,
+    messages,
+    stream,
+    include_reasoning: true,
+  };
+  if (nativeWebSearch) {
+    body.plugins = [{ id: OPENROUTER_WEB_PLUGIN_ID }];
   }
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -225,12 +239,7 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
       'HTTP-Referer': process.env.OPENROUTER_REFERER || 'http://localhost',
       'X-Title': process.env.OPENROUTER_TITLE || 'Consensus',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream,
-      include_reasoning: true,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -277,7 +286,7 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
   return null;
 }
 
-async function handleAnthropic({ model, messages, stream, res, signal }) {
+async function handleAnthropic({ model, messages, stream, res, signal, nativeWebSearch = false }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error('Missing Anthropic API key');
@@ -291,14 +300,23 @@ async function handleAnthropic({ model, messages, stream, res, signal }) {
     stream,
   };
   if (system) body.system = system;
+  if (nativeWebSearch) {
+    body.tools = [{ type: ANTHROPIC_WEB_SEARCH_TOOL_TYPE, name: 'web_search' }];
+    body.tool_choice = { type: 'auto' };
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': process.env.ANTHROPIC_VERSION || '2023-06-01',
+  };
+  if (nativeWebSearch) {
+    headers['anthropic-beta'] = ANTHROPIC_WEB_SEARCH_BETA;
+  }
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': process.env.ANTHROPIC_VERSION || '2023-06-01',
-    },
+    headers,
     body: JSON.stringify(body),
     signal,
   });
@@ -388,10 +406,25 @@ async function handleAnthropic({ model, messages, stream, res, signal }) {
   return null;
 }
 
-async function handleOpenAI({ model, messages, stream, res, signal }) {
+async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSearch = false }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error('Missing OpenAI API key');
+  }
+
+  const body = {
+    model,
+    messages,
+    stream,
+    stream_options: stream ? { include_usage: true } : undefined,
+  };
+  if (nativeWebSearch) {
+    if (OPENAI_WEB_SEARCH_MODE === 'tools') {
+      body.tools = [{ type: 'web_search' }];
+      body.tool_choice = 'auto';
+    } else {
+      body.web_search_options = {};
+    }
   }
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -400,12 +433,7 @@ async function handleOpenAI({ model, messages, stream, res, signal }) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream,
-      stream_options: stream ? { include_usage: true } : undefined,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -452,7 +480,7 @@ async function handleOpenAI({ model, messages, stream, res, signal }) {
   return null;
 }
 
-async function handleGemini({ model, messages, stream, res, signal }) {
+async function handleGemini({ model, messages, stream, res, signal, nativeWebSearch = false }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('Missing Gemini API key');
@@ -465,6 +493,9 @@ async function handleGemini({ model, messages, stream, res, signal }) {
   };
   if (system) {
     body.system_instruction = { parts: [{ text: system }] };
+  }
+  if (nativeWebSearch) {
+    body.tools = [{ google_search: {} }];
   }
 
   const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}`;
@@ -513,8 +544,9 @@ async function handleGemini({ model, messages, stream, res, signal }) {
 }
 
 app.post('/api/chat', async (req, res) => {
-  const { model, messages, stream, clientApiKey } = req.body || {};
+  const { model, messages, stream, clientApiKey, nativeWebSearch } = req.body || {};
   const { provider, model: providerModel } = parseModelTarget(model);
+  const useNativeWebSearch = nativeWebSearch === true;
   const abortController = new AbortController();
 
   const abortIfOpen = () => {
@@ -537,13 +569,42 @@ app.post('/api/chat', async (req, res) => {
 
     let result = null;
     if (provider === 'openrouter') {
-      result = await handleOpenRouter({ model: providerModel, messages, stream, res, signal: abortController.signal, clientApiKey });
+      result = await handleOpenRouter({
+        model: providerModel,
+        messages,
+        stream,
+        res,
+        signal: abortController.signal,
+        clientApiKey,
+        nativeWebSearch: useNativeWebSearch,
+      });
     } else if (provider === 'anthropic') {
-      result = await handleAnthropic({ model: providerModel, messages, stream, res, signal: abortController.signal });
+      result = await handleAnthropic({
+        model: providerModel,
+        messages,
+        stream,
+        res,
+        signal: abortController.signal,
+        nativeWebSearch: useNativeWebSearch,
+      });
     } else if (provider === 'openai') {
-      result = await handleOpenAI({ model: providerModel, messages, stream, res, signal: abortController.signal });
+      result = await handleOpenAI({
+        model: providerModel,
+        messages,
+        stream,
+        res,
+        signal: abortController.signal,
+        nativeWebSearch: useNativeWebSearch,
+      });
     } else if (provider === 'gemini') {
-      result = await handleGemini({ model: providerModel, messages, stream, res, signal: abortController.signal });
+      result = await handleGemini({
+        model: providerModel,
+        messages,
+        stream,
+        res,
+        signal: abortController.signal,
+        nativeWebSearch: useNativeWebSearch,
+      });
     } else {
       throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -559,6 +620,7 @@ app.post('/api/chat', async (req, res) => {
       provider,
       model: providerModel,
       stream: Boolean(stream),
+      nativeWebSearch: useNativeWebSearch,
       message: err?.message || String(err),
     });
     if (stream) {

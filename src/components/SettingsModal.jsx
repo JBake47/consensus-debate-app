@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import {
@@ -14,7 +14,7 @@ import './SettingsModal.css';
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
-    convergenceModel, maxDebateRounds, webSearchModel,
+    convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch,
     showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
@@ -23,15 +23,18 @@ export default function SettingsModal() {
   const [convModel, setConvModel] = useState(convergenceModel);
   const [maxRounds, setMaxRounds] = useState(maxDebateRounds);
   const [searchModel, setSearchModel] = useState(webSearchModel);
+  const [strictSearch, setStrictSearch] = useState(strictWebSearch);
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
   const [pickerOpen, setPickerOpen] = useState(null);
   const [presetName, setPresetName] = useState('');
+  const [editingPresetId, setEditingPresetId] = useState(null);
   const [expandedPresets, setExpandedPresets] = useState([]);
   const [synthProvider, setSynthProvider] = useState('openrouter');
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
+  const presetNameInputRef = useRef(null);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -77,6 +80,19 @@ export default function SettingsModal() {
     return `${providerId}:${trimmed}`;
   };
 
+  const buildPresetPayload = (nameValue) => {
+    const trimmedName = String(nameValue || '').trim();
+    if (!trimmedName || models.length === 0) return null;
+    return {
+      name: trimmedName,
+      models,
+      synthesizerModel: normalizeModelForProvider(synthProvider, synth) || synth,
+      convergenceModel: normalizeModelForProvider(convProvider, convModel) || convModel,
+      maxDebateRounds: maxRounds,
+      webSearchModel: normalizeModelForProvider(searchProvider, searchModel) || searchModel,
+    };
+  };
+
   const handleSave = () => {
     const normalizedSynth = normalizeModelForProvider(synthProvider, synth);
     const normalizedConvergence = normalizeModelForProvider(convProvider, convModel);
@@ -89,6 +105,7 @@ export default function SettingsModal() {
     dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergence || convModel.trim() });
     dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
     dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearch || searchModel.trim() });
+    dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -135,6 +152,15 @@ export default function SettingsModal() {
   }, [modelCatalog, modelCatalogStatus]);
 
   const providerModelOptions = getProviderModelOptions(newModelProvider);
+  const editingPreset = useMemo(
+    () => modelPresets.find(p => p.id === editingPresetId) || null,
+    [modelPresets, editingPresetId]
+  );
+  const canSavePreset = models.length > 0 && (
+    editingPresetId
+      ? Boolean(presetName.trim() || editingPreset?.name)
+      : Boolean(presetName.trim())
+  );
 
   const getDirectProviderFromValue = (value) => {
     if (!value) return 'openrouter';
@@ -152,6 +178,15 @@ export default function SettingsModal() {
       setNewModelProvider(providerOptions[0].id);
     }
   }, [providerOptions, newModelProvider]);
+
+  useEffect(() => {
+    if (!editingPresetId) return;
+    const input = presetNameInputRef.current;
+    if (!input) return;
+    input.focus();
+    const len = input.value.length;
+    input.setSelectionRange(len, len);
+  }, [editingPresetId]);
 
   const coerceDirectModelToOpenRouter = (value) => {
     if (!value || !value.includes(':')) return value;
@@ -196,25 +231,29 @@ export default function SettingsModal() {
   };
 
   const savePreset = () => {
-    const trimmed = presetName.trim();
-    if (!trimmed || models.length === 0) return;
-    dispatch({
-      type: 'ADD_MODEL_PRESET',
-      payload: {
-        name: trimmed,
-        models,
-        synthesizerModel: normalizeModelForProvider(synthProvider, synth) || synth,
-        convergenceModel: normalizeModelForProvider(convProvider, convModel) || convModel,
-        maxDebateRounds: maxRounds,
-        webSearchModel: normalizeModelForProvider(searchProvider, searchModel) || searchModel,
-      },
-    });
+    const nameValue = editingPresetId ? (presetName.trim() || editingPreset?.name || '') : presetName;
+    const payload = buildPresetPayload(nameValue);
+    if (!payload) return;
+
+    if (editingPresetId) {
+      dispatch({
+        type: 'UPDATE_MODEL_PRESET',
+        payload: { id: editingPresetId, ...payload },
+      });
+    } else {
+      dispatch({
+        type: 'ADD_MODEL_PRESET',
+        payload,
+      });
+    }
+
     setPresetName('');
+    setEditingPresetId(null);
   };
 
-  const usePreset = (preset) => {
+  const loadPresetValues = (preset) => {
     if (!preset?.models?.length) return;
-    setModels(preset.models);
+    setModels([...preset.models]);
     if (preset.synthesizerModel) setSynth(preset.synthesizerModel);
     if (preset.convergenceModel) setConvModel(preset.convergenceModel);
     if (preset.maxDebateRounds) setMaxRounds(preset.maxDebateRounds);
@@ -224,8 +263,30 @@ export default function SettingsModal() {
     if (preset.webSearchModel) setSearchProvider(getDirectProviderFromValue(preset.webSearchModel));
   };
 
+  const usePreset = (preset) => {
+    loadPresetValues(preset);
+    setEditingPresetId(null);
+    setPresetName('');
+  };
+
+  const editPreset = (preset) => {
+    loadPresetValues(preset);
+    setPresetName(preset.name || '');
+    setEditingPresetId(preset.id);
+    setExpandedPresets((prev) => (prev.includes(preset.id) ? prev : [...prev, preset.id]));
+  };
+
+  const cancelPresetEdit = () => {
+    setEditingPresetId(null);
+    setPresetName('');
+  };
+
   const deletePreset = (presetId) => {
     dispatch({ type: 'DELETE_MODEL_PRESET', payload: presetId });
+    if (editingPresetId === presetId) {
+      setEditingPresetId(null);
+      setPresetName('');
+    }
   };
 
   const togglePreset = (presetId) => {
@@ -242,6 +303,7 @@ export default function SettingsModal() {
     setConvModel(DEFAULT_CONVERGENCE_MODEL);
     setMaxRounds(DEFAULT_MAX_DEBATE_ROUNDS);
     setSearchModel(DEFAULT_WEB_SEARCH_MODEL);
+    setStrictSearch(false);
   };
 
   useEffect(() => {
@@ -252,12 +314,14 @@ export default function SettingsModal() {
     setConvModel(convergenceModel);
     setMaxRounds(maxDebateRounds);
     setSearchModel(webSearchModel);
+    setStrictSearch(strictWebSearch);
     setRememberKey(rememberApiKey);
     setPresetName('');
+    setEditingPresetId(null);
     setSynthProvider(getDirectProviderFromValue(synthesizerModel));
     setConvProvider(getDirectProviderFromValue(convergenceModel));
     setSearchProvider(getDirectProviderFromValue(webSearchModel));
-  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, rememberApiKey]);
+  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch, rememberApiKey]);
 
   if (!showSettings) return null;
 
@@ -307,6 +371,7 @@ export default function SettingsModal() {
             </label>
             <div className="preset-row">
               <input
+                ref={presetNameInputRef}
                 type="text"
                 className="settings-input"
                 placeholder="Preset name (e.g. fast, deep-reasoning)"
@@ -317,57 +382,111 @@ export default function SettingsModal() {
               <button
                 className="model-add-btn"
                 onClick={savePreset}
-                disabled={!presetName.trim() || models.length === 0}
+                disabled={!canSavePreset}
               >
                 <Plus size={14} />
-                Save Preset
+                {editingPresetId ? 'Save Preset Edit' : 'Save New Preset'}
               </button>
+              {editingPresetId && (
+                <button
+                  className="settings-btn-secondary"
+                  onClick={cancelPresetEdit}
+                >
+                  Cancel Edit
+                </button>
+              )}
             </div>
+            {editingPreset ? (
+              <div className="preset-edit-banner">
+                <div className="preset-edit-title">
+                  Editing preset: <strong>{editingPreset.name}</strong>
+                </div>
+                <div className="preset-edit-text">
+                  Click <strong>Save Preset Edit</strong> to save this preset only. Use <strong>Save Settings</strong> separately to apply app settings.
+                </div>
+                <div className="preset-edit-actions">
+                  <button
+                    className="model-add-btn"
+                    onClick={savePreset}
+                    disabled={!canSavePreset}
+                  >
+                    Save This Preset
+                  </button>
+                  <button
+                    className="settings-btn-secondary"
+                    onClick={cancelPresetEdit}
+                  >
+                    Cancel Edit
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="settings-hint">
+                Click <strong>Edit</strong> on a preset to load it into the form before updating.
+              </p>
+            )}
             {modelPresets && modelPresets.length > 0 ? (
               <div className="preset-list">
                 {modelPresets.map((preset) => (
-                  <div key={preset.id} className="preset-item">
-                    <div className="preset-info">
-                      <span className="preset-name">{preset.name}</span>
-                      <span className="preset-count">{preset.models.length} models</span>
-                    </div>
-                    <div className="preset-actions">
-                      <button className="model-add-btn" onClick={() => usePreset(preset)}>
-                        Use
-                      </button>
-                      <button
-                        className="settings-btn-secondary preset-details-btn"
-                        onClick={() => togglePreset(preset.id)}
-                      >
-                        {expandedPresets.includes(preset.id) ? 'Hide' : 'Details'}
-                      </button>
-                      <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
-                        <Trash2 size={14} />
-                      </button>
+                  <div
+                    key={preset.id}
+                    className={`preset-item ${editingPresetId === preset.id ? 'is-editing' : ''}`}
+                  >
+                    <div className="preset-summary">
+                      <div className="preset-info">
+                        <span className="preset-name">{preset.name}</span>
+                        <span className="preset-count">{preset.models.length} models</span>
+                      </div>
+                      <div className="preset-actions">
+                        <button className="model-add-btn" onClick={() => usePreset(preset)}>
+                          Load
+                        </button>
+                        <button
+                          className={`settings-btn-secondary ${editingPresetId === preset.id ? 'preset-editing-btn' : ''}`}
+                          onClick={() => editPreset(preset)}
+                        >
+                          {editingPresetId === preset.id ? 'Editing Now' : 'Edit'}
+                        </button>
+                        <button
+                          className="settings-btn-secondary preset-details-btn"
+                          onClick={() => togglePreset(preset.id)}
+                        >
+                          {expandedPresets.includes(preset.id) ? 'Hide' : 'Details'}
+                        </button>
+                        <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </div>
                     {expandedPresets.includes(preset.id) && (
                       <div className="preset-details">
                         <div className="preset-detail-row">
                           <span className="preset-detail-label">Models</span>
-                          <span className="preset-detail-value">
-                            {preset.models.join(', ')}
-                          </span>
+                          <div className="preset-model-list">
+                            {preset.models.map((modelId, index) => (
+                              <code key={`${preset.id}-${modelId}-${index}`} className="preset-model-chip">
+                                {modelId}
+                              </code>
+                            ))}
+                          </div>
                         </div>
-                        <div className="preset-detail-row">
-                          <span className="preset-detail-label">Synthesizer</span>
-                          <span className="preset-detail-value">{preset.synthesizerModel || '—'}</span>
-                        </div>
-                        <div className="preset-detail-row">
-                          <span className="preset-detail-label">Convergence</span>
-                          <span className="preset-detail-value">{preset.convergenceModel || '—'}</span>
-                        </div>
-                        <div className="preset-detail-row">
-                          <span className="preset-detail-label">Web search</span>
-                          <span className="preset-detail-value">{preset.webSearchModel || '—'}</span>
-                        </div>
-                        <div className="preset-detail-row">
-                          <span className="preset-detail-label">Max rounds</span>
-                          <span className="preset-detail-value">{preset.maxDebateRounds || '—'}</span>
+                        <div className="preset-detail-grid">
+                          <div className="preset-detail-row">
+                            <span className="preset-detail-label">Synthesizer</span>
+                            <span className="preset-detail-value preset-detail-value-mono">{preset.synthesizerModel || '-'}</span>
+                          </div>
+                          <div className="preset-detail-row">
+                            <span className="preset-detail-label">Convergence</span>
+                            <span className="preset-detail-value preset-detail-value-mono">{preset.convergenceModel || '-'}</span>
+                          </div>
+                          <div className="preset-detail-row">
+                            <span className="preset-detail-label">Web Search</span>
+                            <span className="preset-detail-value preset-detail-value-mono">{preset.webSearchModel || '-'}</span>
+                          </div>
+                          <div className="preset-detail-row">
+                            <span className="preset-detail-label">Max Rounds</span>
+                            <span className="preset-detail-value">{preset.maxDebateRounds || '-'}</span>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -429,7 +548,7 @@ export default function SettingsModal() {
               {providerOptions.length > 0 && (
                 <button
                   className="model-browse-btn"
-                onClick={() => setPickerOpen('debate')}
+                  onClick={() => setPickerOpen('debate')}
                 >
                   Browse
                 </button>
@@ -585,6 +704,17 @@ export default function SettingsModal() {
             <p className="settings-hint">
               A model with web search capabilities (e.g. Perplexity Sonar via OpenRouter). Used when the Search toggle is active.
             </p>
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={strictSearch}
+                onChange={e => setStrictSearch(e.target.checked)}
+              />
+              <span>Strict search verification (block unverified answers)</span>
+            </label>
+            <p className="settings-hint">
+              Requires source URLs and date evidence on Search-enabled first-round responses. If missing, the app auto-retries with legacy search context.
+            </p>
           </div>
 
           <div className="settings-divider" />
@@ -658,3 +788,4 @@ export default function SettingsModal() {
     </div>
   );
 }
+

@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.9] - 2026-02-06
+
+### Added
+- Provider-native web search wiring for OpenRouter, Anthropic, OpenAI, and Gemini routes via a shared `nativeWebSearch` request flag
+- Search evidence telemetry on model responses, including source count, verification state, and fallback reason in card and thread views
+- Strict web search verification setting in Settings to block unverified search-enabled first-round outputs
+
+### Changed
+- Search-enabled prompts now explicitly require source URLs and publication date/timestamp evidence
+- First-round web search flow now auto-falls back to legacy web-search context when native tool calls fail or when evidence is missing/stale
+- Preset editing UX now distinguishes preset-save vs settings-save more clearly, with improved details layout
+
+### Fixed
+- Search-enabled retries now preserve verification metadata and strict-mode enforcement paths
+- Preset details formatting and placeholder rendering for missing values
+
 ## [0.3.8] - 2026-02-05
 
 ### Added
