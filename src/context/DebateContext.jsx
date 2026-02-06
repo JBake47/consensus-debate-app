@@ -1208,16 +1208,19 @@ export function DebateProvider({ children }) {
           : null,
       });
 
-      const fallbackForNativeErrors = shouldFallbackToLegacyWebSearch(results);
-      const fallbackForMissingEvidence = shouldFallbackForMissingSearchEvidence(results);
-
-      if (
+      const shouldConsiderSearchFallback =
         roundNum === 1 &&
         nativeWebSearchEnabled &&
         !webSearchContext &&
-        canUseLegacySearchFallback &&
-        (fallbackForNativeErrors || fallbackForMissingEvidence)
-      ) {
+        canUseLegacySearchFallback;
+      const fallbackForNativeErrors = shouldConsiderSearchFallback
+        ? shouldFallbackToLegacyWebSearch(results)
+        : false;
+      const fallbackForMissingEvidence = shouldConsiderSearchFallback
+        ? shouldFallbackForMissingSearchEvidence(results)
+        : false;
+
+      if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
         const fallbackReason = fallbackForNativeErrors
           ? 'Native web-search/tool call failed.'
           : 'Native response lacked verifiable source evidence.';
@@ -1754,15 +1757,18 @@ export function DebateProvider({ children }) {
         : null,
     });
 
-    const fallbackForNativeErrors = shouldFallbackToLegacyWebSearch(results);
-    const fallbackForMissingEvidence = shouldFallbackForMissingSearchEvidence(results);
-
-    if (
+    const shouldConsiderSearchFallback =
       nativeWebSearchEnabled &&
       !webSearchContext &&
-      canUseLegacySearchFallback &&
-      (fallbackForNativeErrors || fallbackForMissingEvidence)
-    ) {
+      canUseLegacySearchFallback;
+    const fallbackForNativeErrors = shouldConsiderSearchFallback
+      ? shouldFallbackToLegacyWebSearch(results)
+      : false;
+    const fallbackForMissingEvidence = shouldConsiderSearchFallback
+      ? shouldFallbackForMissingSearchEvidence(results)
+      : false;
+
+    if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
       const fallbackReason = fallbackForNativeErrors
         ? 'Native web-search/tool call failed.'
         : 'Native response lacked verifiable source evidence.';
@@ -1970,15 +1976,18 @@ export function DebateProvider({ children }) {
         : null,
     });
 
-    const fallbackForNativeErrors = shouldFallbackToLegacyWebSearch(results);
-    const fallbackForMissingEvidence = shouldFallbackForMissingSearchEvidence(results);
-
-    if (
+    const shouldConsiderSearchFallback =
       nativeWebSearchEnabled &&
       !webSearchContext &&
-      canUseLegacySearchFallback &&
-      (fallbackForNativeErrors || fallbackForMissingEvidence)
-    ) {
+      canUseLegacySearchFallback;
+    const fallbackForNativeErrors = shouldConsiderSearchFallback
+      ? shouldFallbackToLegacyWebSearch(results)
+      : false;
+    const fallbackForMissingEvidence = shouldConsiderSearchFallback
+      ? shouldFallbackForMissingSearchEvidence(results)
+      : false;
+
+    if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
       const fallbackReason = fallbackForNativeErrors
         ? 'Native web-search/tool call failed.'
         : 'Native response lacked verifiable source evidence.';
@@ -2349,15 +2358,18 @@ export function DebateProvider({ children }) {
           : null,
       });
 
-      const fallbackForNativeErrors = shouldFallbackToLegacyWebSearch(results);
-      const fallbackForMissingEvidence = shouldFallbackForMissingSearchEvidence(results);
-
-      if (
+      const shouldConsiderSearchFallback =
         roundIndex === 0 &&
         useNativeWebSearch &&
-        fallbackSearchModel &&
-        (fallbackForNativeErrors || fallbackForMissingEvidence)
-      ) {
+        Boolean(fallbackSearchModel);
+      const fallbackForNativeErrors = shouldConsiderSearchFallback
+        ? shouldFallbackToLegacyWebSearch(results)
+        : false;
+      const fallbackForMissingEvidence = shouldConsiderSearchFallback
+        ? shouldFallbackForMissingSearchEvidence(results)
+        : false;
+
+      if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
         const fallbackReason = fallbackForNativeErrors
           ? 'Native web-search/tool call failed.'
           : 'Native response lacked verifiable source evidence.';
@@ -2918,6 +2930,27 @@ export function DebateProvider({ children }) {
       .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
     if (retryResult.succeeded) {
       lastCompletedStreams.push({ model: targetModel, content: retryResult.content, status: 'complete' });
+    }
+
+    // Parallel mode keeps a single response round with no synthesis/debate continuation.
+    if (lastTurn.mode === 'parallel') {
+      dispatch({
+        type: 'UPDATE_ROUND_STATUS',
+        payload: {
+          conversationId: convId,
+          roundIndex,
+          status: lastCompletedStreams.length > 0 ? 'complete' : 'error',
+        },
+      });
+      dispatch({
+        type: 'SET_DEBATE_METADATA',
+        payload: {
+          conversationId: convId,
+          metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
+        },
+      });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
     }
 
     if (lastCompletedStreams.length === 0) {

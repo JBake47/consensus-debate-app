@@ -189,7 +189,6 @@ export default function DebateView({ turn, isLastTurn }) {
             isLatest
             roundIndex={0}
             isLastTurn={isLastTurn}
-            allowRetry={!isParallelMode}
           />
 
           {turn.synthesis && turn.synthesis.status !== 'pending' && (
@@ -266,7 +265,9 @@ export default function DebateView({ turn, isLastTurn }) {
                   isLatest={i === turn.rounds.length - 1}
                   roundIndex={i}
                   isLastTurn={isLastTurn}
-                  allowRetry={!isParallelMode}
+                  allowRetry
+                  allowRoundRetry={!isParallelMode}
+                  allowStreamRetry
                 />
               ))}
             </div>

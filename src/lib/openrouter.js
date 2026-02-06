@@ -2,6 +2,14 @@ const API_PROXY_URL = '/api/chat';
 const MODELS_PROXY_URL = '/api/models';
 const MODELS_SEARCH_URL = '/api/models/search';
 const PROVIDERS_PROXY_URL = '/api/providers';
+const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90000;
+const MIN_STREAM_STALL_TIMEOUT_MS = 15000;
+
+function getStreamStallTimeoutMs() {
+  const configured = Number(import.meta.env.VITE_STREAM_STALL_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return DEFAULT_STREAM_STALL_TIMEOUT_MS;
+  return Math.max(MIN_STREAM_STALL_TIMEOUT_MS, Math.floor(configured));
+}
 
 export class OpenRouterError extends Error {
   constructor(message, status, code) {
@@ -60,99 +68,173 @@ function updateReasoningAccumulated(accumulated, incoming) {
  */
 export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false }) {
   const startTime = performance.now();
+  const stallTimeoutMs = getStreamStallTimeoutMs();
+  const requestAbortController = new AbortController();
+  const forwardAbort = () => requestAbortController.abort();
+  if (signal?.aborted) {
+    requestAbortController.abort();
+  } else if (signal) {
+    signal.addEventListener('abort', forwardAbort, { once: true });
+  }
 
-  const response = await fetch(API_PROXY_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      clientApiKey: apiKey || undefined,
-      nativeWebSearch: nativeWebSearch || undefined,
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    let errorMessage = `API error: ${response.status}`;
-    let errorCode = null;
+  try {
+    let responseTimeoutId = null;
+    let response;
     try {
-      const errorBody = await response.json();
-      errorMessage = errorBody.error?.message || errorBody.error || errorMessage;
-      errorCode = errorBody.error?.code || null;
-    } catch {
-      // ignore parse failures
+      response = await Promise.race([
+        fetch(API_PROXY_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            stream: true,
+            clientApiKey: apiKey || undefined,
+            nativeWebSearch: nativeWebSearch || undefined,
+          }),
+          signal: requestAbortController.signal,
+        }),
+        new Promise((_, reject) => {
+          responseTimeoutId = setTimeout(() => {
+            requestAbortController.abort();
+            reject(
+              new OpenRouterError(
+                `Stream stalled for ${Math.round(stallTimeoutMs / 1000)}s without receiving data. Request cancelled. You can retry this response.`,
+                504,
+                'stream_stalled'
+              )
+            );
+          }, stallTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (responseTimeoutId != null) clearTimeout(responseTimeoutId);
     }
 
-    if (response.status === 401) {
-      throw new OpenRouterError('Unauthorized. Check server API key configuration.', 401, 'invalid_key');
-    }
-    if (response.status === 429) {
-      throw new OpenRouterError('Rate limited. Please wait a moment and try again.', 429, 'rate_limit');
-    }
-    if (response.status === 402) {
-      throw new OpenRouterError('Insufficient credits. Please add credits to your provider account.', 402, 'insufficient_credits');
-    }
-    throw new OpenRouterError(errorMessage, response.status, errorCode);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let accumulated = '';
-  let accumulatedReasoning = '';
-  let buffer = '';
-  let usage = null;
-  let streamError = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-      const data = trimmed.slice(6);
-      if (data === '[DONE]') continue;
-
+    if (!response.ok) {
+      let errorMessage = `API error: ${response.status}`;
+      let errorCode = null;
       try {
-        const parsed = JSON.parse(data);
-        if (parsed.type === 'content' && parsed.delta) {
-          accumulated += parsed.delta;
-          onChunk?.(parsed.delta, accumulated);
-        }
-        if (parsed.type === 'reasoning' && parsed.delta) {
-          accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, parsed.delta);
-          onReasoning?.(accumulatedReasoning);
-        }
-        if (parsed.type === 'done') {
-          usage = extractUsage(parsed.usage || {});
-        }
-        if (parsed.type === 'error') {
-          streamError = parsed.message || 'Stream error';
-          await reader.cancel();
-          break;
-        }
+        const errorBody = await response.json();
+        errorMessage = errorBody.error?.message || errorBody.error || errorMessage;
+        errorCode = errorBody.error?.code || null;
       } catch {
-        // skip malformed JSON chunks
+        // ignore parse failures
       }
+
+      if (response.status === 401) {
+        throw new OpenRouterError('Unauthorized. Check server API key configuration.', 401, 'invalid_key');
+      }
+      if (response.status === 429) {
+        throw new OpenRouterError('Rate limited. Please wait a moment and try again.', 429, 'rate_limit');
+      }
+      if (response.status === 402) {
+        throw new OpenRouterError('Insufficient credits. Please add credits to your provider account.', 402, 'insufficient_credits');
+      }
+      throw new OpenRouterError(errorMessage, response.status, errorCode);
     }
-    if (streamError) break;
-  }
 
-  if (streamError) {
-    throw new OpenRouterError(streamError, 500, 'stream_error');
-  }
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      throw new OpenRouterError('Streaming response body was unavailable.', 500, 'stream_unavailable');
+    }
+    const decoder = new TextDecoder();
+    let accumulated = '';
+    let accumulatedReasoning = '';
+    let buffer = '';
+    let usage = null;
+    let streamError = null;
 
-  const durationMs = Math.round(performance.now() - startTime);
-  return { content: accumulated, reasoning: accumulatedReasoning || null, usage, durationMs };
+    const readWithTimeout = async () => {
+      let timeoutId = null;
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              reject(
+                new OpenRouterError(
+                  `Stream stalled for ${Math.round(stallTimeoutMs / 1000)}s without receiving data. Request cancelled. You can retry this response.`,
+                  504,
+                  'stream_stalled'
+                )
+              );
+            }, stallTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId != null) clearTimeout(timeoutId);
+      }
+    };
+
+    while (true) {
+      let chunk;
+      try {
+        chunk = await readWithTimeout();
+      } catch (err) {
+        if (err?.code === 'stream_stalled') {
+          requestAbortController.abort();
+          try {
+            await reader.cancel();
+          } catch {
+            // ignore cancellation cleanup failures
+          }
+        }
+        throw err;
+      }
+
+      const { done, value } = chunk;
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        const data = trimmed.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'content' && parsed.delta) {
+            accumulated += parsed.delta;
+            onChunk?.(parsed.delta, accumulated);
+          }
+          if (parsed.type === 'reasoning' && parsed.delta) {
+            accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, parsed.delta);
+            onReasoning?.(accumulatedReasoning);
+          }
+          if (parsed.type === 'done') {
+            usage = extractUsage(parsed.usage || {});
+          }
+          if (parsed.type === 'error') {
+            streamError = parsed.message || 'Stream error';
+            await reader.cancel();
+            break;
+          }
+        } catch {
+          // skip malformed JSON chunks
+        }
+      }
+      if (streamError) break;
+    }
+
+    if (streamError) {
+      throw new OpenRouterError(streamError, 500, 'stream_error');
+    }
+
+    const durationMs = Math.round(performance.now() - startTime);
+    return { content: accumulated, reasoning: accumulatedReasoning || null, usage, durationMs };
+  } finally {
+    if (signal) {
+      signal.removeEventListener('abort', forwardAbort);
+    }
+  }
 }
 
 /**

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.10] - 2026-02-06
+
+### Added
+- Stream stall watchdog for chat streaming requests; stalled runs now auto-cancel with a retryable error
+- Optional `VITE_STREAM_STALL_TIMEOUT_MS` setting to tune stream stall timeout behavior
+
+### Changed
+- Parallel mode now allows per-model retry while keeping round-level retry disabled
+
+### Fixed
+- Search fallback detection is now fully gated to search-enabled runs so normal non-search runs do not enter search fallback logic
+- Parallel single-model retries no longer trigger debate/synthesis continuation paths
+
 ## [0.3.9] - 2026-02-06
 
 ### Added

@@ -7,7 +7,15 @@ import ConvergencePanel from './ConvergencePanel';
 import { formatCost } from '../lib/formatTokens';
 import './RoundSection.css';
 
-export default function RoundSection({ round, isLatest, roundIndex, isLastTurn, allowRetry = true }) {
+export default function RoundSection({
+  round,
+  isLatest,
+  roundIndex,
+  isLastTurn,
+  allowRetry = true,
+  allowRoundRetry = allowRetry,
+  allowStreamRetry = allowRetry,
+}) {
   const { retryRound, debateInProgress } = useDebate();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
@@ -18,7 +26,7 @@ export default function RoundSection({ round, isLatest, roundIndex, isLastTurn, 
   }
 
   const hasFailedStreams = streams.some(s => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming'));
-  const canRetry = allowRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
+  const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
 
   const statusIcon = {
     pending: null,
@@ -63,7 +71,7 @@ export default function RoundSection({ round, isLatest, roundIndex, isLastTurn, 
                 roundIndex={roundIndex}
                 streamIndex={i}
                 isLastTurn={isLastTurn}
-                allowRetry={allowRetry}
+                allowRetry={allowStreamRetry}
               />
             ))}
           </div>
