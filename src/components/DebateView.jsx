@@ -272,7 +272,7 @@ export default function DebateView({ turn, isLastTurn }) {
               ))}
             </div>
           ) : (
-            <DebateThread rounds={turn.rounds} />
+            <DebateThread rounds={turn.rounds} isLastTurn={isLastTurn} allowRetry />
           )}
         </>
       )}

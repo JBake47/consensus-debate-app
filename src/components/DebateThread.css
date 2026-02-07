@@ -108,8 +108,32 @@
   opacity: 0;
 }
 
-.thread-message:hover .thread-message-header .copy-btn {
+.thread-message-header .thread-message-retry {
+  opacity: 0;
+}
+
+.thread-message:hover .thread-message-header .copy-btn,
+.thread-message:hover .thread-message-header .thread-message-retry {
   opacity: 1;
+}
+
+.thread-message-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.thread-message-retry:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .thread-message-stats {

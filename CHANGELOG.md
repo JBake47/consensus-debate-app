@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.11] - 2026-02-07
+
+### Added
+- Per-model retry controls in thread view so individual responses can be retried outside card view
+
+### Changed
+- Individual model retry is now available for all non-streaming terminal states
+
+### Fixed
+- Cancel now marks in-flight stream entries as `Cancelled`, making them immediately retryable
+- Individual model retry flow is now consistent across Ensemble, Debate, and Parallel modes
+
 ## [0.3.10] - 2026-02-06
 
 ### Added

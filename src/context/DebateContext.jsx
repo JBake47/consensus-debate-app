@@ -2106,7 +2106,11 @@ export function DebateProvider({ children }) {
       const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
       if (lastTurn.rounds?.length) {
         const lastRoundIndex = lastTurn.rounds.length - 1;
-        if (lastTurn.rounds[lastRoundIndex].status === 'streaming') {
+        const lastRound = lastTurn.rounds[lastRoundIndex];
+        const hasInFlightStreams = (lastRound.streams || []).some(
+          (stream) => stream.status === 'streaming' || stream.status === 'pending'
+        );
+        if (lastRound.status === 'streaming' || hasInFlightStreams) {
           dispatch({
             type: 'UPDATE_ROUND_STATUS',
             payload: {
@@ -2116,6 +2120,22 @@ export function DebateProvider({ children }) {
             },
           });
         }
+
+        (lastRound.streams || []).forEach((stream, streamIndex) => {
+          if (stream.status !== 'streaming' && stream.status !== 'pending') return;
+          dispatch({
+            type: 'UPDATE_ROUND_STREAM',
+            payload: {
+              conversationId: activeConversation.id,
+              roundIndex: lastRoundIndex,
+              streamIndex,
+              content: stream.content || '',
+              status: 'error',
+              error: 'Cancelled',
+              reasoning: stream.reasoning,
+            },
+          });
+        });
       }
       if (lastTurn.synthesis?.status === 'streaming') {
         dispatch({

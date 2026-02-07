@@ -21,7 +21,7 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
   const [sideBySide, setSideBySide] = useState(reasoningModel);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
-  const canRetry = allowRetry && isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
+  const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);

@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain, Globe } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain, Globe, RotateCcw } from 'lucide-react';
+import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
 import './DebateThread.css';
 
-function ThreadMessage({ stream, roundNumber, roundLabel }) {
+function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry }) {
+  const { retryStream, debateInProgress } = useDebate();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const contentRef = useRef(null);
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence } = stream;
+  const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);
@@ -51,11 +54,20 @@ function ThreadMessage({ stream, roundNumber, roundLabel }) {
           {status === 'complete' && content && (
             <CopyButton text={content} />
           )}
+          {canRetry && (
+            <button
+              className="thread-message-retry"
+              onClick={() => retryStream(roundIndex, streamIndex)}
+              title="Retry this model"
+            >
+              <RotateCcw size={12} />
+            </button>
+          )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="thread-message-stats">
-              {usage?.cost != null && <><span className="thread-message-cost">{formatCost(usage.cost)}</span> · </>}
+              {usage?.cost != null && <><span className="thread-message-cost">{formatCost(usage.cost)}</span> | </>}
               {usage?.totalTokens != null && <>{formatTokenCount(usage.totalTokens)} tok</>}
-              {durationMs != null && <> · {formatDuration(durationMs)}</>}
+              {durationMs != null && <> | {formatDuration(durationMs)}</>}
             </span>
           )}
           {searchEvidence && (
@@ -135,23 +147,26 @@ function ConvergenceMessage({ convergenceCheck }) {
   );
 }
 
-export default function DebateThread({ rounds }) {
+export default function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
   if (!rounds || rounds.length === 0) return null;
 
   return (
     <div className="debate-thread">
-      {rounds.map((round, ri) => (
-        <div key={ri} className="thread-round">
+      {rounds.map((round, roundIndex) => (
+        <div key={roundIndex} className="thread-round">
           <div className="thread-round-divider">
             <span className="thread-round-label">{round.label}</span>
           </div>
           <div className="thread-messages">
-            {round.streams.map((stream, si) => (
+            {round.streams.map((stream, streamIndex) => (
               <ThreadMessage
-                key={`${stream.model}-${si}`}
+                key={`${stream.model}-${streamIndex}`}
                 stream={stream}
                 roundNumber={round.roundNumber}
-                roundLabel={round.label}
+                roundIndex={roundIndex}
+                streamIndex={streamIndex}
+                isLastTurn={isLastTurn}
+                allowRetry={allowRetry}
               />
             ))}
           </div>
