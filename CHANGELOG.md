@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.14] - 2026-02-09
+
+### Changed
+- User message actions now render before the `You` label and timestamp in the right-aligned user header
+- User avatar now renders on the far right edge of each user message row
+
 ## [0.3.13] - 2026-02-09
 
 ### Added
@@ -288,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.13...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.14...HEAD
+[0.3.14]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.10...v0.3.11

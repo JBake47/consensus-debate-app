@@ -110,15 +110,8 @@ export default function DebateView({ turn, isLastTurn }) {
   return (
     <div className="debate-turn">
       <div className="user-message">
-        <div className="user-avatar">
-          <User size={14} />
-        </div>
         <div className="user-message-body">
           <div className="user-message-header">
-            <span className="user-label">You</span>
-            {turn.timestamp && (
-              <span className="user-timestamp">{formatFullTimestamp(turn.timestamp)}</span>
-            )}
             <div className="user-message-actions">
               <CopyButton text={turn.userPrompt} />
               {isLastTurn && !debateInProgress && (
@@ -142,6 +135,10 @@ export default function DebateView({ turn, isLastTurn }) {
                 </>
               )}
             </div>
+            <span className="user-label">You</span>
+            {turn.timestamp && (
+              <span className="user-timestamp">{formatFullTimestamp(turn.timestamp)}</span>
+            )}
           </div>
           <div className="user-text markdown-content">
             <MarkdownRenderer>{turn.userPrompt}</MarkdownRenderer>
@@ -162,6 +159,9 @@ export default function DebateView({ turn, isLastTurn }) {
               ))}
             </div>
           )}
+        </div>
+        <div className="user-avatar">
+          <User size={14} />
         </div>
       </div>
 
