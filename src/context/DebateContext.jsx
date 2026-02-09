@@ -840,6 +840,88 @@ export function DebateProvider({ children }) {
     return errors.some(isNativeSearchRelatedError);
   };
 
+  const MAX_LATER_ROUND_SEARCH_REFRESHES = 1;
+  const FACTUAL_DISAGREEMENT_HINT_REGEX = /\b(\d{4}|\d+(?:\.\d+)?%|\$|usd|eur|gbp|million|billion|trillion|percent|date|year|month|day|published|updated|timestamp|population|revenue|gdp|inflation|rate|price|cases|deaths|law|statute|court|study|trial|report|source|citation)\b/i;
+
+  const isEvidenceQualityLow = (results) => {
+    if (!Array.isArray(results) || results.length === 0) return false;
+    const completed = results.filter((result) => result && !result.error && result.content);
+    if (completed.length === 0) return false;
+
+    const evidenceResults = completed.filter((result) => result.searchEvidence);
+    if (evidenceResults.length === 0) return false;
+
+    const lowEvidenceCount = evidenceResults.filter((result) => !result.searchEvidence?.verified).length;
+    return lowEvidenceCount >= Math.ceil(evidenceResults.length / 2);
+  };
+
+  const hasFactualDisagreement = (convergenceCheck) => {
+    if (!convergenceCheck || convergenceCheck.converged) return false;
+
+    const disagreements = Array.isArray(convergenceCheck.disagreements)
+      ? convergenceCheck.disagreements
+      : [];
+
+    const parts = [];
+    if (
+      typeof convergenceCheck.reason === 'string' &&
+      !convergenceCheck.reason.toLowerCase().startsWith('convergence check failed')
+    ) {
+      parts.push(convergenceCheck.reason);
+    }
+    for (const disagreement of disagreements) {
+      if (!disagreement || typeof disagreement !== 'object') continue;
+      if (typeof disagreement.point === 'string') parts.push(disagreement.point);
+      const modelPositions = disagreement.models && typeof disagreement.models === 'object'
+        ? Object.values(disagreement.models)
+        : [];
+      for (const position of modelPositions) {
+        if (typeof position === 'string') parts.push(position);
+      }
+    }
+
+    if (parts.length === 0) return false;
+    const combined = parts.join(' ').toLowerCase();
+    return /\b\d+(?:\.\d+)?\b/.test(combined) || FACTUAL_DISAGREEMENT_HINT_REGEX.test(combined);
+  };
+
+  const getLaterRoundSearchRefreshDecision = ({
+    roundNum,
+    maxRounds,
+    webSearchEnabled,
+    canUseLegacySearchFallback,
+    refreshesUsed,
+    results,
+    convergenceCheck,
+  }) => {
+    if (!webSearchEnabled || !canUseLegacySearchFallback) {
+      return { shouldRefresh: false, evidenceQualityLow: false, factualDisagreement: false };
+    }
+    if (roundNum < 2 || roundNum >= maxRounds) {
+      return { shouldRefresh: false, evidenceQualityLow: false, factualDisagreement: false };
+    }
+    if (refreshesUsed >= MAX_LATER_ROUND_SEARCH_REFRESHES) {
+      return { shouldRefresh: false, evidenceQualityLow: false, factualDisagreement: false };
+    }
+
+    const evidenceQualityLow = isEvidenceQualityLow(results);
+    const factualDisagreement = hasFactualDisagreement(convergenceCheck);
+    return {
+      shouldRefresh: evidenceQualityLow || factualDisagreement,
+      evidenceQualityLow,
+      factualDisagreement,
+    };
+  };
+
+  const didUseLaterRoundSearchRefresh = (rounds) => {
+    if (!Array.isArray(rounds) || rounds.length === 0) return false;
+    return rounds.some((round) => (
+      round?.roundNumber > 1 &&
+      Array.isArray(round.streams) &&
+      round.streams.some((stream) => stream?.searchEvidence?.mode === 'refresh_context')
+    ));
+  };
+
   const formatWebSearchPrompt = (prompt, context, model, options = {}) => {
     const { requireEvidence = false, strictMode = false } = options;
     const evidenceInstruction = requireEvidence
@@ -1153,6 +1235,8 @@ export function DebateProvider({ children }) {
     let converged = false;
     let terminationReason = null;
     let totalRounds = 0;
+    let laterRoundSearchRefreshesUsed = 0;
+    let hasLaterRoundSearchRefresh = false;
     const synthesisRounds = [];
 
     // ===== MULTI-ROUND DEBATE LOOP =====
@@ -1185,9 +1269,22 @@ export function DebateProvider({ children }) {
             roundNumber: roundNum,
             conversationHistory,
             focused,
+            webSearchContext,
+            webSearchModel,
           })
         );
       }
+
+      const roundSearchVerification = nativeWebSearchEnabled
+        ? {
+          enabled: true,
+          prompt: userPrompt,
+          strictMode: roundNum === 1 ? strictWebSearch : false,
+          mode: roundNum === 1
+            ? (webSearchContext ? 'legacy_context' : 'native')
+            : (hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchContext ? 'legacy_context' : 'debate_rebuttal')),
+        }
+        : null;
 
       let results = await runRound({
         models,
@@ -1198,14 +1295,7 @@ export function DebateProvider({ children }) {
         apiKey,
         signal: abortController.signal,
         nativeWebSearch: roundNum === 1 && nativeWebSearchEnabled && !webSearchContext,
-        searchVerification: roundNum === 1 && nativeWebSearchEnabled
-          ? {
-            enabled: true,
-            prompt: userPrompt,
-            strictMode: strictWebSearch,
-            mode: webSearchContext ? 'legacy_context' : 'native',
-          }
-          : null,
+        searchVerification: roundSearchVerification,
       });
 
       const shouldConsiderSearchFallback =
@@ -1383,6 +1473,35 @@ export function DebateProvider({ children }) {
               convergenceCheck: roundConvergence,
             },
           });
+        }
+      }
+
+      const refreshDecision = getLaterRoundSearchRefreshDecision({
+        roundNum,
+        maxRounds,
+        webSearchEnabled: nativeWebSearchEnabled,
+        canUseLegacySearchFallback,
+        refreshesUsed: laterRoundSearchRefreshesUsed,
+        results,
+        convergenceCheck: roundConvergence,
+      });
+      if (refreshDecision.shouldRefresh) {
+        laterRoundSearchRefreshesUsed += 1;
+        hasLaterRoundSearchRefresh = true;
+        const refreshedContext = await runLegacyWebSearch({
+          convId,
+          userPrompt,
+          attachments,
+          webSearchModel,
+          apiKey,
+          signal: abortController.signal,
+        });
+        if (abortController.signal.aborted) {
+          terminationReason = 'cancelled';
+          break;
+        }
+        if (refreshedContext) {
+          webSearchContext = refreshedContext;
         }
       }
 
@@ -2328,6 +2447,12 @@ export function DebateProvider({ children }) {
     let webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
     const wsModel = webSearchResult?.model || '';
     const fallbackSearchModel = wsModel || state.webSearchModel;
+    const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
+    const hasExistingLaterRoundRefresh = didUseLaterRoundSearchRefresh(lastTurn.rounds);
+    let laterRoundSearchRefreshesUsed = hasExistingLaterRoundRefresh
+      ? MAX_LATER_ROUND_SEARCH_REFRESHES
+      : 0;
+    let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
     const useNativeWebSearch = Boolean(lastTurn.webSearchEnabled && !webSearchCtx);
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
@@ -2498,12 +2623,37 @@ export function DebateProvider({ children }) {
           const roundLabel = getRoundLabel(roundNum);
           const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
           currentRoundIndex = roundNum - 1;
+          let roundConvergence = null;
           dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
           dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
           const messagesPerModel = models.map(() =>
-            buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
+            buildRebuttalMessages({
+              userPrompt,
+              previousRoundStreams: lastCompletedStreams,
+              roundNumber: roundNum,
+              conversationHistory,
+              focused: turnFocused,
+              webSearchContext: webSearchCtx,
+              webSearchModel: fallbackSearchModel,
+            })
           );
-          const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
+          const roundSearchVerification = Boolean(lastTurn.webSearchEnabled)
+            ? {
+              enabled: true,
+              prompt: userPrompt,
+              strictMode: false,
+              mode: hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchCtx ? 'legacy_context' : 'debate_rebuttal'),
+            }
+            : null;
+          const results = await runRound({
+            models,
+            messagesPerModel,
+            convId,
+            roundIndex: currentRoundIndex,
+            apiKey,
+            signal: abortController.signal,
+            searchVerification: roundSearchVerification,
+          });
           if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
           const completedStreams = results.filter(r => r.content && !r.error);
           if (completedStreams.length === 0) {
@@ -2529,11 +2679,38 @@ export function DebateProvider({ children }) {
               const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
               const parsed = parseConvergenceResponse(cResponse);
               parsed.rawResponse = cResponse;
+              roundConvergence = parsed;
               dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
               if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
             } catch (err) {
               if (abortController.signal.aborted) break;
-              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+              roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
+              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+            }
+          }
+          const refreshDecision = getLaterRoundSearchRefreshDecision({
+            roundNum,
+            maxRounds,
+            webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+            canUseLegacySearchFallback: canUseLaterRoundSearchFallback,
+            refreshesUsed: laterRoundSearchRefreshesUsed,
+            results,
+            convergenceCheck: roundConvergence,
+          });
+          if (refreshDecision.shouldRefresh) {
+            laterRoundSearchRefreshesUsed += 1;
+            hasLaterRoundSearchRefresh = true;
+            const refreshedContext = await runLegacyWebSearch({
+              convId,
+              userPrompt,
+              attachments,
+              webSearchModel: fallbackSearchModel,
+              apiKey,
+              signal: abortController.signal,
+            });
+            if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
+            if (refreshedContext) {
+              webSearchCtx = refreshedContext;
             }
           }
           if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
@@ -2598,6 +2775,8 @@ export function DebateProvider({ children }) {
             roundNumber: roundIndex + 1,
             conversationHistory,
             focused: turnFocused,
+            webSearchContext: webSearchCtx,
+            webSearchModel: fallbackSearchModel,
           });
         }
 
@@ -2691,12 +2870,37 @@ export function DebateProvider({ children }) {
         const roundLabel = getRoundLabel(roundNum);
         const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
         currentRoundIndex = roundNum - 1;
+        let roundConvergence = null;
         dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
         const messagesPerModel = models.map(() =>
-          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
+          buildRebuttalMessages({
+            userPrompt,
+            previousRoundStreams: lastCompletedStreams,
+            roundNumber: roundNum,
+            conversationHistory,
+            focused: turnFocused,
+            webSearchContext: webSearchCtx,
+            webSearchModel: fallbackSearchModel,
+          })
         );
-        const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
+        const roundSearchVerification = Boolean(lastTurn.webSearchEnabled)
+          ? {
+            enabled: true,
+            prompt: userPrompt,
+            strictMode: false,
+            mode: hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchCtx ? 'legacy_context' : 'debate_rebuttal'),
+          }
+          : null;
+        const results = await runRound({
+          models,
+          messagesPerModel,
+          convId,
+          roundIndex: currentRoundIndex,
+          apiKey,
+          signal: abortController.signal,
+          searchVerification: roundSearchVerification,
+        });
         if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
         const completedStreams = results.filter(r => r.content && !r.error);
         if (completedStreams.length === 0) {
@@ -2722,11 +2926,38 @@ export function DebateProvider({ children }) {
             const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
             const parsed = parseConvergenceResponse(cResponse);
             parsed.rawResponse = cResponse;
+            roundConvergence = parsed;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
             if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
           } catch (err) {
             if (abortController.signal.aborted) break;
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+            roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
+            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+          }
+        }
+        const refreshDecision = getLaterRoundSearchRefreshDecision({
+          roundNum,
+          maxRounds,
+          webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+          canUseLegacySearchFallback: canUseLaterRoundSearchFallback,
+          refreshesUsed: laterRoundSearchRefreshesUsed,
+          results,
+          convergenceCheck: roundConvergence,
+        });
+        if (refreshDecision.shouldRefresh) {
+          laterRoundSearchRefreshesUsed += 1;
+          hasLaterRoundSearchRefresh = true;
+          const refreshedContext = await runLegacyWebSearch({
+            convId,
+            userPrompt,
+            attachments,
+            webSearchModel: fallbackSearchModel,
+            apiKey,
+            signal: abortController.signal,
+          });
+          if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
+          if (refreshedContext) {
+            webSearchCtx = refreshedContext;
           }
         }
         if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
@@ -2816,8 +3047,15 @@ export function DebateProvider({ children }) {
 
     // Build web search context if present
     const webSearchResult = lastTurn.webSearchResult;
-    const webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
+    let webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
     const wsModel = webSearchResult?.model || '';
+    const fallbackSearchModel = wsModel || state.webSearchModel;
+    const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
+    const hasExistingLaterRoundRefresh = didUseLaterRoundSearchRefresh(lastTurn.rounds);
+    let laterRoundSearchRefreshesUsed = hasExistingLaterRoundRefresh
+      ? MAX_LATER_ROUND_SEARCH_REFRESHES
+      : 0;
+    let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
     const useNativeWebSearch = Boolean(lastTurn.webSearchEnabled && !webSearchCtx);
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
@@ -2844,6 +3082,8 @@ export function DebateProvider({ children }) {
         roundNumber: roundIndex + 1,
         conversationHistory,
         focused: turnFocused,
+        webSearchContext: webSearchCtx,
+        webSearchModel: fallbackSearchModel,
       });
     }
 
@@ -3021,15 +3261,40 @@ export function DebateProvider({ children }) {
         const roundLabel = getRoundLabel(roundNum);
         const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
         currentRoundIndex = roundNum - 1;
+        let roundConvergence = null;
 
         dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
 
         const messagesPerModel = models.map(() =>
-          buildRebuttalMessages({ userPrompt, previousRoundStreams: lastCompletedStreams, roundNumber: roundNum, conversationHistory, focused: turnFocused })
+          buildRebuttalMessages({
+            userPrompt,
+            previousRoundStreams: lastCompletedStreams,
+            roundNumber: roundNum,
+            conversationHistory,
+            focused: turnFocused,
+            webSearchContext: webSearchCtx,
+            webSearchModel: fallbackSearchModel,
+          })
         );
 
-        const results = await runRound({ models, messagesPerModel, convId, roundIndex: currentRoundIndex, apiKey, signal: abortController.signal });
+        const roundSearchVerification = Boolean(lastTurn.webSearchEnabled)
+          ? {
+            enabled: true,
+            prompt: userPrompt,
+            strictMode: false,
+            mode: hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchCtx ? 'legacy_context' : 'debate_rebuttal'),
+          }
+          : null;
+        const results = await runRound({
+          models,
+          messagesPerModel,
+          convId,
+          roundIndex: currentRoundIndex,
+          apiKey,
+          signal: abortController.signal,
+          searchVerification: roundSearchVerification,
+        });
 
         if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
 
@@ -3063,11 +3328,38 @@ export function DebateProvider({ children }) {
             const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
             const parsed = parseConvergenceResponse(cResponse);
             parsed.rawResponse = cResponse;
+            roundConvergence = parsed;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
             if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
           } catch (err) {
             if (abortController.signal.aborted) break;
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: false, reason: 'Convergence check failed: ' + err.message } } });
+            roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
+            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+          }
+        }
+        const refreshDecision = getLaterRoundSearchRefreshDecision({
+          roundNum,
+          maxRounds,
+          webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+          canUseLegacySearchFallback: canUseLaterRoundSearchFallback,
+          refreshesUsed: laterRoundSearchRefreshesUsed,
+          results,
+          convergenceCheck: roundConvergence,
+        });
+        if (refreshDecision.shouldRefresh) {
+          laterRoundSearchRefreshesUsed += 1;
+          hasLaterRoundSearchRefresh = true;
+          const refreshedContext = await runLegacyWebSearch({
+            convId,
+            userPrompt,
+            attachments,
+            webSearchModel: fallbackSearchModel,
+            apiKey,
+            signal: abortController.signal,
+          });
+          if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
+          if (refreshedContext) {
+            webSearchCtx = refreshedContext;
           }
         }
         if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
@@ -3118,7 +3410,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.strictWebSearch]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch]);
 
   const value = {
     ...state,

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.12] - 2026-02-09
+
+### Added
+- Conditional later-round web-search refresh in debate flows, triggered by weak evidence quality or unresolved factual disagreement signals
+- One-refresh cap for later-round search updates to bound cost and latency impact
+
+### Changed
+- Rebuttal round prompts now include refreshed web-search context when available
+- Debate retry paths (`retryRound` and `retryStream`) now use the same later-round search refresh behavior as normal debate execution
+
 ## [0.3.11] - 2026-02-07
 
 ### Added

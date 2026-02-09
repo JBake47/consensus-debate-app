@@ -76,14 +76,27 @@ Do NOT simply summarize what each model said. Create a unified answer that repre
 /**
  * Build the messages array for a rebuttal round.
  * Each model sees the user prompt plus all responses from the previous round.
+ * Optionally includes refreshed web search context when available.
  */
-export function buildRebuttalMessages({ userPrompt, previousRoundStreams, roundNumber, conversationHistory, focused = false }) {
+export function buildRebuttalMessages({
+  userPrompt,
+  previousRoundStreams,
+  roundNumber,
+  conversationHistory,
+  focused = false,
+  webSearchContext = '',
+  webSearchModel = '',
+}) {
   const previousResponses = previousRoundStreams
     .filter(s => s.content && s.status === 'complete')
     .map(s => `### ${getModelDisplayName(s.model)} (${s.model})\n${s.content}`)
     .join('\n\n---\n\n');
 
   const systemPrompt = focused ? FOCUSED_REBUTTAL_SYSTEM_PROMPT : REBUTTAL_SYSTEM_PROMPT;
+  const searchContext = String(webSearchContext || '').trim();
+  const searchContextBlock = searchContext
+    ? `\n\nUpdated web research context${webSearchModel ? ` (from ${webSearchModel})` : ''}:\n${searchContext}\n\nUse this context to verify factual claims and cite sources when relevant.`
+    : '';
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -96,6 +109,7 @@ Here are the responses from Round ${roundNumber - 1} of the debate:
 
 ${previousResponses}
 
+${searchContextBlock}
 Now provide your rebuttal and revised position for Round ${roundNumber}.`,
     },
   ];
