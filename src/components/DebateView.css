@@ -26,6 +26,7 @@
 
 .user-message {
   display: flex;
+  justify-content: flex-end;
   gap: var(--space-sm);
   align-items: flex-start;
 }
@@ -43,8 +44,14 @@
 }
 
 .user-message-body {
-  flex: 1;
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: min(900px, 82%);
   min-width: 0;
+  background: rgba(79, 143, 247, 0.08);
+  border: 1px solid rgba(79, 143, 247, 0.25);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
 }
 
 .user-message-header {
@@ -181,6 +188,10 @@
 .turn-cost-value {
   color: var(--accent-green);
   font-weight: 600;
+}
+
+.turn-cost-value.uncertain {
+  color: #fbbf24;
 }
 
 /* Debate controls row */

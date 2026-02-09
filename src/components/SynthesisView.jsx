@@ -5,7 +5,15 @@ import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
-import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
+import {
+  aggregateCostMetas,
+  computeRoundCostMeta,
+  formatCostWithQuality,
+  formatTokenCount,
+  formatDuration,
+  getCostQualityDescription,
+  getUsageCostMeta,
+} from '../lib/formatTokens';
 import './SynthesisView.css';
 
 function DebateInternals({ rounds, debateMetadata }) {
@@ -20,9 +28,9 @@ function DebateInternals({ rounds, debateMetadata }) {
     parallel_only: 'Parallel responses only',
   };
 
-  const totalDebateCost = rounds.reduce((sum, round) =>
-    sum + round.streams.reduce((rs, s) => rs + (s.usage?.cost || 0), 0), 0
-  );
+  const roundCostMetas = rounds.map(computeRoundCostMeta);
+  const totalDebateCostMeta = aggregateCostMetas(roundCostMetas);
+  const totalDebateCostLabel = formatCostWithQuality(totalDebateCostMeta);
 
   return (
     <div className="debate-internals">
@@ -54,10 +62,15 @@ function DebateInternals({ rounds, debateMetadata }) {
                 </span>
               </div>
             )}
-            {totalDebateCost > 0 && (
+            {totalDebateCostLabel && (
               <div className="internals-stat">
                 <span className="internals-stat-label">Debate Cost</span>
-                <span className="internals-stat-value internals-cost">{formatCost(totalDebateCost)}</span>
+                <span
+                  className={`internals-stat-value internals-cost ${totalDebateCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                  title={getCostQualityDescription(totalDebateCostMeta.quality)}
+                >
+                  {totalDebateCostLabel}
+                </span>
               </div>
             )}
           </div>
@@ -66,7 +79,8 @@ function DebateInternals({ rounds, debateMetadata }) {
             {rounds.map((round, i) => {
               const completedModels = round.streams.filter(s => s.status === 'complete' || (s.content && s.status !== 'error'));
               const failedModels = round.streams.filter(s => s.status === 'error');
-              const roundCost = round.streams.reduce((sum, s) => sum + (s.usage?.cost || 0), 0);
+              const roundCostMeta = roundCostMetas[i];
+              const roundCostLabel = formatCostWithQuality(roundCostMeta);
               const cc = round.convergenceCheck;
 
               return (
@@ -74,8 +88,13 @@ function DebateInternals({ rounds, debateMetadata }) {
                   <div className="internals-round-header">
                     <span className={`internals-round-dot ${round.status}`} />
                     <span className="internals-round-label">{round.label}</span>
-                    {roundCost > 0 && (
-                      <span className="internals-round-cost">{formatCost(roundCost)}</span>
+                    {roundCostLabel && (
+                      <span
+                        className={`internals-round-cost ${roundCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                        title={getCostQualityDescription(roundCostMeta.quality)}
+                      >
+                        {roundCostLabel}
+                      </span>
                     )}
                     <span className="internals-round-models">
                       {completedModels.length}/{round.streams.length} models responded
@@ -84,26 +103,35 @@ function DebateInternals({ rounds, debateMetadata }) {
                       )}
                     </span>
                   </div>
-                  {round.streams.map((stream, si) => (
-                    <div key={si} className="internals-stream-row">
-                      <span className={`internals-stream-status ${stream.status}`}>
-                        {stream.status === 'complete' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
-                      </span>
-                      <span className="internals-stream-model">{getModelDisplayName(stream.model)}</span>
-                      {stream.usage?.cost != null && stream.usage.cost > 0 && (
-                        <span className="internals-stream-cost">{formatCost(stream.usage.cost)}</span>
-                      )}
-                      {stream.usage?.totalTokens != null && (
-                        <span className="internals-stream-tokens">{formatTokenCount(stream.usage.totalTokens)} tokens</span>
-                      )}
-                      {stream.durationMs != null && (
-                        <span className="internals-stream-duration">{formatDuration(stream.durationMs)}</span>
-                      )}
-                      {stream.error && (
-                        <span className="internals-stream-error">{stream.error}</span>
-                      )}
-                    </div>
-                  ))}
+                  {round.streams.map((stream, si) => {
+                    const streamCostMeta = getUsageCostMeta(stream.usage, stream.model);
+                    const streamCostLabel = formatCostWithQuality(streamCostMeta);
+                    return (
+                      <div key={si} className="internals-stream-row">
+                        <span className={`internals-stream-status ${stream.status}`}>
+                          {stream.status === 'complete' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                        </span>
+                        <span className="internals-stream-model">{getModelDisplayName(stream.model)}</span>
+                        {streamCostLabel && (
+                          <span
+                            className={`internals-stream-cost ${streamCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                            title={getCostQualityDescription(streamCostMeta.quality)}
+                          >
+                            {streamCostLabel}
+                          </span>
+                        )}
+                        {stream.usage?.totalTokens != null && (
+                          <span className="internals-stream-tokens">{formatTokenCount(stream.usage.totalTokens)} tokens</span>
+                        )}
+                        {stream.durationMs != null && (
+                          <span className="internals-stream-duration">{formatDuration(stream.durationMs)}</span>
+                        )}
+                        {stream.error && (
+                          <span className="internals-stream-error">{stream.error}</span>
+                        )}
+                      </div>
+                    );
+                  })}
                   {cc && cc.converged !== null && (
                     <div className={`internals-convergence ${cc.converged ? 'converged' : 'diverged'}`}>
                       <span className="internals-convergence-label">
@@ -127,6 +155,8 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
   const { model, content, status, error } = synthesis;
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
   const contentRef = useRef(null);
+  const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
+  const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -188,9 +218,19 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
           )}
           {status === 'complete' && (synthesis.usage || synthesis.durationMs) && (
             <div className="synthesis-meta-badge">
-              {synthesis.usage?.cost != null && <><span className="synthesis-cost">{formatCost(synthesis.usage.cost)}</span> · </>}
+              {synthesisCostLabel && (
+                <>
+                  <span
+                    className={`synthesis-cost ${synthesisCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                    title={getCostQualityDescription(synthesisCostMeta.quality)}
+                  >
+                    {synthesisCostLabel}
+                  </span>
+                  {' | '}
+                </>
+              )}
               {synthesis.usage?.totalTokens != null && <>{formatTokenCount(synthesis.usage.totalTokens)} tokens</>}
-              {synthesis.usage?.totalTokens != null && synthesis.durationMs != null && ' · '}
+              {synthesis.usage?.totalTokens != null && synthesis.durationMs != null && ' | '}
               {synthesis.durationMs != null && formatDuration(synthesis.durationMs)}
             </div>
           )}

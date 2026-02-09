@@ -13,7 +13,12 @@ import EnsembleResultPanel from './EnsembleResultPanel';
 import AttachmentViewer from './AttachmentViewer';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
-import { formatDuration, formatCost, computeTurnCost } from '../lib/formatTokens';
+import {
+  computeTurnCostMeta,
+  formatCostWithQuality,
+  formatDuration,
+  getCostQualityDescription,
+} from '../lib/formatTokens';
 import './DebateView.css';
 
 function WebSearchPanel({ webSearchResult }) {
@@ -77,6 +82,8 @@ export default function DebateView({ turn, isLastTurn }) {
     turn.ensembleResult != null ||
     (hasRounds && turn.rounds[0]?.streams?.length > 1)
   );
+  const turnCostMeta = computeTurnCostMeta(turn);
+  const turnCostLabel = formatCostWithQuality(turnCostMeta);
 
   const failedStreams = hasRounds
     ? turn.rounds.flatMap((round, roundIndex) =>
@@ -201,9 +208,15 @@ export default function DebateView({ turn, isLastTurn }) {
             />
           )}
 
-          {turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+          {turn.synthesis?.status === 'complete' && turnCostLabel && (
             <div className="turn-cost-summary">
-              Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+              Turn cost:{' '}
+              <span
+                className={`turn-cost-value ${turnCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                title={getCostQualityDescription(turnCostMeta.quality)}
+              >
+                {turnCostLabel}
+              </span>
             </div>
           )}
         </>
@@ -222,9 +235,15 @@ export default function DebateView({ turn, isLastTurn }) {
               />
             )}
           </div>
-          {turn.rounds[0]?.streams[0]?.status === 'complete' && computeTurnCost(turn) > 0 && (
+          {turn.rounds[0]?.streams[0]?.status === 'complete' && turnCostLabel && (
             <div className="turn-cost-summary">
-              Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+              Turn cost:{' '}
+              <span
+                className={`turn-cost-value ${turnCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                title={getCostQualityDescription(turnCostMeta.quality)}
+              >
+                {turnCostLabel}
+              </span>
             </div>
           )}
         </>
@@ -281,9 +300,15 @@ export default function DebateView({ turn, isLastTurn }) {
         <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} isLastTurn={isLastTurn} rounds={turn.rounds} />
       )}
 
-      {!isDirectMode && !isParallelMode && turn.synthesis?.status === 'complete' && computeTurnCost(turn) > 0 && (
+      {!isDirectMode && !isParallelMode && turn.synthesis?.status === 'complete' && turnCostLabel && (
         <div className="turn-cost-summary">
-          Turn cost: <span className="turn-cost-value">{formatCost(computeTurnCost(turn))}</span>
+          Turn cost:{' '}
+          <span
+            className={`turn-cost-value ${turnCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+            title={getCostQualityDescription(turnCostMeta.quality)}
+          >
+            {turnCostLabel}
+          </span>
         </div>
       )}
     </div>

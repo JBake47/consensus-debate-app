@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [0.3.13] - 2026-02-09
+
+### Added
+- Configurable fallback model pricing for cost estimation via `VITE_MODEL_PRICING_FALLBACKS` and browser `localStorage` (`model_pricing_fallbacks`)
+- Cost-quality metadata and formatting utilities to distinguish exact vs estimated vs partial vs unknown cost values
+
+### Changed
+- User prompt bubble alignment and sizing now match conventional chat UX by anchoring user messages to the right side
+- Cost readouts now include quality indicators across conversation, turn, round, model, synthesis, and ensemble views
+- Cost aggregation now consistently includes convergence checks, web-search runs, ensemble analysis, and synthesis phases
+
+### Fixed
+- Usage and cost numeric normalization to prevent string-math inaccuracies in token and cost aggregation
+- Convergence and web-search usage capture coverage across debate and retry paths for more complete accounting
+- Anthropic usage handling on the server now preserves cost when available and computes token totals safely
+
 ## [0.3.12] - 2026-02-09
 
 ### Added
@@ -272,7 +288,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.13...HEAD
+[0.3.13]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.12...v0.3.13
+[0.3.12]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.5...v0.3.6

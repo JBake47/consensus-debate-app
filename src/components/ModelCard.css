@@ -125,6 +125,10 @@
   font-weight: 500;
 }
 
+.model-card-cost.uncertain {
+  color: #fbbf24;
+}
+
 .model-card-status {
   display: flex;
   align-items: center;

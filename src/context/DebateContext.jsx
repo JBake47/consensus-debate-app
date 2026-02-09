@@ -945,13 +945,13 @@ export function DebateProvider({ children }) {
       type: 'SET_WEB_SEARCH_RESULT',
       payload: {
         conversationId: convId,
-        result: { status: 'searching', content: '', model: webSearchModel, error: null },
+        result: { status: 'searching', content: '', model: webSearchModel, error: null, usage: null, durationMs: null },
       },
     });
 
     try {
       const searchPrompt = buildAttachmentTextContent(userPrompt, attachments);
-      const { content: searchContent, durationMs: searchDurationMs } = await chatCompletion({
+      const { content: searchContent, usage: searchUsage, durationMs: searchDurationMs } = await chatCompletion({
         model: webSearchModel,
         messages: [
           {
@@ -968,7 +968,7 @@ export function DebateProvider({ children }) {
         type: 'SET_WEB_SEARCH_RESULT',
         payload: {
           conversationId: convId,
-          result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, durationMs: searchDurationMs },
+          result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, usage: searchUsage, durationMs: searchDurationMs },
         },
       });
       return searchContent;
@@ -978,7 +978,7 @@ export function DebateProvider({ children }) {
         type: 'SET_WEB_SEARCH_RESULT',
         payload: {
           conversationId: convId,
-          result: { status: 'error', content: '', model: webSearchModel, error: err.message },
+          result: { status: 'error', content: '', model: webSearchModel, error: err.message, usage: null, durationMs: null },
         },
       });
       return '';
@@ -1437,7 +1437,7 @@ export function DebateProvider({ children }) {
             roundNumber: roundNum,
           });
 
-          const { content: convergenceResponse } = await chatCompletion({
+          const { content: convergenceResponse, usage: convergenceUsage } = await chatCompletion({
             model: convergenceModel,
             messages: convergenceMessages,
             apiKey,
@@ -1446,6 +1446,7 @@ export function DebateProvider({ children }) {
 
           const parsed = parseConvergenceResponse(convergenceResponse);
           parsed.rawResponse = convergenceResponse;
+          parsed.usage = convergenceUsage || null;
           roundConvergence = parsed;
 
           dispatch({
@@ -2605,9 +2606,10 @@ export function DebateProvider({ children }) {
         dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
         try {
           const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-          const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+          const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
           const parsed = parseConvergenceResponse(cResponse);
           parsed.rawResponse = cResponse;
+          parsed.usage = cUsage || null;
           dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
           if (parsed.converged) { converged = true; terminationReason = 'converged'; }
         } catch (err) {
@@ -2676,9 +2678,10 @@ export function DebateProvider({ children }) {
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
             try {
               const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-              const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+              const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
               const parsed = parseConvergenceResponse(cResponse);
               parsed.rawResponse = cResponse;
+              parsed.usage = cUsage || null;
               roundConvergence = parsed;
               dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
               if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
@@ -2852,9 +2855,10 @@ export function DebateProvider({ children }) {
       dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-        const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+        const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
         const parsed = parseConvergenceResponse(cResponse);
         parsed.rawResponse = cResponse;
+        parsed.usage = cUsage || null;
         dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
         if (parsed.converged) { converged = true; terminationReason = 'converged'; }
       } catch (err) {
@@ -2923,9 +2927,10 @@ export function DebateProvider({ children }) {
           dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
           try {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-            const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+            const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
             const parsed = parseConvergenceResponse(cResponse);
             parsed.rawResponse = cResponse;
+            parsed.usage = cUsage || null;
             roundConvergence = parsed;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
             if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }
@@ -3242,9 +3247,10 @@ export function DebateProvider({ children }) {
       });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-        const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+        const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
         const parsed = parseConvergenceResponse(cResponse);
         parsed.rawResponse = cResponse;
+        parsed.usage = cUsage || null;
         dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
         if (parsed.converged) { converged = true; terminationReason = 'converged'; }
       } catch (err) {
@@ -3325,9 +3331,10 @@ export function DebateProvider({ children }) {
           dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
           try {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-            const { content: cResponse } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+            const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
             const parsed = parseConvergenceResponse(cResponse);
             parsed.rawResponse = cResponse;
+            parsed.usage = cUsage || null;
             roundConvergence = parsed;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
             if (parsed.converged) { converged = true; terminationReason = 'converged'; break; }

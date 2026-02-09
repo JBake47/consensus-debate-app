@@ -4,7 +4,11 @@ import { useDebate } from '../context/DebateContext';
 import ModelCard from './ModelCard';
 import ConvergenceBadge from './ConvergenceBadge';
 import ConvergencePanel from './ConvergencePanel';
-import { formatCost } from '../lib/formatTokens';
+import {
+  computeRoundCostMeta,
+  formatCostWithQuality,
+  getCostQualityDescription,
+} from '../lib/formatTokens';
 import './RoundSection.css';
 
 export default function RoundSection({
@@ -19,11 +23,8 @@ export default function RoundSection({
   const { retryRound, debateInProgress } = useDebate();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
-
-  let roundCost = 0;
-  for (const s of streams) {
-    if (s.usage?.cost != null) roundCost += s.usage.cost;
-  }
+  const roundCostMeta = computeRoundCostMeta(round);
+  const roundCostLabel = formatCostWithQuality(roundCostMeta);
 
   const hasFailedStreams = streams.some(s => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming'));
   const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
@@ -42,8 +43,13 @@ export default function RoundSection({
           <span className={`round-status-icon ${status}`}>{statusIcon}</span>
           <span className="round-label">{label}</span>
           <span className="round-number">Round {roundNumber}</span>
-          {status === 'complete' && roundCost > 0 && (
-            <span className="round-cost">{formatCost(roundCost)}</span>
+          {status === 'complete' && roundCostLabel && (
+            <span
+              className={`round-cost ${roundCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+              title={getCostQualityDescription(roundCostMeta.quality)}
+            >
+              {roundCostLabel}
+            </span>
           )}
         </div>
         <div className="round-header-right">

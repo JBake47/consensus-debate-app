@@ -2,7 +2,12 @@ import { useState } from 'react';
 import { Vote, Loader2, AlertTriangle, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import CopyButton from './CopyButton';
 import { getModelDisplayName } from '../lib/openrouter';
-import { formatDuration, formatCost } from '../lib/formatTokens';
+import {
+  formatDuration,
+  formatCostWithQuality,
+  getCostQualityDescription,
+  getUsageCostMeta,
+} from '../lib/formatTokens';
 import './EnsembleResultPanel.css';
 
 function getConfidenceLevel(score) {
@@ -61,6 +66,8 @@ export default function EnsembleResultPanel({ ensembleResult }) {
   const hasDisagreement = disagreementAreas && disagreementAreas.length > 0;
   const hasWeights = modelWeights && Object.keys(modelWeights).length > 0;
   const hasDetails = hasAgreement || hasDisagreement || hasWeights;
+  const costMeta = getUsageCostMeta(usage, ensembleResult?.model || '');
+  const costLabel = formatCostWithQuality(costMeta);
 
   return (
     <div className="ensemble-panel">
@@ -164,8 +171,13 @@ export default function EnsembleResultPanel({ ensembleResult }) {
       {/* Footer stats */}
       {(usage || durationMs) && (
         <div className="ensemble-footer">
-          {usage?.cost != null && usage.cost > 0 && (
-            <span className="ensemble-footer-stat">{formatCost(usage.cost)}</span>
+          {costLabel && (
+            <span
+              className={`ensemble-footer-stat ${costMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+              title={getCostQualityDescription(costMeta.quality)}
+            >
+              {costLabel}
+            </span>
           )}
           {durationMs != null && (
             <span className="ensemble-footer-stat">{formatDuration(durationMs)}</span>

@@ -331,13 +331,23 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     const contentBlocks = Array.isArray(data.content) ? data.content : [];
     const content = contentBlocks.filter(b => b.type === 'text').map(b => b.text).join('');
     const reasoning = contentBlocks.filter(b => b.type === 'thinking').map(b => b.text).join('') || null;
+    const usageInput = Number.isFinite(Number(data.usage?.input_tokens))
+      ? Number(data.usage.input_tokens)
+      : null;
+    const usageOutput = Number.isFinite(Number(data.usage?.output_tokens))
+      ? Number(data.usage.output_tokens)
+      : null;
+    const usageTotal = Number.isFinite(Number(data.usage?.total_tokens))
+      ? Number(data.usage.total_tokens)
+      : (
+        usageInput != null && usageOutput != null ? usageInput + usageOutput : null
+      );
     const usage = data.usage
       ? {
-        prompt_tokens: data.usage.input_tokens ?? null,
-        completion_tokens: data.usage.output_tokens ?? null,
-        total_tokens: data.usage.input_tokens && data.usage.output_tokens
-          ? data.usage.input_tokens + data.usage.output_tokens
-          : null,
+        prompt_tokens: usageInput,
+        completion_tokens: usageOutput,
+        total_tokens: usageTotal,
+        cost: data.usage.cost ?? null,
       }
       : null;
     return { content, reasoning, usage };
@@ -358,10 +368,18 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     if (event === 'message_start') {
       if (parsed.message?.usage) {
         const u = parsed.message.usage;
+        const promptTokens = Number.isFinite(Number(u.input_tokens)) ? Number(u.input_tokens) : null;
+        const completionTokens = Number.isFinite(Number(u.output_tokens)) ? Number(u.output_tokens) : null;
+        const totalTokens = Number.isFinite(Number(u.total_tokens))
+          ? Number(u.total_tokens)
+          : (
+            promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null
+          );
         usage = {
-          prompt_tokens: u.input_tokens ?? null,
-          completion_tokens: u.output_tokens ?? null,
-          total_tokens: u.input_tokens && u.output_tokens ? u.input_tokens + u.output_tokens : null,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: totalTokens,
+          cost: u.cost ?? null,
         };
       }
     }
@@ -393,10 +411,18 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     if (event === 'message_delta') {
       if (parsed.usage) {
         const u = parsed.usage;
+        const promptTokens = Number.isFinite(Number(u.input_tokens)) ? Number(u.input_tokens) : null;
+        const completionTokens = Number.isFinite(Number(u.output_tokens)) ? Number(u.output_tokens) : null;
+        const totalTokens = Number.isFinite(Number(u.total_tokens))
+          ? Number(u.total_tokens)
+          : (
+            promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null
+          );
         usage = {
-          prompt_tokens: u.input_tokens ?? null,
-          completion_tokens: u.output_tokens ?? null,
-          total_tokens: u.input_tokens && u.output_tokens ? u.input_tokens + u.output_tokens : null,
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: totalTokens,
+          cost: u.cost ?? null,
         };
       }
     }

@@ -193,6 +193,10 @@
   font-weight: 500;
 }
 
+.thread-message-cost.uncertain {
+  color: #fbbf24;
+}
+
 .thread-message-content {
   font-size: var(--text-sm);
   line-height: 1.6;

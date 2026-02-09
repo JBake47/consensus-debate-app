@@ -4,7 +4,13 @@ import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
-import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
+import {
+  formatTokenCount,
+  formatDuration,
+  formatCostWithQuality,
+  getCostQualityDescription,
+  getUsageCostMeta,
+} from '../lib/formatTokens';
 import './DebateThread.css';
 
 function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry }) {
@@ -33,6 +39,8 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
         : null,
     ].filter(Boolean).join('\n')
     : '';
+  const costMeta = getUsageCostMeta(usage, model);
+  const costLabel = formatCostWithQuality(costMeta);
 
   useEffect(() => {
     if (status === 'streaming' && contentRef.current) {
@@ -65,7 +73,17 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="thread-message-stats">
-              {usage?.cost != null && <><span className="thread-message-cost">{formatCost(usage.cost)}</span> | </>}
+              {costLabel && (
+                <>
+                  <span
+                    className={`thread-message-cost ${costMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                    title={getCostQualityDescription(costMeta.quality)}
+                  >
+                    {costLabel}
+                  </span>
+                  {' | '}
+                </>
+              )}
               {usage?.totalTokens != null && <>{formatTokenCount(usage.totalTokens)} tok</>}
               {durationMs != null && <> | {formatDuration(durationMs)}</>}
             </span>

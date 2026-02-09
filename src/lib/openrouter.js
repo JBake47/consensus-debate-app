@@ -26,13 +26,42 @@ export class OpenRouterError extends Error {
 function extractUsage(obj) {
   const u = obj?.usage || obj;
   if (!u) return null;
-  return {
-    promptTokens: u.prompt_tokens ?? u.promptTokens ?? u.input_tokens ?? u.promptTokenCount ?? null,
-    completionTokens: u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? u.candidatesTokenCount ?? u.outputTokenCount ?? null,
-    totalTokens: u.total_tokens ?? u.totalTokens ?? u.totalTokenCount ?? null,
-    cost: u.cost ?? null,
-    reasoningTokens: u.completion_tokens_details?.reasoning_tokens ?? null,
+  const toFiniteNumber = (value) => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   };
+  const promptTokens = toFiniteNumber(
+    u.prompt_tokens ?? u.promptTokens ?? u.input_tokens ?? u.promptTokenCount
+  );
+  const completionTokens = toFiniteNumber(
+    u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? u.candidatesTokenCount ?? u.outputTokenCount
+  );
+  const totalTokens = toFiniteNumber(
+    u.total_tokens ?? u.totalTokens ?? u.totalTokenCount
+  ) ?? (
+    promptTokens != null && completionTokens != null
+      ? promptTokens + completionTokens
+      : null
+  );
+  const cost = toFiniteNumber(u.cost ?? u.total_cost);
+  const reasoningTokens = toFiniteNumber(u.completion_tokens_details?.reasoning_tokens);
+  const usage = {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cost,
+    reasoningTokens,
+  };
+  if (
+    usage.promptTokens == null &&
+    usage.completionTokens == null &&
+    usage.totalTokens == null &&
+    usage.cost == null &&
+    usage.reasoningTokens == null
+  ) {
+    return null;
+  }
+  return usage;
 }
 
 /**

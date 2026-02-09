@@ -85,6 +85,10 @@
   font-weight: 500;
 }
 
+.synthesis-cost.uncertain {
+  color: #fbbf24;
+}
+
 .synthesis-retry-btn {
   display: flex;
   align-items: center;
@@ -310,6 +314,12 @@
 .internals-stream-cost {
   color: var(--accent-green, #22c55e);
   font-weight: 500;
+}
+
+.internals-cost.uncertain,
+.internals-round-cost.uncertain,
+.internals-stream-cost.uncertain {
+  color: #fbbf24;
 }
 
 .internals-stream-tokens,

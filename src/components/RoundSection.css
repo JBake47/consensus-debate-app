@@ -123,6 +123,10 @@
   font-weight: 500;
 }
 
+.round-cost.uncertain {
+  color: #fbbf24;
+}
+
 .round-body {
   padding: var(--space-md);
   padding-top: 0;

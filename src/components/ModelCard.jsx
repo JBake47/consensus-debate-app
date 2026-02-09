@@ -4,7 +4,13 @@ import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
-import { formatTokenCount, formatDuration, formatCost } from '../lib/formatTokens';
+import {
+  formatTokenCount,
+  formatDuration,
+  formatCostWithQuality,
+  getCostQualityDescription,
+  getUsageCostMeta,
+} from '../lib/formatTokens';
 import './ModelCard.css';
 
 function isReasoningModel(modelId) {
@@ -42,6 +48,8 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
         : null,
     ].filter(Boolean).join('\n')
     : '';
+  const costMeta = getUsageCostMeta(usage, model);
+  const costLabel = formatCostWithQuality(costMeta);
 
   // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
@@ -109,9 +117,19 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
           )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="model-card-stats">
-              {usage?.cost != null && <><span className="model-card-cost">{formatCost(usage.cost)}</span> · </>}
+              {costLabel && (
+                <>
+                  <span
+                    className={`model-card-cost ${costMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+                    title={getCostQualityDescription(costMeta.quality)}
+                  >
+                    {costLabel}
+                  </span>
+                  {' | '}
+                </>
+              )}
               {usage?.totalTokens != null && <>{formatTokenCount(usage.totalTokens)} tokens</>}
-              {usage?.totalTokens != null && durationMs != null && ' · '}
+              {usage?.totalTokens != null && durationMs != null && ' | '}
               {durationMs != null && formatDuration(durationMs)}
             </span>
           )}

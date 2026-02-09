@@ -288,6 +288,10 @@
   color: var(--text-tertiary);
 }
 
+.ensemble-footer-stat.uncertain {
+  color: #fbbf24;
+}
+
 .ensemble-analyzing-placeholder {
   display: flex;
   align-items: center;

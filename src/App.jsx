@@ -1,7 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Menu, Pencil, Check, X, DollarSign } from 'lucide-react';
 import { useDebate } from './context/DebateContext';
-import { formatCost, computeConversationCost } from './lib/formatTokens';
+import {
+  computeConversationCostMeta,
+  formatCostWithQuality,
+  getCostQualityDescription,
+} from './lib/formatTokens';
 import Sidebar from './components/Sidebar';
 import SettingsModal from './components/SettingsModal';
 import ChatInput from './components/ChatInput';
@@ -19,6 +23,10 @@ function AppContent() {
   const scrollRef = useRef(null);
 
   const turns = activeConversation?.turns || [];
+  const conversationCostMeta = activeConversation
+    ? computeConversationCostMeta(activeConversation)
+    : { totalCost: 0, quality: 'none' };
+  const conversationCostLabel = formatCostWithQuality(conversationCostMeta);
 
   // Close header edit when switching conversations
   useEffect(() => {
@@ -108,10 +116,13 @@ function AppContent() {
               )}
             </div>
           )}
-          {activeConversation && computeConversationCost(activeConversation) > 0 && (
-            <div className="main-header-cost">
+          {activeConversation && conversationCostLabel && (
+            <div
+              className={`main-header-cost ${conversationCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
+              title={getCostQualityDescription(conversationCostMeta.quality)}
+            >
               <DollarSign size={12} />
-              <span>{formatCost(computeConversationCost(activeConversation))}</span>
+              <span>{conversationCostLabel}</span>
             </div>
           )}
         </header>
