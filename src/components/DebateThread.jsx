@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle2, Brain, Globe, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, AlertCircle, Brain, Globe, RotateCcw } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
+import ConvergencePanel from './ConvergencePanel';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import {
   formatTokenCount,
@@ -175,19 +176,6 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   );
 }
 
-function ConvergenceMessage({ convergenceCheck }) {
-  if (!convergenceCheck) return null;
-  const { converged, reason } = convergenceCheck;
-
-  return (
-    <div className={`thread-system-message ${converged ? 'converged' : 'not-converged'}`}>
-      <CheckCircle2 size={13} />
-      <span className="thread-system-label">{converged ? 'Converged' : 'Not converged'}</span>
-      <span className="thread-system-reason">{reason}</span>
-    </div>
-  );
-}
-
 export default function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
   if (!rounds || rounds.length === 0) return null;
 
@@ -212,7 +200,9 @@ export default function DebateThread({ rounds, isLastTurn = false, allowRetry = 
             ))}
           </div>
           {round.convergenceCheck && (
-            <ConvergenceMessage convergenceCheck={round.convergenceCheck} />
+            <div className="thread-convergence-panel">
+              <ConvergencePanel convergenceCheck={round.convergenceCheck} roundNumber={round.roundNumber} />
+            </div>
           )}
         </div>
       ))}

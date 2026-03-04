@@ -13,10 +13,12 @@ import { rankModels } from '../lib/modelRanking';
 import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
 
+const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
-    convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch,
+    convergenceModel, convergenceOnFinalRound, maxDebateRounds, webSearchModel, strictWebSearch,
     retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
@@ -27,6 +29,7 @@ export default function SettingsModal() {
   const [models, setModels] = useState(selectedModels);
   const [synth, setSynth] = useState(synthesizerModel);
   const [convModel, setConvModel] = useState(convergenceModel);
+  const [convOnFinalRound, setConvOnFinalRound] = useState(Boolean(convergenceOnFinalRound));
   const [maxRounds, setMaxRounds] = useState(maxDebateRounds);
   const [searchModel, setSearchModel] = useState(webSearchModel);
   const [strictSearch, setStrictSearch] = useState(strictWebSearch);
@@ -124,6 +127,7 @@ export default function SettingsModal() {
     dispatch({ type: 'SET_MODELS', payload: models });
     dispatch({ type: 'SET_SYNTHESIZER', payload: normalizedSynth || synth.trim() });
     dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergence || convModel.trim() });
+    dispatch({ type: 'SET_CONVERGENCE_ON_FINAL_ROUND', payload: convOnFinalRound });
     dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
     dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearch || searchModel.trim() });
     dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
@@ -364,6 +368,7 @@ export default function SettingsModal() {
     setModels(DEFAULT_DEBATE_MODELS);
     setSynth(DEFAULT_SYNTHESIZER_MODEL);
     setConvModel(DEFAULT_CONVERGENCE_MODEL);
+    setConvOnFinalRound(DEFAULT_CONVERGENCE_ON_FINAL_ROUND);
     setMaxRounds(DEFAULT_MAX_DEBATE_ROUNDS);
     setSearchModel(DEFAULT_WEB_SEARCH_MODEL);
     setStrictSearch(false);
@@ -390,6 +395,7 @@ export default function SettingsModal() {
     setModels(selectedModels);
     setSynth(synthesizerModel);
     setConvModel(convergenceModel);
+    setConvOnFinalRound(Boolean(convergenceOnFinalRound));
     setMaxRounds(maxDebateRounds);
     setSearchModel(webSearchModel);
     setStrictSearch(strictWebSearch);
@@ -420,6 +426,7 @@ export default function SettingsModal() {
     selectedModels,
     synthesizerModel,
     convergenceModel,
+    convergenceOnFinalRound,
     maxDebateRounds,
     webSearchModel,
     strictWebSearch,
@@ -1086,6 +1093,17 @@ export default function SettingsModal() {
               {maxRounds === 1
                 ? 'Single round - models respond once, then synthesis.'
                 : `Up to ${maxRounds} rounds - models debate and refine positions.`}
+            </p>
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={convOnFinalRound}
+                onChange={e => setConvOnFinalRound(e.target.checked)}
+              />
+              <span>Run convergence check on final round</span>
+            </label>
+            <p className="settings-hint">
+              Useful for 2-round debates so agreement/disagreement summaries still appear.
             </p>
           </div>
         </div>

@@ -336,6 +336,14 @@
 }
 
 /* System messages (convergence) */
+.thread-convergence-panel {
+  margin-left: calc(24px + var(--space-sm));
+}
+
+.thread-convergence-panel .convergence-panel {
+  margin-top: 0;
+}
+
 .thread-system-message {
   display: flex;
   align-items: center;

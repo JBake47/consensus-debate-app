@@ -11,15 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sidebar reliability panel visibility toggle with persisted preference (`sidebar_reliability_visible`)
 - Web Search error panel now includes a retry action that re-runs legacy search and redoes debate/synthesis from round 1
 - Smart Ranking now includes a `Frontier` mode and persisted controls for flagship priority, new-model boost, and preview-model inclusion
+- Settings toggle to optionally run convergence checks on the final debate round (`convergence_on_final_round`)
 
 ### Changed
 - Running chats in the sidebar now use a lightweight spinner animation instead of static `Running...` text
 - Smart Ranking scoring now incorporates model recency, catalog novelty (first-seen tracking), and flagship detection to better surface cutting-edge models
+- Thread view now renders the full convergence panel (confidence + agreement/disagreement details) instead of only a compact status line
 
 ### Fixed
 - Legacy conversations stuck in `searching/streaming/pending/analyzing` states are auto-recovered as interrupted on startup, restoring delete/retry usability
 - Cancel now marks in-flight web-search tasks as `Cancelled` so they do not remain stuck in `searching`
 - `Redo Round` now forces a full re-run of that round's model outputs before continuation/synthesis
+- Stop button now reliably targets the active conversation when clicked from the input controls
+- Final-round convergence outcomes are no longer overwritten as `max_rounds_reached` when convergence is detected
 
 ## [0.3.15] - 2026-03-04
 

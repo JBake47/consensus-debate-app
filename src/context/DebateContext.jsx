@@ -44,6 +44,7 @@ const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v1';
 const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
 const TITLE_SOURCE_USER = 'user';
+const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
 const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
 const STALE_RUN_ERROR_MESSAGE = 'Run interrupted before completion.';
 const STALE_CONVERGENCE_REASON = 'Convergence check interrupted before completion.';
@@ -114,6 +115,13 @@ function saveToStorage(key, value) {
   } catch {
     // storage full or unavailable
   }
+}
+
+function shouldRunConvergenceCheck(roundNum, maxRounds, includeFinalRound) {
+  if (!Number.isFinite(roundNum) || !Number.isFinite(maxRounds)) return false;
+  if (roundNum < 2 || roundNum > maxRounds) return false;
+  if (roundNum < maxRounds) return true;
+  return Boolean(includeFinalRound) && roundNum === maxRounds;
 }
 
 function loadPersistedResponseCache() {
@@ -386,6 +394,7 @@ const initialState = {
   selectedModels: loadFromStorage('debate_models', DEFAULT_DEBATE_MODELS),
   synthesizerModel: loadFromStorage('synthesizer_model', DEFAULT_SYNTHESIZER_MODEL),
   convergenceModel: loadFromStorage('convergence_model', DEFAULT_CONVERGENCE_MODEL),
+  convergenceOnFinalRound: loadFromStorage('convergence_on_final_round', DEFAULT_CONVERGENCE_ON_FINAL_ROUND) !== false,
   maxDebateRounds: loadFromStorage('max_debate_rounds', DEFAULT_MAX_DEBATE_ROUNDS),
   webSearchModel: loadFromStorage('web_search_model', DEFAULT_WEB_SEARCH_MODEL),
   strictWebSearch: loadFromStorage('strict_web_search', false),
@@ -656,6 +665,11 @@ function reducer(state, action) {
     case 'SET_CONVERGENCE_MODEL': {
       saveToStorage('convergence_model', action.payload);
       return { ...state, convergenceModel: action.payload };
+    }
+    case 'SET_CONVERGENCE_ON_FINAL_ROUND': {
+      const enabled = Boolean(action.payload);
+      saveToStorage('convergence_on_final_round', enabled);
+      return { ...state, convergenceOnFinalRound: enabled };
     }
     case 'SET_MAX_DEBATE_ROUNDS': {
       saveToStorage('max_debate_rounds', action.payload);
@@ -1326,6 +1340,7 @@ export function DebateProvider({ children }) {
   const activeConversationInProgress = Boolean(
     activeConversation?.id && runningConversationIds.has(activeConversation.id)
   );
+  const runConvergenceOnFinalRound = Boolean(state.convergenceOnFinalRound);
   const isConversationInProgress = useCallback(
     (conversationId) => Boolean(conversationId && runningConversationIds.has(conversationId)),
     [runningConversationIds]
@@ -2528,8 +2543,8 @@ export function DebateProvider({ children }) {
 
       totalRounds = roundNum;
 
-      // === CONVERGENCE CHECK (skip for round 1 and final round) ===
-      if (roundNum >= 2 && roundNum < maxRounds) {
+      // === CONVERGENCE CHECK (skip round 1; final round optional) ===
+      if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
         if (abortController.signal.aborted) break;
 
         dispatch({
@@ -2645,7 +2660,7 @@ export function DebateProvider({ children }) {
       }
 
       // If we've hit max rounds without convergence
-      if (roundNum === maxRounds) {
+      if (roundNum === maxRounds && !converged) {
         terminationReason = 'max_rounds_reached';
       }
 
@@ -2785,7 +2800,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -3382,7 +3397,13 @@ export function DebateProvider({ children }) {
   }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const cancelDebate = useCallback((conversationId = null) => {
-    const targetConversationId = conversationId || activeConversation?.id || null;
+    const normalizedConversationId = (
+      typeof conversationId === 'string' ||
+      typeof conversationId === 'number'
+    )
+      ? conversationId
+      : null;
+    const targetConversationId = normalizedConversationId || activeConversation?.id || null;
     if (!targetConversationId) return;
 
     abortConversationRun(targetConversationId);
@@ -3825,7 +3846,7 @@ export function DebateProvider({ children }) {
       let currentRoundConvergence = targetRound.convergenceCheck || null;
 
       // Convergence check on current round
-      if (totalRounds >= 2 && totalRounds < maxRounds && !abortController.signal.aborted) {
+      if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
         dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
         try {
           const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
@@ -3909,7 +3930,7 @@ export function DebateProvider({ children }) {
           lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
           dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
           totalRounds = roundNum;
-          if (roundNum >= 2 && roundNum < maxRounds) {
+          if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
             if (abortController.signal.aborted) break;
             dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
             try {
@@ -3974,7 +3995,7 @@ export function DebateProvider({ children }) {
           if (roundSummary) {
             synthesisRounds.push(roundSummary);
           }
-          if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
+          if (roundNum === maxRounds && !converged) terminationReason = 'max_rounds_reached';
         }
       } else if (totalRounds >= maxRounds) {
         terminationReason = terminationReason || 'max_rounds_reached';
@@ -4188,7 +4209,7 @@ export function DebateProvider({ children }) {
     let currentRoundConvergence = targetRound.convergenceCheck || null;
 
     // Convergence check on current round
-    if (totalRounds >= 2 && totalRounds < maxRounds && !abortController.signal.aborted) {
+    if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
       dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
@@ -4272,7 +4293,7 @@ export function DebateProvider({ children }) {
         lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
         totalRounds = roundNum;
-        if (roundNum >= 2 && roundNum < maxRounds) {
+        if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
           if (abortController.signal.aborted) break;
           dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
           try {
@@ -4337,7 +4358,7 @@ export function DebateProvider({ children }) {
         if (roundSummary) {
           synthesisRounds.push(roundSummary);
         }
-        if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
+        if (roundNum === maxRounds && !converged) terminationReason = 'max_rounds_reached';
       }
     } else if (totalRounds >= maxRounds) {
       terminationReason = terminationReason || 'max_rounds_reached';
@@ -4386,7 +4407,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -4698,7 +4719,7 @@ export function DebateProvider({ children }) {
     let currentRoundConvergence = targetRound.convergenceCheck || null;
 
     // Convergence check on the current round (if applicable)
-    if (totalRounds >= 2 && totalRounds < maxRounds && !abortController.signal.aborted) {
+    if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
       dispatch({
         type: 'SET_CONVERGENCE',
         payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } },
@@ -4797,7 +4818,7 @@ export function DebateProvider({ children }) {
         dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
         totalRounds = roundNum;
 
-        if (roundNum >= 2 && roundNum < maxRounds) {
+        if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
           if (abortController.signal.aborted) break;
           dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
           try {
@@ -4862,7 +4883,7 @@ export function DebateProvider({ children }) {
         if (roundSummary) {
           synthesisRounds.push(roundSummary);
         }
-        if (roundNum === maxRounds) terminationReason = 'max_rounds_reached';
+        if (roundNum === maxRounds && !converged) terminationReason = 'max_rounds_reached';
       }
     }
 
@@ -4913,7 +4934,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
 
   const value = {
     ...state,

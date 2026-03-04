@@ -439,7 +439,7 @@ export default function ChatInput() {
           />
           <div className="chat-input-actions">
             {debateInProgress ? (
-              <button className="chat-btn chat-btn-cancel" onClick={cancelDebate}>
+              <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()}>
                 <Square size={16} />
                 <span>Stop</span>
               </button>
