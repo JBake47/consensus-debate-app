@@ -1,10 +1,22 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2 } from 'lucide-react';
+import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2, Eye, EyeOff } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { searchConversations } from '../lib/searchConversations';
 import { exportConversationReport } from '../lib/reportExport';
 import './Sidebar.css';
+
+const RELIABILITY_VISIBILITY_STORAGE_KEY = 'sidebar_reliability_visible';
+
+function loadReliabilityVisibility() {
+  try {
+    const stored = localStorage.getItem(RELIABILITY_VISIBILITY_STORAGE_KEY);
+    if (stored == null) return true;
+    return stored !== 'false';
+  } catch {
+    return true;
+  }
+}
 
 export default function Sidebar({ open, onClose }) {
   const {
@@ -19,6 +31,7 @@ export default function Sidebar({ open, onClose }) {
   const [editTitle, setEditTitle] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showReliability, setShowReliability] = useState(loadReliabilityVisibility);
   const editTitleRef = useRef(null);
 
   const sortedConversations = useMemo(
@@ -106,6 +119,18 @@ export default function Sidebar({ open, onClose }) {
 
   const handleSettings = () => {
     dispatch({ type: 'TOGGLE_SETTINGS' });
+  };
+
+  const toggleReliability = () => {
+    setShowReliability((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(RELIABILITY_VISIBILITY_STORAGE_KEY, String(next));
+      } catch {
+        // Ignore storage errors and keep in-memory state.
+      }
+      return next;
+    });
   };
 
   const startEditing = (e, conv) => {
@@ -315,7 +340,10 @@ export default function Sidebar({ open, onClose }) {
                       )}
                       <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
                       {conversationRunning && (
-                        <span className="sidebar-item-running">Running...</span>
+                        <span className="sidebar-item-running">
+                          <span className="sidebar-item-running-spinner" aria-hidden="true" />
+                          Running
+                        </span>
                       )}
                     </div>
                   )}
@@ -377,25 +405,39 @@ export default function Sidebar({ open, onClose }) {
         <div className="sidebar-footer">
           {metricsSummary.hasData && (
             <div className="sidebar-metrics">
-              <div className="sidebar-metrics-title">Reliability</div>
-              <div className="sidebar-metrics-grid">
-                <div className="sidebar-metric">
-                  <span>Success</span>
-                  <strong>{metricsSummary.successRate != null ? `${metricsSummary.successRate}%` : '--'}</strong>
-                </div>
-                <div className="sidebar-metric">
-                  <span>First answer</span>
-                  <strong>{metricsSummary.avgFirstAnswerMs != null ? `${metricsSummary.avgFirstAnswerMs}ms` : '--'}</strong>
-                </div>
-                <div className="sidebar-metric">
-                  <span>Recovered retries</span>
-                  <strong>{metricsSummary.retryRecovered}/{metricsSummary.retryAttempts}</strong>
-                </div>
+              <div className="sidebar-metrics-head">
+                <div className="sidebar-metrics-title">Reliability</div>
+                <button
+                  type="button"
+                  className="sidebar-metrics-toggle"
+                  onClick={toggleReliability}
+                  title={showReliability ? 'Hide reliability' : 'Show reliability'}
+                >
+                  {showReliability ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
               </div>
-              {metricsSummary.topProviderFailure && (
-                <div className="sidebar-metrics-foot">
-                  Most failures: {metricsSummary.topProviderFailure[0]} ({metricsSummary.topProviderFailure[1]})
-                </div>
+              {showReliability && (
+                <>
+                  <div className="sidebar-metrics-grid">
+                    <div className="sidebar-metric">
+                      <span>Success</span>
+                      <strong>{metricsSummary.successRate != null ? `${metricsSummary.successRate}%` : '--'}</strong>
+                    </div>
+                    <div className="sidebar-metric">
+                      <span>First answer</span>
+                      <strong>{metricsSummary.avgFirstAnswerMs != null ? `${metricsSummary.avgFirstAnswerMs}ms` : '--'}</strong>
+                    </div>
+                    <div className="sidebar-metric">
+                      <span>Recovered retries</span>
+                      <strong>{metricsSummary.retryRecovered}/{metricsSummary.retryAttempts}</strong>
+                    </div>
+                  </div>
+                  {metricsSummary.topProviderFailure && (
+                    <div className="sidebar-metrics-foot">
+                      Most failures: {metricsSummary.topProviderFailure[0]} ({metricsSummary.topProviderFailure[1]})
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

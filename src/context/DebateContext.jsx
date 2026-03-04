@@ -45,6 +45,8 @@ const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
 const TITLE_SOURCE_USER = 'user';
 const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
+const STALE_RUN_ERROR_MESSAGE = 'Run interrupted before completion.';
+const STALE_CONVERGENCE_REASON = 'Convergence check interrupted before completion.';
 
 function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
@@ -179,6 +181,118 @@ function migrateTurn(turn) {
   };
 }
 
+function recoverInterruptedTurnState(turn) {
+  if (!turn || typeof turn !== 'object') {
+    return { turn, changed: false };
+  }
+
+  let changed = false;
+  let nextTurn = turn;
+
+  if (turn.webSearchResult && isLiveStatus(turn.webSearchResult.status)) {
+    nextTurn = {
+      ...nextTurn,
+      webSearchResult: {
+        ...turn.webSearchResult,
+        status: 'error',
+        error: turn.webSearchResult.error || STALE_RUN_ERROR_MESSAGE,
+      },
+    };
+    changed = true;
+  }
+
+  if (turn.ensembleResult && isLiveStatus(turn.ensembleResult.status)) {
+    if (nextTurn === turn) nextTurn = { ...turn };
+    nextTurn.ensembleResult = {
+      ...turn.ensembleResult,
+      status: 'error',
+      error: turn.ensembleResult.error || STALE_RUN_ERROR_MESSAGE,
+    };
+    changed = true;
+  }
+
+  const synthesisStatus = turn.synthesis?.status;
+  const isPendingWarmup = synthesisStatus === 'pending'
+    && (!Array.isArray(turn.rounds) || turn.rounds.length === 0);
+  if (
+    turn.synthesis
+    && (synthesisStatus === 'streaming' || synthesisStatus === 'searching' || synthesisStatus === 'analyzing' || isPendingWarmup)
+  ) {
+    if (nextTurn === turn) nextTurn = { ...turn };
+    nextTurn.synthesis = {
+      ...turn.synthesis,
+      status: 'error',
+      error: turn.synthesis.error || STALE_RUN_ERROR_MESSAGE,
+    };
+    changed = true;
+  }
+
+  if (Array.isArray(turn.rounds) && turn.rounds.length > 0) {
+    let roundChanged = false;
+    const nextRounds = turn.rounds.map((round) => {
+      if (!round || typeof round !== 'object') return round;
+
+      let nextRound = round;
+
+      if (isLiveStatus(round.status)) {
+        nextRound = { ...nextRound, status: 'error' };
+      }
+
+      if (Array.isArray(round.streams) && round.streams.length > 0) {
+        let streamChanged = false;
+        const nextStreams = round.streams.map((stream) => {
+          if (!stream || typeof stream !== 'object') return stream;
+          if (!isLiveStatus(stream.status)) return stream;
+          streamChanged = true;
+          return {
+            ...stream,
+            status: 'error',
+            error: stream.error || STALE_RUN_ERROR_MESSAGE,
+          };
+        });
+        if (streamChanged) {
+          if (nextRound === round) nextRound = { ...round };
+          nextRound.streams = nextStreams;
+        }
+      }
+
+      if (nextRound.convergenceCheck && nextRound.convergenceCheck.converged == null) {
+        if (nextRound === round) nextRound = { ...round };
+        nextRound.convergenceCheck = {
+          ...nextRound.convergenceCheck,
+          converged: false,
+          reason: nextRound.convergenceCheck.reason || STALE_CONVERGENCE_REASON,
+        };
+      }
+
+      if (nextRound !== round) {
+        roundChanged = true;
+      }
+      return nextRound;
+    });
+
+    if (roundChanged) {
+      if (nextTurn === turn) nextTurn = { ...turn };
+      nextTurn.rounds = nextRounds;
+      changed = true;
+    }
+  }
+
+  if (
+    changed
+    && turn.debateMetadata
+    && (turn.debateMetadata.terminationReason == null || turn.debateMetadata.terminationReason === '')
+  ) {
+    if (nextTurn === turn) nextTurn = { ...turn };
+    nextTurn.debateMetadata = {
+      ...turn.debateMetadata,
+      terminationReason: 'interrupted',
+    };
+  }
+
+  return { turn: nextTurn, changed };
+}
+
 function migrateConversations(conversations) {
   let migrated = false;
   const result = conversations.map(conv => {
@@ -187,11 +301,17 @@ function migrateConversations(conversations) {
       migrated = true;
     }
     const turns = rawTurns.map(turn => {
+      let nextTurn = turn;
       if (!turn.rounds && turn.streams) {
         migrated = true;
-        return migrateTurn(turn);
+        nextTurn = migrateTurn(turn);
       }
-      return turn;
+      const recovered = recoverInterruptedTurnState(nextTurn);
+      if (recovered.changed) {
+        migrated = true;
+        nextTurn = recovered.turn;
+      }
+      return nextTurn;
     });
     // Migrate updatedAt for existing conversations
     let updatedAt = conv.updatedAt;
@@ -274,6 +394,9 @@ const initialState = {
   budgetSoftLimitUsd: loadedBudgetSoftLimit,
   budgetAutoApproveBelowUsd: loadedBudgetAutoApprove,
   smartRankingMode: loadFromStorage('smart_ranking_mode', 'balanced'),
+  smartRankingPreferFlagship: loadFromStorage('smart_ranking_prefer_flagship', true),
+  smartRankingPreferNew: loadFromStorage('smart_ranking_prefer_new', true),
+  smartRankingAllowPreview: loadFromStorage('smart_ranking_allow_preview', true),
   streamVirtualizationEnabled: loadFromStorage('stream_virtualization_enabled', true),
   streamVirtualizationKeepLatest: loadedVirtualizationKeepLatest,
   cachePersistenceEnabled: loadFromStorage('cache_persistence_enabled', true),
@@ -568,10 +691,25 @@ function reducer(state, action) {
       return { ...state, budgetAutoApproveBelowUsd: normalized };
     }
     case 'SET_SMART_RANKING_MODE': {
-      const allowed = new Set(['balanced', 'fast', 'cheap', 'quality']);
+      const allowed = new Set(['balanced', 'fast', 'cheap', 'quality', 'frontier']);
       const mode = allowed.has(action.payload) ? action.payload : 'balanced';
       saveToStorage('smart_ranking_mode', mode);
       return { ...state, smartRankingMode: mode };
+    }
+    case 'SET_SMART_RANKING_PREFER_FLAGSHIP': {
+      const enabled = Boolean(action.payload);
+      saveToStorage('smart_ranking_prefer_flagship', enabled);
+      return { ...state, smartRankingPreferFlagship: enabled };
+    }
+    case 'SET_SMART_RANKING_PREFER_NEW': {
+      const enabled = Boolean(action.payload);
+      saveToStorage('smart_ranking_prefer_new', enabled);
+      return { ...state, smartRankingPreferNew: enabled };
+    }
+    case 'SET_SMART_RANKING_ALLOW_PREVIEW': {
+      const enabled = Boolean(action.payload);
+      saveToStorage('smart_ranking_allow_preview', enabled);
+      return { ...state, smartRankingAllowPreview: enabled };
     }
     case 'SET_STREAM_VIRTUALIZATION_ENABLED': {
       saveToStorage('stream_virtualization_enabled', action.payload);
@@ -888,6 +1026,12 @@ function reducer(state, action) {
       saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
+    case 'RECOVER_INTERRUPTED_RUNS': {
+      const { conversations, migrated } = migrateConversations(state.conversations);
+      if (!migrated) return state;
+      saveToStorage('debate_conversations', conversations);
+      return { ...state, conversations };
+    }
     case 'BRANCH_FROM_ROUND': {
       const { conversationId, roundIndex } = action.payload || {};
       const sourceConversation = state.conversations.find((conversation) => conversation.id === conversationId);
@@ -998,6 +1142,10 @@ export function DebateProvider({ children }) {
     cacheHitCount: state.cacheHitCount,
     cacheEntryCount: state.cacheEntryCount,
   });
+
+  useEffect(() => {
+    dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
+  }, [dispatch]);
 
   useEffect(() => {
     metricsRef.current = state.metrics;
@@ -3304,6 +3452,19 @@ export function DebateProvider({ children }) {
           },
         });
       }
+      if (lastTurn.webSearchResult?.status === 'searching') {
+        dispatch({
+          type: 'SET_WEB_SEARCH_RESULT',
+          payload: {
+            conversationId: targetConversationId,
+            result: {
+              ...lastTurn.webSearchResult,
+              status: 'error',
+              error: 'Cancelled',
+            },
+          },
+        });
+      }
     }
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [activeConversation, abortConversationRun, dispatch, state.conversations, state.synthesizerModel]);
@@ -3447,6 +3608,8 @@ export function DebateProvider({ children }) {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
     const retryErroredCompleted = Boolean(options.retryErroredCompleted);
+    const redoRound = Boolean(options.redoRound);
+    const forceLegacyWebSearch = Boolean(options.forceLegacyWebSearch);
     const convId = activeConversation.id;
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
@@ -3491,6 +3654,19 @@ export function DebateProvider({ children }) {
       ? MAX_LATER_ROUND_SEARCH_REFRESHES
       : 0;
     let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
+    let legacySearchPreflightAttempted = false;
+    if (roundIndex === 0 && forceLegacyWebSearch && Boolean(lastTurn.webSearchEnabled) && fallbackSearchModel) {
+      legacySearchPreflightAttempted = true;
+      webSearchCtx = await runLegacyWebSearch({
+        convId,
+        userPrompt,
+        attachments,
+        webSearchModel: fallbackSearchModel,
+        apiKey,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
+    }
     const useNativeWebSearch = Boolean(lastTurn.webSearchEnabled && !webSearchCtx);
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
@@ -3514,6 +3690,10 @@ export function DebateProvider({ children }) {
     // Identify which streams need re-running (failed, stuck, or pending)
     const failedIndices = [];
     targetRound.streams.forEach((s, i) => {
+      if (redoRound) {
+        failedIndices.push(i);
+        return;
+      }
       const shouldRetryCompletedError = retryErroredCompleted && Boolean(s.error);
       if (s.status !== 'complete' || !s.content || shouldRetryCompletedError) {
         failedIndices.push(i);
@@ -3546,7 +3726,8 @@ export function DebateProvider({ children }) {
       const shouldConsiderSearchFallback =
         roundIndex === 0 &&
         useNativeWebSearch &&
-        Boolean(fallbackSearchModel);
+        Boolean(fallbackSearchModel) &&
+        !legacySearchPreflightAttempted;
       const fallbackForNativeErrors = shouldConsiderSearchFallback
         ? shouldFallbackToLegacyWebSearch(results)
         : false;
@@ -4226,6 +4407,24 @@ export function DebateProvider({ children }) {
     });
   }, [activeConversation, retryRound]);
 
+  const retryWebSearch = useCallback((options = {}) => {
+    if (!activeConversation || activeConversation.turns.length === 0) return;
+    const forceRefresh = Boolean(options.forceRefresh);
+    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    if (!lastTurn.webSearchEnabled || !lastTurn.webSearchResult) return;
+    if (!Array.isArray(lastTurn.rounds) || lastTurn.rounds.length === 0) return;
+    if (lastTurn.mode === 'parallel') {
+      retryLastTurn({ forceRefresh });
+      return;
+    }
+    retryRound(0, {
+      forceRefresh,
+      retryErroredCompleted: true,
+      redoRound: true,
+      forceLegacyWebSearch: true,
+    });
+  }, [activeConversation, retryLastTurn, retryRound]);
+
   const retryStream = useCallback(async (roundIndex, streamIndex, options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
@@ -4730,6 +4929,7 @@ export function DebateProvider({ children }) {
     editLastTurn,
     retryLastTurn,
     retryAllFailed,
+    retryWebSearch,
     retryStream,
     retryRound,
     retrySynthesis,

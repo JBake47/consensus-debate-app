@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Sidebar reliability panel visibility toggle with persisted preference (`sidebar_reliability_visible`)
+- Web Search error panel now includes a retry action that re-runs legacy search and redoes debate/synthesis from round 1
+- Smart Ranking now includes a `Frontier` mode and persisted controls for flagship priority, new-model boost, and preview-model inclusion
+
+### Changed
+- Running chats in the sidebar now use a lightweight spinner animation instead of static `Running...` text
+- Smart Ranking scoring now incorporates model recency, catalog novelty (first-seen tracking), and flagship detection to better surface cutting-edge models
+
+### Fixed
+- Legacy conversations stuck in `searching/streaming/pending/analyzing` states are auto-recovered as interrupted on startup, restoring delete/retry usability
+- Cancel now marks in-flight web-search tasks as `Cancelled` so they do not remain stuck in `searching`
+- `Redo Round` now forces a full re-run of that round's model outputs before continuation/synthesis
+
 ## [0.3.15] - 2026-03-04
 
 ### Added

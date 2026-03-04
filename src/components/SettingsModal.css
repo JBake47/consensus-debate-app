@@ -286,6 +286,18 @@
   gap: var(--space-sm);
 }
 
+.settings-smart-ranking-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: var(--space-sm);
+}
+
+.settings-smart-ranking-options .settings-checkbox {
+  font-size: 12px;
+}
+
 .settings-ranked-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

@@ -18,7 +18,8 @@ export default function SettingsModal() {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch,
     retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
-    smartRankingMode, streamVirtualizationEnabled, streamVirtualizationKeepLatest,
+    smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
+    streamVirtualizationEnabled, streamVirtualizationKeepLatest,
     cachePersistenceEnabled, cacheHitCount, cacheEntryCount,
     showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, clearResponseCache, dispatch,
   } = useDebate();
@@ -38,6 +39,9 @@ export default function SettingsModal() {
   const [budgetSoftLimit, setBudgetSoftLimit] = useState(Number(budgetSoftLimitUsd || 0));
   const [budgetAutoApprove, setBudgetAutoApprove] = useState(Number(budgetAutoApproveBelowUsd || 0));
   const [rankingMode, setRankingMode] = useState(smartRankingMode || 'balanced');
+  const [rankingPreferFlagship, setRankingPreferFlagship] = useState(Boolean(smartRankingPreferFlagship));
+  const [rankingPreferNew, setRankingPreferNew] = useState(Boolean(smartRankingPreferNew));
+  const [rankingAllowPreview, setRankingAllowPreview] = useState(Boolean(smartRankingAllowPreview));
   const [virtualizationEnabled, setVirtualizationEnabled] = useState(Boolean(streamVirtualizationEnabled));
   const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
   const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
@@ -137,6 +141,9 @@ export default function SettingsModal() {
     dispatch({ type: 'SET_BUDGET_SOFT_LIMIT_USD', payload: budgetSoftLimit });
     dispatch({ type: 'SET_BUDGET_AUTO_APPROVE_BELOW_USD', payload: budgetAutoApprove });
     dispatch({ type: 'SET_SMART_RANKING_MODE', payload: rankingMode });
+    dispatch({ type: 'SET_SMART_RANKING_PREFER_FLAGSHIP', payload: rankingPreferFlagship });
+    dispatch({ type: 'SET_SMART_RANKING_PREFER_NEW', payload: rankingPreferNew });
+    dispatch({ type: 'SET_SMART_RANKING_ALLOW_PREVIEW', payload: rankingAllowPreview });
     dispatch({ type: 'SET_STREAM_VIRTUALIZATION_ENABLED', payload: virtualizationEnabled });
     dispatch({ type: 'SET_STREAM_VIRTUALIZATION_KEEP_LATEST', payload: virtualizationKeepLatest });
     dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
@@ -191,9 +198,14 @@ export default function SettingsModal() {
       modelCatalog,
       metrics,
       preferredMode: rankingMode,
+      rankingPreferences: {
+        preferFlagship: rankingPreferFlagship,
+        preferNew: rankingPreferNew,
+        allowPreview: rankingAllowPreview,
+      },
       limit: 8,
     }),
-    [modelCatalog, metrics, rankingMode]
+    [modelCatalog, metrics, rankingMode, rankingPreferFlagship, rankingPreferNew, rankingAllowPreview]
   );
   const editingPreset = useMemo(
     () => modelPresets.find(p => p.id === editingPresetId) || null,
@@ -364,6 +376,9 @@ export default function SettingsModal() {
     setBudgetSoftLimit(1.5);
     setBudgetAutoApprove(0.5);
     setRankingMode('balanced');
+    setRankingPreferFlagship(true);
+    setRankingPreferNew(true);
+    setRankingAllowPreview(true);
     setVirtualizationEnabled(true);
     setVirtualizationKeepLatest(4);
     setCachePersistence(true);
@@ -387,6 +402,9 @@ export default function SettingsModal() {
     setBudgetSoftLimit(Number(budgetSoftLimitUsd || 0));
     setBudgetAutoApprove(Number(budgetAutoApproveBelowUsd || 0));
     setRankingMode(smartRankingMode || 'balanced');
+    setRankingPreferFlagship(Boolean(smartRankingPreferFlagship));
+    setRankingPreferNew(Boolean(smartRankingPreferNew));
+    setRankingAllowPreview(Boolean(smartRankingAllowPreview));
     setVirtualizationEnabled(Boolean(streamVirtualizationEnabled));
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
@@ -410,6 +428,9 @@ export default function SettingsModal() {
     budgetSoftLimitUsd,
     budgetAutoApproveBelowUsd,
     smartRankingMode,
+    smartRankingPreferFlagship,
+    smartRankingPreferNew,
+    smartRankingAllowPreview,
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
     cachePersistenceEnabled,
@@ -681,6 +702,7 @@ export default function SettingsModal() {
                   <option value="fast">Fastest</option>
                   <option value="cheap">Lowest Cost</option>
                   <option value="quality">Highest Quality</option>
+                  <option value="frontier">Frontier (Flagship/New)</option>
                 </select>
                 <button
                   className="settings-btn-secondary"
@@ -690,6 +712,35 @@ export default function SettingsModal() {
                   Use Top 3
                 </button>
               </div>
+              <div className="settings-smart-ranking-options">
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={rankingPreferFlagship}
+                    onChange={e => setRankingPreferFlagship(e.target.checked)}
+                  />
+                  <span>Prioritize flagship model families</span>
+                </label>
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={rankingPreferNew}
+                    onChange={e => setRankingPreferNew(e.target.checked)}
+                  />
+                  <span>Boost newly released/discovered models</span>
+                </label>
+                <label className="settings-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={rankingAllowPreview}
+                    onChange={e => setRankingAllowPreview(e.target.checked)}
+                  />
+                  <span>Include preview/beta models</span>
+                </label>
+              </div>
+              <p className="settings-hint">
+                Frontier mode emphasizes quality + recency, then reliability. Disable preview if you want more stable picks.
+              </p>
               {rankedModels.length > 0 && (
                 <div className="settings-ranked-list">
                   {rankedModels.slice(0, 6).map((item) => (

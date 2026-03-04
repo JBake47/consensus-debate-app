@@ -21,7 +21,7 @@ import {
 } from '../lib/formatTokens';
 import './DebateView.css';
 
-function WebSearchPanel({ webSearchResult }) {
+function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
   const [collapsed, setCollapsed] = useState(true);
   const { status, content, model, error, durationMs } = webSearchResult;
 
@@ -51,10 +51,25 @@ function WebSearchPanel({ webSearchResult }) {
             </>
           )}
           {status === 'error' && (
-            <span className="web-search-badge error">
-              <AlertCircle size={12} />
-              Failed
-            </span>
+            <>
+              <span className="web-search-badge error">
+                <AlertCircle size={12} />
+                Failed
+              </span>
+              {canRetry && (
+                <button
+                  className="web-search-retry-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRetry?.({ forceRefresh: e.shiftKey });
+                  }}
+                  title="Retry web search and redo from round 1 (Shift: bypass cache)"
+                >
+                  <RotateCcw size={12} />
+                  <span>Retry</span>
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -76,6 +91,7 @@ export default function DebateView({ turn, isLastTurn }) {
     retryLastTurn,
     retryStream,
     retryAllFailed,
+    retryWebSearch,
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
     debateInProgress,
@@ -191,6 +207,7 @@ export default function DebateView({ turn, isLastTurn }) {
   };
 
   const canRetryFailures = isLastTurn && !debateInProgress;
+  const canRetryWebSearch = isLastTurn && !debateInProgress;
 
   return (
     <div className="debate-turn">
@@ -255,7 +272,11 @@ export default function DebateView({ turn, isLastTurn }) {
       )}
 
       {turn.webSearchResult && (
-        <WebSearchPanel webSearchResult={turn.webSearchResult} />
+        <WebSearchPanel
+          webSearchResult={turn.webSearchResult}
+          canRetry={canRetryWebSearch}
+          onRetry={retryWebSearch}
+        />
       )}
 
       {failedStreams.length > 0 && (

@@ -64,6 +64,7 @@ export default function RoundSection({
                 retryRound(roundIndex, {
                   forceRefresh: e.shiftKey,
                   retryErroredCompleted: hasFailedStreams,
+                  redoRound: !hasFailedStreams,
                 });
               }}
               title={hasFailedStreams
