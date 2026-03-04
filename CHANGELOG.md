@@ -8,9 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Turn-level `Retry All Failed` action that retries from the earliest failed round and then re-runs continuation + synthesis
+- Persistent reliability metrics (`debate_metrics`) with sidebar visibility for success rate, first-answer latency, retry recovery, and top failing provider
+- Route diagnostics on responses (`routeInfo`) surfaced in card/thread/error UIs for provider circuit-breaker reroutes and blocked routes
+- Provider circuit-breaker tracking with temporary cooldowns and automatic fallback model routing when possible
+- In-memory short-TTL response caching for repeated model/message requests
 
 ### Changed
+- Retry controls now support force-refresh via Shift+Retry for turn, round, stream, synthesis, and retry-all actions
+- Round retry action now distinguishes `Retry Failed` vs `Redo Round` behavior in the UI
+- Debate loop now streams provisional synthesis drafts while round responses are still arriving
+- Debate progress and internals now recognize adaptive early-stop termination messaging
+- Streaming/completion execution now applies transient auto-retry with exponential backoff + jitter, plus per-provider failure accounting
 
+### Fixed
+- `UPDATE_ROUND_STREAM` now persists `routeInfo`, so routing diagnostics survive incremental stream updates
+- Individual stream retry path now consistently applies routing diagnostics, force-refresh options, and downstream continuation handling
+- Retry flow correctness for failed individual responses now consistently rebuilds debate continuation and synthesis from that round
 ## [0.3.14] - 2026-02-09
 
 ### Changed

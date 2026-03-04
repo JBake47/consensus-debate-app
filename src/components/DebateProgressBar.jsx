@@ -31,7 +31,7 @@ export default function DebateProgressBar({ rounds, debateMetadata }) {
               )}
               <div
                 className={`progress-step ${isComplete ? 'complete' : ''} ${isActive ? 'active' : ''} ${isError ? 'error' : ''}`}
-                title={`${round.label}${confidence != null ? ` — ${confidence}% confidence` : ''}`}
+                title={`${round.label}${confidence != null ? ` - ${confidence}% confidence` : ''}`}
               >
                 {isComplete && <CheckCircle2 size={14} />}
                 {isActive && <Loader2 size={14} className="spinning" />}
@@ -52,6 +52,7 @@ export default function DebateProgressBar({ rounds, debateMetadata }) {
         {debateMetadata?.terminationReason && (
           <div className="progress-termination">
             {debateMetadata.terminationReason === 'converged' && 'Models converged'}
+            {debateMetadata.terminationReason === 'adaptive_convergence' && 'Adaptive convergence stop'}
             {debateMetadata.terminationReason === 'max_rounds_reached' && 'Max rounds reached'}
             {debateMetadata.terminationReason === 'cancelled' && 'Cancelled'}
             {debateMetadata.terminationReason === 'all_models_failed' && 'All models failed'}

@@ -26,7 +26,9 @@ export default function RoundSection({
   const roundCostMeta = computeRoundCostMeta(round);
   const roundCostLabel = formatCostWithQuality(roundCostMeta);
 
-  const hasFailedStreams = streams.some(s => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming'));
+  const hasFailedStreams = streams.some(
+    (s) => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming') || Boolean(s.error),
+  );
   const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
 
   const statusIcon = {
@@ -56,10 +58,19 @@ export default function RoundSection({
           {canRetry && (
             <button
               className="round-retry-btn"
-              onClick={(e) => { e.stopPropagation(); retryRound(roundIndex); }}
-              title={hasFailedStreams ? 'Retry failed models and continue debate' : 'Redo from this round'}
+              onClick={(e) => {
+                e.stopPropagation();
+                retryRound(roundIndex, {
+                  forceRefresh: e.shiftKey,
+                  retryErroredCompleted: hasFailedStreams,
+                });
+              }}
+              title={hasFailedStreams
+                ? 'Retry failed models and continue debate (Shift: bypass cache)'
+                : 'Redo from this round (Shift: bypass cache)'}
             >
               <RotateCcw size={13} />
+              <span>{hasFailedStreams ? 'Retry Failed' : 'Redo Round'}</span>
             </button>
           )}
           {convergenceCheck && <ConvergenceBadge convergenceCheck={convergenceCheck} />}

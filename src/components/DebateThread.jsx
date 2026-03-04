@@ -17,7 +17,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   const { retryStream, debateInProgress } = useDebate();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const contentRef = useRef(null);
-  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo } = stream;
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
 
   const color = getModelColor(model);
@@ -39,6 +39,13 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
         : null,
     ].filter(Boolean).join('\n')
     : '';
+  const routeSummary = routeInfo?.routed
+    ? `Routed to ${getModelDisplayName(routeInfo.fallbackModel || model)}`
+    : routeInfo?.reason
+      ? 'Route warning'
+      : null;
+  const routeTitle = routeInfo?.reason || '';
+  const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
 
@@ -65,8 +72,8 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           {canRetry && (
             <button
               className="thread-message-retry"
-              onClick={() => retryStream(roundIndex, streamIndex)}
-              title="Retry this model"
+              onClick={(e) => retryStream(roundIndex, streamIndex, { forceRefresh: e.shiftKey })}
+              title="Retry this model (Shift: bypass cache)"
             >
               <RotateCcw size={12} />
             </button>
@@ -94,11 +101,22 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
               <span>{searchSummary}</span>
             </span>
           )}
+          {routeSummary && (
+            <span className={`thread-route-pill ${routeClass}`} title={routeTitle}>
+              <span>{routeSummary}</span>
+            </span>
+          )}
         </div>
 
         {searchEvidence?.fallbackApplied && searchEvidence.fallbackReason && (
           <div className={`thread-search-meta ${searchEvidenceClass}`}>
             Fallback: {searchEvidence.fallbackReason}
+          </div>
+        )}
+
+        {routeInfo?.reason && (
+          <div className={`thread-route-meta ${routeClass}`}>
+            {routeInfo.reason}
           </div>
         )}
 

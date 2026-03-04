@@ -171,6 +171,29 @@
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+.thread-route-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.thread-route-pill.routed {
+  color: var(--accent-blue);
+  background: rgba(79, 143, 247, 0.12);
+  border-color: rgba(79, 143, 247, 0.3);
+}
+
+.thread-route-pill.blocked {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
 .thread-search-meta {
   font-size: 11px;
   margin: 2px 0 6px;
@@ -186,6 +209,19 @@
 
 .thread-search-meta.blocked {
   color: var(--status-error);
+}
+
+.thread-route-meta {
+  font-size: 11px;
+  margin: 2px 0 6px;
+}
+
+.thread-route-meta.routed {
+  color: var(--accent-blue);
+}
+
+.thread-route-meta.blocked {
+  color: #fca5a5;
 }
 
 .thread-message-cost {

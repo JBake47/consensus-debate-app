@@ -20,7 +20,7 @@ function isReasoningModel(modelId) {
 
 export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
   const { retryStream, debateInProgress } = useDebate();
-  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo } = stream;
   const [collapsed, setCollapsed] = useState(false);
   const reasoningModel = isReasoningModel(model);
   const [reasoningCollapsed, setReasoningCollapsed] = useState(!reasoningModel);
@@ -48,6 +48,13 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
         : null,
     ].filter(Boolean).join('\n')
     : '';
+  const routeSummary = routeInfo?.routed
+    ? `Routed to ${getModelDisplayName(routeInfo.fallbackModel || model)}`
+    : routeInfo?.reason
+      ? 'Route warning'
+      : null;
+  const routeTitle = routeInfo?.reason || '';
+  const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
 
@@ -109,8 +116,11 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
           {canRetry && (
             <button
               className="model-card-retry"
-              onClick={(e) => { e.stopPropagation(); retryStream(roundIndex, streamIndex); }}
-              title="Retry this model"
+              onClick={(e) => {
+                e.stopPropagation();
+                retryStream(roundIndex, streamIndex, { forceRefresh: e.shiftKey });
+              }}
+              title="Retry this model (Shift: bypass cache)"
             >
               <RotateCcw size={13} />
             </button>
@@ -139,6 +149,11 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
               <span>{searchSummary}</span>
             </span>
           )}
+          {routeSummary && (
+            <span className={`model-card-route-pill ${routeClass}`} title={routeTitle}>
+              <span>{routeSummary}</span>
+            </span>
+          )}
           <span className={`model-card-status ${status}`}>
             {status === 'streaming' && <Loader2 size={12} className="spinning" />}
             {status === 'error' && <AlertCircle size={12} />}
@@ -159,6 +174,11 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
               {!searchEvidence.verified && searchEvidence.primaryIssue && (
                 <span>{searchEvidence.primaryIssue}</span>
               )}
+            </div>
+          )}
+          {routeInfo?.reason && (
+            <div className={`model-card-route-meta ${routeClass}`}>
+              {routeInfo.reason}
             </div>
           )}
           {reasoning && sideBySide && content ? (

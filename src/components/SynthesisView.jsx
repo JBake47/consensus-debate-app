@@ -22,6 +22,7 @@ function DebateInternals({ rounds, debateMetadata }) {
 
   const terminationLabels = {
     converged: 'Models reached consensus',
+    adaptive_convergence: 'Adaptive stop: responses stabilized',
     max_rounds_reached: 'Maximum debate rounds reached',
     all_models_failed: 'All models failed',
     cancelled: 'Debate was cancelled',
@@ -153,6 +154,7 @@ function DebateInternals({ rounds, debateMetadata }) {
 export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult }) {
   const { retrySynthesis, debateInProgress } = useDebate();
   const { model, content, status, error } = synthesis;
+  const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
   const contentRef = useRef(null);
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
@@ -186,11 +188,14 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
           {canRetry && (
             <button
               className="synthesis-retry-btn"
-              onClick={retrySynthesis}
-              title="Retry synthesis"
+              onClick={(e) => retrySynthesis({ forceRefresh: e.shiftKey })}
+              title="Retry synthesis (Shift: bypass cache)"
             >
               <RotateCcw size={13} />
             </button>
+          )}
+          {isProvisional && (
+            <div className="synthesis-meta-badge">Provisional</div>
           )}
           {debateMetadata && debateMetadata.totalRounds > 0 && (
             <div className="synthesis-meta-badge">

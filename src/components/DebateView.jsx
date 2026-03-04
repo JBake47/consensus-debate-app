@@ -71,7 +71,13 @@ function WebSearchPanel({ webSearchResult }) {
 }
 
 export default function DebateView({ turn, isLastTurn }) {
-  const { editLastTurn, retryLastTurn, debateInProgress } = useDebate();
+  const {
+    editLastTurn,
+    retryLastTurn,
+    retryStream,
+    retryAllFailed,
+    debateInProgress,
+  } = useDebate();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const [viewerAttachment, setViewerAttachment] = useState(null);
   const hasRounds = turn.rounds && turn.rounds.length > 0;
@@ -94,18 +100,61 @@ export default function DebateView({ turn, isLastTurn }) {
           streamIndex,
           model: stream.model,
           error: stream.error || 'Unknown error',
+          routeInfo: stream.routeInfo || null,
         }))
     )
     : [];
 
-  const formatError = (message) => {
-    if (!message) return 'Unknown error';
-    const lowered = message.toLowerCase();
+  const getErrorDiagnostics = (message) => {
+    if (!message) return { summary: 'Unknown error', action: null };
+    const summary = String(message);
+    const lowered = summary.toLowerCase();
     if (lowered.includes('aborted')) {
-      return 'Request aborted — check provider model IDs, API keys, or server connectivity.';
+      return {
+        summary,
+        action: 'Check provider routing, model IDs, or API keys, then retry.',
+      };
     }
-    return message;
+    if (lowered.includes('401') || lowered.includes('unauthorized') || lowered.includes('invalid key')) {
+      return {
+        summary,
+        action: 'Recheck API credentials in Settings.',
+      };
+    }
+    if (lowered.includes('402') || lowered.includes('insufficient credits')) {
+      return {
+        summary,
+        action: 'Provider credits are likely depleted. Add credits, then retry.',
+      };
+    }
+    if (lowered.includes('429') || lowered.includes('rate limit')) {
+      return {
+        summary,
+        action: 'Rate limited. Retry after a short delay or reduce parallel models.',
+      };
+    }
+    if (lowered.includes('timeout') || lowered.includes('timed out') || lowered.includes('network')) {
+      return {
+        summary,
+        action: 'Transient network issue. Retry now or use Shift+Retry to bypass cache.',
+      };
+    }
+    if (lowered.includes('model not found') || lowered.includes('404')) {
+      return {
+        summary,
+        action: 'The model may be unavailable. Pick another model in Settings.',
+      };
+    }
+    if (lowered.includes('circuit open')) {
+      return {
+        summary,
+        action: 'Provider circuit breaker is active; retry or wait for cooldown.',
+      };
+    }
+    return { summary, action: null };
   };
+
+  const canRetryFailures = isLastTurn && !debateInProgress;
 
   return (
     <div className="debate-turn">
@@ -126,8 +175,8 @@ export default function DebateView({ turn, isLastTurn }) {
                   {hasRounds && (
                     <button
                       className="user-action-btn"
-                      onClick={retryLastTurn}
-                      title="Retry this turn"
+                      onClick={(e) => retryLastTurn({ forceRefresh: e.shiftKey })}
+                      title="Retry this turn (Shift: bypass cache)"
                     >
                       <RotateCcw size={14} />
                     </button>
@@ -175,14 +224,59 @@ export default function DebateView({ turn, isLastTurn }) {
 
       {failedStreams.length > 0 && (
         <div className="turn-error-panel glass-panel">
-          <div className="turn-error-title">Some models failed</div>
+          <div className="turn-error-header">
+            <div className="turn-error-title">Some models failed</div>
+            {canRetryFailures && (
+              <button
+                className="turn-error-retry-all-btn"
+                onClick={(e) => retryAllFailed({ forceRefresh: e.shiftKey })}
+                title="Retry all failed responses from the earliest failed round (Shift: bypass cache)"
+              >
+                <RotateCcw size={12} />
+                <span>Retry All Failed</span>
+              </button>
+            )}
+          </div>
+          {canRetryFailures && (
+            <div className="turn-error-hint">Tip: hold Shift while retrying to bypass cache.</div>
+          )}
           <div className="turn-error-list">
-            {failedStreams.map((failure, idx) => (
-              <div key={`${failure.model}-${idx}`} className="turn-error-item">
-                <span className="turn-error-model">{getModelDisplayName(failure.model)}</span>
-                <span className="turn-error-message">{formatError(failure.error)}</span>
-              </div>
-            ))}
+            {failedStreams.map((failure, idx) => {
+              const diagnostics = getErrorDiagnostics(failure.error);
+              return (
+                <div key={`${failure.model}-${idx}`} className="turn-error-item">
+                  <div className="turn-error-row">
+                    <span className="turn-error-model">{getModelDisplayName(failure.model)}</span>
+                    {canRetryFailures && (
+                      <button
+                        className="turn-error-retry-btn"
+                        onClick={(e) => retryStream(
+                          failure.roundIndex,
+                          failure.streamIndex,
+                          { forceRefresh: e.shiftKey },
+                        )}
+                        title="Retry this model and rerun from this round (Shift: bypass cache)"
+                      >
+                        <RotateCcw size={12} />
+                        <span>Retry</span>
+                      </button>
+                    )}
+                  </div>
+                  <span className="turn-error-message">{diagnostics.summary}</span>
+                  {diagnostics.action && (
+                    <span className="turn-error-action">{diagnostics.action}</span>
+                  )}
+                  {failure.routeInfo?.routed && (
+                    <span className="turn-error-route">
+                      Routed to {getModelDisplayName(failure.routeInfo.fallbackModel || failure.model)}.
+                    </span>
+                  )}
+                  {failure.routeInfo?.reason && !failure.routeInfo?.routed && (
+                    <span className="turn-error-route">{failure.routeInfo.reason}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

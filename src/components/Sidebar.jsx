@@ -10,6 +10,7 @@ export default function Sidebar({ open, onClose }) {
     conversations,
     activeConversationId,
     debateInProgress,
+    metrics,
     dispatch,
   } = useDebate();
   const importInputRef = useRef(null);
@@ -49,6 +50,30 @@ export default function Sidebar({ open, onClose }) {
   );
 
   const isSearching = searchQuery.length >= 2;
+
+  const metricsSummary = useMemo(() => {
+    const callCount = Number(metrics?.callCount || 0);
+    const successCount = Number(metrics?.successCount || 0);
+    const failureCount = Number(metrics?.failureCount || 0);
+    const retryAttempts = Number(metrics?.retryAttempts || 0);
+    const retryRecovered = Number(metrics?.retryRecovered || 0);
+    const samples = Array.isArray(metrics?.firstAnswerTimes) ? metrics.firstAnswerTimes : [];
+    const avgFirstAnswerMs = samples.length > 0
+      ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length)
+      : null;
+    const providerFailures = metrics?.failureByProvider && typeof metrics.failureByProvider === 'object'
+      ? Object.entries(metrics.failureByProvider).sort((a, b) => b[1] - a[1])
+      : [];
+
+    return {
+      hasData: callCount > 0 || failureCount > 0 || retryAttempts > 0,
+      successRate: callCount > 0 ? Math.round((successCount / callCount) * 100) : null,
+      avgFirstAnswerMs,
+      retryRecovered,
+      retryAttempts,
+      topProviderFailure: providerFailures[0] || null,
+    };
+  }, [metrics]);
 
   const handleSearchResultClick = (conversationId) => {
     if (debateInProgress) return;
@@ -329,6 +354,30 @@ export default function Sidebar({ open, onClose }) {
         </div>
 
         <div className="sidebar-footer">
+          {metricsSummary.hasData && (
+            <div className="sidebar-metrics">
+              <div className="sidebar-metrics-title">Reliability</div>
+              <div className="sidebar-metrics-grid">
+                <div className="sidebar-metric">
+                  <span>Success</span>
+                  <strong>{metricsSummary.successRate != null ? `${metricsSummary.successRate}%` : '--'}</strong>
+                </div>
+                <div className="sidebar-metric">
+                  <span>First answer</span>
+                  <strong>{metricsSummary.avgFirstAnswerMs != null ? `${metricsSummary.avgFirstAnswerMs}ms` : '--'}</strong>
+                </div>
+                <div className="sidebar-metric">
+                  <span>Recovered retries</span>
+                  <strong>{metricsSummary.retryRecovered}/{metricsSummary.retryAttempts}</strong>
+                </div>
+              </div>
+              {metricsSummary.topProviderFailure && (
+                <div className="sidebar-metrics-foot">
+                  Most failures: {metricsSummary.topProviderFailure[0]} ({metricsSummary.topProviderFailure[1]})
+                </div>
+              )}
+            </div>
+          )}
           <div className="sidebar-footer-row">
             <button
               className="sidebar-footer-btn-icon"
