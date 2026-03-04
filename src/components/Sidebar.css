@@ -138,6 +138,13 @@
   color: var(--text-muted);
 }
 
+.sidebar-item-running {
+  font-size: 10px;
+  color: var(--accent-cyan);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .sidebar-item-actions {
   display: flex;
   align-items: center;
@@ -161,6 +168,16 @@
   display: flex;
   align-items: center;
   transition: all var(--transition-fast);
+}
+
+.sidebar-item-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sidebar-item-action:disabled:hover {
+  color: var(--text-muted);
+  background: none;
 }
 
 .sidebar-item-action.edit:hover {

@@ -96,7 +96,10 @@ function AppContent() {
     if (!activeConversation) return;
     const trimmed = headerTitle.trim();
     if (trimmed) {
-      dispatch({ type: 'SET_CONVERSATION_TITLE', payload: { conversationId: activeConversation.id, title: trimmed } });
+      dispatch({
+        type: 'SET_CONVERSATION_TITLE',
+        payload: { conversationId: activeConversation.id, title: trimmed, source: 'user' },
+      });
     }
     dispatch({ type: 'SET_CONVERSATION_DESCRIPTION', payload: { conversationId: activeConversation.id, description: headerDesc.trim() } });
     setEditingHeader(false);

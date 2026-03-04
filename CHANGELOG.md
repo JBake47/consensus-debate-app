@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-03-04
+
 ### Added
 - Turn-level `Retry All Failed` action that retries from the earliest failed round and then re-runs continuation + synthesis
 - Persistent reliability metrics (`debate_metrics`) with sidebar visibility for success rate, first-answer latency, retry recovery, and top failing provider
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One-click markdown share report export from both header and sidebar conversation actions
 - Retry policy test script (`npm test`) covering retry classification and backoff bounds
 - Configurable stream render throttling via `VITE_STREAM_RENDER_THROTTLE_MS` to smooth token streaming updates
+- Per-conversation run isolation so multiple chats can execute concurrently without shared abort/controller conflicts
+- First-turn auto chat naming now runs in Parallel mode by deriving title context from completed model responses
 
 ### Changed
 - Retry controls now support force-refresh via Shift+Retry for turn, round, stream, synthesis, and retry-all actions
@@ -34,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Main chat view now virtualizes older turns by default with one-click expand/collapse controls
 - Markdown and code rendering performance improved through memoized markdown parsing and lazy-loaded syntax highlighting
 - Settings modal and command palette bundles are now lazy-loaded and mounted only when opened
+- Sidebar conversation switching is now allowed while other chats are still running, with running-state labels per chat
+- Conversation title updates are now source-aware so manual renames stay locked and late auto-title responses cannot overwrite user edits
 
 ### Fixed
 - `UPDATE_ROUND_STREAM` now persists `routeInfo`, so routing diagnostics survive incremental stream updates

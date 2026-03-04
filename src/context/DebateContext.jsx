@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useCallback, useRef, useEffect } from 'react';
+import { createContext, useContext, useReducer, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   streamChat,
   chatCompletion,
@@ -41,6 +41,14 @@ const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
 const METRICS_SAMPLE_LIMIT = 120;
 const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v1';
+const TITLE_SOURCE_SEED = 'seed';
+const TITLE_SOURCE_AUTO = 'auto';
+const TITLE_SOURCE_USER = 'user';
+const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
+
+function normalizeTitleSource(value) {
+  return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
+}
 
 function createDefaultMetrics() {
   return {
@@ -174,7 +182,11 @@ function migrateTurn(turn) {
 function migrateConversations(conversations) {
   let migrated = false;
   const result = conversations.map(conv => {
-    const turns = conv.turns.map(turn => {
+    const rawTurns = Array.isArray(conv.turns) ? conv.turns : [];
+    if (!Array.isArray(conv.turns)) {
+      migrated = true;
+    }
+    const turns = rawTurns.map(turn => {
       if (!turn.rounds && turn.streams) {
         migrated = true;
         return migrateTurn(turn);
@@ -187,7 +199,34 @@ function migrateConversations(conversations) {
       migrated = true;
       updatedAt = conv.createdAt || Date.now();
     }
-    return { ...conv, turns, updatedAt };
+    const titleSource = normalizeTitleSource(conv.titleSource);
+    if (conv.titleSource !== titleSource) {
+      migrated = true;
+    }
+    const titleLocked = typeof conv.titleLocked === 'boolean'
+      ? conv.titleLocked
+      : titleSource === TITLE_SOURCE_USER;
+    if (conv.titleLocked !== titleLocked) {
+      migrated = true;
+    }
+    let titleEditedAt = null;
+    const rawTitleEditedAt = Number(conv.titleEditedAt);
+    if (Number.isFinite(rawTitleEditedAt) && rawTitleEditedAt > 0) {
+      titleEditedAt = Math.floor(rawTitleEditedAt);
+    } else if (titleLocked) {
+      titleEditedAt = updatedAt || conv.createdAt || Date.now();
+    }
+    if (conv.titleEditedAt !== titleEditedAt) {
+      migrated = true;
+    }
+    return {
+      ...conv,
+      turns,
+      updatedAt,
+      titleSource,
+      titleLocked,
+      titleEditedAt,
+    };
   });
   return { conversations: result, migrated };
 }
@@ -278,6 +317,21 @@ function toSynthesisStream(stream) {
   };
 }
 
+function buildTitleSynthesisContextFromStreams(streams) {
+  if (!Array.isArray(streams) || streams.length === 0) return '';
+  return streams
+    .filter((stream) => stream?.content)
+    .slice(0, 3)
+    .map((stream, index) => {
+      const modelName = String(stream.model || `model-${index + 1}`);
+      const snippet = String(stream.content || '').slice(0, 450).trim();
+      if (!snippet) return '';
+      return `${modelName}: ${snippet}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function toSynthesisRound(round) {
   if (!round) return null;
   const streams = (round.streams || []).map(toSynthesisStream).filter(Boolean);
@@ -342,6 +396,49 @@ function computeWordSetSimilarity(a, b) {
     if (bSet.has(token)) overlap += 1;
   }
   return overlap / Math.max(aSet.size, bSet.size);
+}
+
+function isLiveStatus(status) {
+  return status === 'streaming' || status === 'pending' || status === 'searching' || status === 'analyzing';
+}
+
+function isTurnActivelyRunning(turn) {
+  if (!turn || typeof turn !== 'object') return false;
+
+  const webSearchStatus = turn.webSearchResult?.status;
+  if (isLiveStatus(webSearchStatus)) return true;
+
+  const ensembleStatus = turn.ensembleResult?.status;
+  if (isLiveStatus(ensembleStatus)) return true;
+
+  const synthesisStatus = turn.synthesis?.status;
+  if (synthesisStatus === 'streaming') return true;
+
+  const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
+  if (rounds.length > 0) {
+    for (const round of rounds) {
+      if (isLiveStatus(round?.status)) return true;
+      const streams = Array.isArray(round?.streams) ? round.streams : [];
+      for (const stream of streams) {
+        if (isLiveStatus(stream?.status)) return true;
+      }
+    }
+  }
+
+  // Warm-up window before the first round stream begins.
+  if (synthesisStatus === 'pending' && rounds.length === 0) {
+    return true;
+  }
+
+  return false;
+}
+
+function isConversationActivelyRunning(conversation) {
+  if (!conversation || !Array.isArray(conversation.turns) || conversation.turns.length === 0) {
+    return false;
+  }
+  const lastTurn = conversation.turns[conversation.turns.length - 1];
+  return isTurnActivelyRunning(lastTurn);
 }
 
 function reducer(state, action) {
@@ -563,6 +660,9 @@ function reducer(state, action) {
       const conv = {
         id: action.payload.id,
         title: action.payload.title || 'New Debate',
+        titleSource: normalizeTitleSource(action.payload.titleSource || TITLE_SOURCE_SEED),
+        titleLocked: Boolean(action.payload.titleLocked),
+        titleEditedAt: action.payload.titleEditedAt || null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         turns: [],
@@ -688,10 +788,77 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'SET_CONVERSATION_TITLE': {
-      const { conversationId, title } = action.payload;
-      const conversations = state.conversations.map(c =>
-        c.id === conversationId ? { ...c, title } : c
-      );
+      const { conversationId, title, source, requestedAt } = action.payload || {};
+      const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+      if (!conversationId || !normalizedTitle) {
+        return state;
+      }
+
+      const normalizedSource = normalizeTitleSource(source || TITLE_SOURCE_USER);
+      const requestTs = Number.isFinite(Number(requestedAt))
+        ? Number(requestedAt)
+        : Date.now();
+      const now = Date.now();
+      let changed = false;
+
+      const conversations = state.conversations.map(c => {
+        if (c.id !== conversationId) return c;
+
+        const existingSource = normalizeTitleSource(c.titleSource);
+        const existingLocked = typeof c.titleLocked === 'boolean'
+          ? c.titleLocked
+          : existingSource === TITLE_SOURCE_USER;
+        const editedAt = Number.isFinite(Number(c.titleEditedAt))
+          ? Number(c.titleEditedAt)
+          : 0;
+
+        if (normalizedSource === TITLE_SOURCE_AUTO) {
+          if (existingLocked || existingSource === TITLE_SOURCE_USER) {
+            return c;
+          }
+          if (requestTs < editedAt) {
+            return c;
+          }
+        }
+
+        if (
+          c.title === normalizedTitle
+          && (
+            (normalizedSource === TITLE_SOURCE_USER
+              && existingSource === TITLE_SOURCE_USER
+              && existingLocked)
+            || (normalizedSource !== TITLE_SOURCE_USER
+              && existingSource === normalizedSource
+              && !existingLocked)
+          )
+        ) {
+          return c;
+        }
+
+        const nextConversation = normalizedSource === TITLE_SOURCE_USER
+          ? {
+            ...c,
+            title: normalizedTitle,
+            titleSource: TITLE_SOURCE_USER,
+            titleLocked: true,
+            titleEditedAt: now,
+            updatedAt: now,
+          }
+          : {
+            ...c,
+            title: normalizedTitle,
+            titleSource: normalizedSource,
+            titleLocked: false,
+            updatedAt: now,
+          };
+
+        changed = true;
+        return nextConversation;
+      });
+
+      if (!changed) {
+        return state;
+      }
       saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
@@ -761,6 +928,9 @@ function reducer(state, action) {
         ...sourceConversation,
         id: branchConversationId,
         title: `${sourceConversation.title || 'Debate'} (Branch R${keepCount})`,
+        titleSource: TITLE_SOURCE_SEED,
+        titleLocked: false,
+        titleEditedAt: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         parentConversationId: sourceConversation.id,
@@ -820,7 +990,7 @@ function reducer(state, action) {
 
 export function DebateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const abortControllerRef = useRef(null);
+  const abortControllersRef = useRef(new Map());
   const responseCacheRef = useRef(loadedResponseCache);
   const providerCircuitRef = useRef({});
   const metricsRef = useRef(state.metrics);
@@ -839,6 +1009,25 @@ export function DebateProvider({ children }) {
       cacheEntryCount: state.cacheEntryCount,
     };
   }, [state.cacheHitCount, state.cacheEntryCount]);
+
+  const setAbortController = useCallback((conversationId, controller) => {
+    if (!conversationId || !controller) return;
+    const existing = abortControllersRef.current.get(conversationId);
+    if (existing && existing !== controller && !existing.signal?.aborted) {
+      existing.abort();
+    }
+    abortControllersRef.current.set(conversationId, controller);
+  }, []);
+
+  const abortConversationRun = useCallback((conversationId) => {
+    if (!conversationId) return;
+    const controller = abortControllersRef.current.get(conversationId);
+    if (!controller) return;
+    if (!controller.signal?.aborted) {
+      controller.abort();
+    }
+    abortControllersRef.current.delete(conversationId);
+  }, []);
 
   const syncCacheStats = useCallback((partial = {}) => {
     const next = {
@@ -977,6 +1166,68 @@ export function DebateProvider({ children }) {
   const activeConversation = state.conversations.find(
     c => c.id === state.activeConversationId
   );
+  const runningConversationIds = useMemo(() => {
+    const ids = new Set();
+    for (const conversation of state.conversations) {
+      if (isConversationActivelyRunning(conversation)) {
+        ids.add(conversation.id);
+      }
+    }
+    return ids;
+  }, [state.conversations]);
+  const activeConversationInProgress = Boolean(
+    activeConversation?.id && runningConversationIds.has(activeConversation.id)
+  );
+  const isConversationInProgress = useCallback(
+    (conversationId) => Boolean(conversationId && runningConversationIds.has(conversationId)),
+    [runningConversationIds]
+  );
+  const requestAutoConversationTitle = useCallback(({
+    conversationId,
+    userPrompt,
+    synthesisContent,
+    apiKey,
+  }) => {
+    if (!conversationId || !userPrompt || !synthesisContent || !apiKey) return;
+
+    const requestedAt = Date.now();
+    generateTitle({
+      userPrompt,
+      synthesisContent,
+      apiKey,
+    }).then((result) => {
+      if (!result?.title) return;
+
+      dispatch({
+        type: 'SET_CONVERSATION_TITLE',
+        payload: {
+          conversationId,
+          title: result.title,
+          source: TITLE_SOURCE_AUTO,
+          requestedAt,
+        },
+      });
+
+      if (result.description) {
+        dispatch({
+          type: 'SET_CONVERSATION_DESCRIPTION',
+          payload: { conversationId, description: result.description },
+        });
+      }
+    }).catch(() => {
+      // Auto title generation failure is non-blocking.
+    });
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (abortControllersRef.current.size === 0) return;
+    for (const [conversationId, controller] of abortControllersRef.current.entries()) {
+      if (!runningConversationIds.has(conversationId) || controller?.signal?.aborted) {
+        abortControllersRef.current.delete(conversationId);
+      }
+    }
+  }, [runningConversationIds]);
+
   const retryPolicy = normalizeRetryPolicy(state.retryPolicy);
 
   /**
@@ -1851,7 +2102,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // ===== WEB SEARCH (optional) =====
     let webSearchContext = '';
@@ -2362,26 +2613,12 @@ export function DebateProvider({ children }) {
           durationMs: synthesisDurationMs,
         },
       });
-
-      // Fire-and-forget title + description generation on first turn
       if (isFirstTurn) {
-        generateTitle({
+        requestAutoConversationTitle({
+          conversationId: convId,
           userPrompt,
           synthesisContent,
           apiKey,
-        }).then(result => {
-          dispatch({
-            type: 'SET_CONVERSATION_TITLE',
-            payload: { conversationId: convId, title: result.title },
-          });
-          if (result.description) {
-            dispatch({
-              type: 'SET_CONVERSATION_DESCRIPTION',
-              payload: { conversationId: convId, description: result.description },
-            });
-          }
-        }).catch(() => {
-          // Title generation failed — not critical
         });
       }
     } catch (err) {
@@ -2400,7 +2637,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -2529,6 +2766,8 @@ export function DebateProvider({ children }) {
         : userPrompt;
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
+    const existingConversation = state.conversations.find(c => c.id === convId);
+    const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
@@ -2553,7 +2792,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // ===== WEB SEARCH (optional) =====
     let webSearchContext = '';
@@ -2731,8 +2970,20 @@ export function DebateProvider({ children }) {
       payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' } },
     });
 
+    if (isFirstTurn) {
+      const titleSynthesisContent = buildTitleSynthesisContextFromStreams(completedStreams);
+      if (titleSynthesisContent) {
+        requestAutoConversationTitle({
+          conversationId: convId,
+          userPrompt,
+          synthesisContent: titleSynthesisContent,
+          apiKey,
+        });
+      }
+    }
+
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const startDirect = useCallback(async (userPrompt, {
     webSearch = false,
@@ -2791,7 +3042,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // ===== WEB SEARCH (optional) =====
     let webSearchContext = '';
@@ -2970,39 +3221,29 @@ export function DebateProvider({ children }) {
       convId, userPrompt, completedStreams, conversationHistory,
       synthModel, convergenceModel, apiKey, abortController, focused, forceRefresh,
     });
-
-    // Generate title on first turn
-    if (synthesisContent) {
-      if (isFirstTurn) {
-        generateTitle({
-          userPrompt,
-          synthesisContent,
-          apiKey,
-        }).then(result => {
-          dispatch({
-            type: 'SET_CONVERSATION_TITLE',
-            payload: { conversationId: convId, title: result.title },
-          });
-          if (result.description) {
-            dispatch({
-              type: 'SET_CONVERSATION_DESCRIPTION',
-              payload: { conversationId: convId, description: result.description },
-            });
-          }
-        }).catch(() => {});
-      }
+    if (synthesisContent && isFirstTurn) {
+      requestAutoConversationTitle({
+        conversationId: convId,
+        userPrompt,
+        synthesisContent,
+        apiKey,
+      });
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
-  const cancelDebate = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    if (activeConversation?.turns?.length) {
-      const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+  const cancelDebate = useCallback((conversationId = null) => {
+    const targetConversationId = conversationId || activeConversation?.id || null;
+    if (!targetConversationId) return;
+
+    abortConversationRun(targetConversationId);
+
+    const targetConversation = state.conversations.find((conversation) => conversation.id === targetConversationId)
+      || (activeConversation?.id === targetConversationId ? activeConversation : null);
+
+    if (targetConversation?.turns?.length) {
+      const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
       if (lastTurn.rounds?.length) {
         const lastRoundIndex = lastTurn.rounds.length - 1;
         const lastRound = lastTurn.rounds[lastRoundIndex];
@@ -3013,7 +3254,7 @@ export function DebateProvider({ children }) {
           dispatch({
             type: 'UPDATE_ROUND_STATUS',
             payload: {
-              conversationId: activeConversation.id,
+              conversationId: targetConversationId,
               roundIndex: lastRoundIndex,
               status: 'error',
             },
@@ -3025,7 +3266,7 @@ export function DebateProvider({ children }) {
           dispatch({
             type: 'UPDATE_ROUND_STREAM',
             payload: {
-              conversationId: activeConversation.id,
+              conversationId: targetConversationId,
               roundIndex: lastRoundIndex,
               streamIndex,
               content: stream.content || '',
@@ -3036,11 +3277,11 @@ export function DebateProvider({ children }) {
           });
         });
       }
-      if (lastTurn.synthesis?.status === 'streaming') {
+      if (lastTurn.synthesis?.status === 'streaming' || lastTurn.synthesis?.status === 'pending') {
         dispatch({
           type: 'UPDATE_SYNTHESIS',
           payload: {
-            conversationId: activeConversation.id,
+            conversationId: targetConversationId,
             model: lastTurn.synthesis.model || state.synthesizerModel,
             content: lastTurn.synthesis.content || '',
             status: 'error',
@@ -3054,7 +3295,7 @@ export function DebateProvider({ children }) {
         dispatch({
           type: 'SET_ENSEMBLE_RESULT',
           payload: {
-            conversationId: activeConversation.id,
+            conversationId: targetConversationId,
             ensembleResult: {
               ...lastTurn.ensembleResult,
               status: 'error',
@@ -3065,7 +3306,7 @@ export function DebateProvider({ children }) {
       }
     }
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, dispatch, state.synthesizerModel]);
+  }, [activeConversation, abortConversationRun, dispatch, state.conversations, state.synthesizerModel]);
 
   const editLastTurn = useCallback(() => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -3131,7 +3372,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
     const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
@@ -3189,7 +3430,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode, setAbortController]);
 
   const branchFromRound = useCallback((roundIndex) => {
     if (!activeConversation || !activeConversation.id) return;
@@ -3229,7 +3470,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'RESET_SYNTHESIS', payload: { conversationId: convId, model: synthModel } });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
     const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
@@ -3964,7 +4205,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -4016,7 +4257,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'RESET_SYNTHESIS', payload: { conversationId: convId, model: synthModel } });
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
     const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
@@ -4473,11 +4714,14 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
 
   const value = {
     ...state,
     activeConversation,
+    debateInProgress: activeConversationInProgress,
+    activeConversationInProgress,
+    isConversationInProgress,
     dispatch,
     startDebate,
     startDirect,

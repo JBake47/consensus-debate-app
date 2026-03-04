@@ -10,7 +10,7 @@ export default function Sidebar({ open, onClose }) {
   const {
     conversations,
     activeConversationId,
-    debateInProgress,
+    isConversationInProgress,
     metrics,
     dispatch,
   } = useDebate();
@@ -77,7 +77,6 @@ export default function Sidebar({ open, onClose }) {
   }, [metrics]);
 
   const handleSearchResultClick = (conversationId) => {
-    if (debateInProgress) return;
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: conversationId });
     setSearchQuery('');
   };
@@ -87,7 +86,6 @@ export default function Sidebar({ open, onClose }) {
   };
 
   const handleSelect = (id) => {
-    if (debateInProgress) return;
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: id });
   };
 
@@ -121,7 +119,10 @@ export default function Sidebar({ open, onClose }) {
   const saveEdit = (convId) => {
     const trimmed = editTitle.trim();
     if (trimmed) {
-      dispatch({ type: 'SET_CONVERSATION_TITLE', payload: { conversationId: convId, title: trimmed } });
+      dispatch({
+        type: 'SET_CONVERSATION_TITLE',
+        payload: { conversationId: convId, title: trimmed, source: 'user' },
+      });
     }
     dispatch({ type: 'SET_CONVERSATION_DESCRIPTION', payload: { conversationId: convId, description: editDesc.trim() } });
     setEditingId(null);
@@ -271,98 +272,105 @@ export default function Sidebar({ open, onClose }) {
               <p>No debates yet</p>
             </div>
           ) : (
-            sortedConversations.map(conv => (
-              <div
-                key={conv.id}
-                className={`sidebar-item ${conv.id === activeConversationId ? 'active' : ''}`}
-                onClick={() => editingId !== conv.id && handleSelect(conv.id)}
-              >
-                <MessageSquare size={14} />
-                {editingId === conv.id ? (
-                  <div className="sidebar-item-text sidebar-edit-form" onClick={e => e.stopPropagation()}>
-                    <input
-                      ref={editTitleRef}
-                      className="sidebar-edit-input sidebar-edit-title"
-                      value={editTitle}
-                      onChange={e => setEditTitle(e.target.value)}
-                      onKeyDown={e => handleEditKeyDown(e, conv.id)}
-                      placeholder="Title"
-                    />
-                    <input
-                      className="sidebar-edit-input sidebar-edit-desc"
-                      value={editDesc}
-                      onChange={e => setEditDesc(e.target.value)}
-                      onKeyDown={e => handleEditKeyDown(e, conv.id)}
-                      placeholder="Short description (optional)"
-                    />
-                    <div className="sidebar-edit-actions">
-                      <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} title="Save">
-                        <Check size={12} />
-                      </button>
-                      <button className="sidebar-edit-btn cancel" onClick={cancelEdit} title="Cancel">
-                        <X size={12} />
-                      </button>
+            sortedConversations.map(conv => {
+              const conversationRunning = Boolean(isConversationInProgress?.(conv.id));
+              return (
+                <div
+                  key={conv.id}
+                  className={`sidebar-item ${conv.id === activeConversationId ? 'active' : ''} ${conversationRunning ? 'in-progress' : ''}`}
+                  onClick={() => editingId !== conv.id && handleSelect(conv.id)}
+                >
+                  <MessageSquare size={14} />
+                  {editingId === conv.id ? (
+                    <div className="sidebar-item-text sidebar-edit-form" onClick={e => e.stopPropagation()}>
+                      <input
+                        ref={editTitleRef}
+                        className="sidebar-edit-input sidebar-edit-title"
+                        value={editTitle}
+                        onChange={e => setEditTitle(e.target.value)}
+                        onKeyDown={e => handleEditKeyDown(e, conv.id)}
+                        placeholder="Title"
+                      />
+                      <input
+                        className="sidebar-edit-input sidebar-edit-desc"
+                        value={editDesc}
+                        onChange={e => setEditDesc(e.target.value)}
+                        onKeyDown={e => handleEditKeyDown(e, conv.id)}
+                        placeholder="Short description (optional)"
+                      />
+                      <div className="sidebar-edit-actions">
+                        <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} title="Save">
+                          <Check size={12} />
+                        </button>
+                        <button className="sidebar-edit-btn cancel" onClick={cancelEdit} title="Cancel">
+                          <X size={12} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="sidebar-item-text">
-                    <span className="sidebar-item-title">{conv.title}</span>
-                    {conv.description && (
-                      <span className="sidebar-item-desc">{conv.description}</span>
-                    )}
-                    <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
-                  </div>
-                )}
-                <div className="sidebar-item-actions">
-                  {editingId !== conv.id && (
-                    <button
-                      className="sidebar-item-action edit"
-                      onClick={e => startEditing(e, conv)}
-                      title="Edit title"
-                    >
-                      <Pencil size={12} />
-                    </button>
+                  ) : (
+                    <div className="sidebar-item-text">
+                      <span className="sidebar-item-title">{conv.title}</span>
+                      {conv.description && (
+                        <span className="sidebar-item-desc">{conv.description}</span>
+                      )}
+                      <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
+                      {conversationRunning && (
+                        <span className="sidebar-item-running">Running...</span>
+                      )}
+                    </div>
                   )}
-                  <button
-                    className="sidebar-item-action share"
-                    onClick={e => handleShareReport(e, conv)}
-                    title="Export share report"
-                  >
-                    <Share2 size={12} />
-                  </button>
-                  <button
-                    className="sidebar-item-action export"
-                    onClick={e => handleExportOne(e, conv)}
-                    title="Export chat"
-                  >
-                    <Download size={12} />
-                  </button>
-                  <button
-                    className="sidebar-item-action delete"
-                    onClick={e => handleDelete(e, conv)}
-                    title="Delete"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-                {deleteTarget?.id === conv.id && (
-                  <div className="sidebar-inline-confirm" onClick={(e) => e.stopPropagation()}>
-                    <div className="sidebar-inline-confirm-title">Delete chat?</div>
-                    <div className="sidebar-inline-confirm-meta">
-                      {conv.title || 'Untitled chat'}
-                    </div>
-                    <div className="sidebar-inline-confirm-actions">
-                      <button className="sidebar-inline-confirm-btn ghost" onClick={closeDeleteModal}>
-                        Cancel
+                  <div className="sidebar-item-actions">
+                    {editingId !== conv.id && (
+                      <button
+                        className="sidebar-item-action edit"
+                        onClick={e => startEditing(e, conv)}
+                        title="Edit title"
+                      >
+                        <Pencil size={12} />
                       </button>
-                      <button className="sidebar-inline-confirm-btn danger" onClick={confirmDelete}>
-                        Delete
-                      </button>
-                    </div>
+                    )}
+                    <button
+                      className="sidebar-item-action share"
+                      onClick={e => handleShareReport(e, conv)}
+                      title="Export share report"
+                    >
+                      <Share2 size={12} />
+                    </button>
+                    <button
+                      className="sidebar-item-action export"
+                      onClick={e => handleExportOne(e, conv)}
+                      title="Export chat"
+                    >
+                      <Download size={12} />
+                    </button>
+                    <button
+                      className="sidebar-item-action delete"
+                      onClick={e => handleDelete(e, conv)}
+                      title={conversationRunning ? 'Stop this chat before deleting' : 'Delete'}
+                      disabled={conversationRunning}
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
-                )}
-              </div>
-            ))
+                  {deleteTarget?.id === conv.id && (
+                    <div className="sidebar-inline-confirm" onClick={(e) => e.stopPropagation()}>
+                      <div className="sidebar-inline-confirm-title">Delete chat?</div>
+                      <div className="sidebar-inline-confirm-meta">
+                        {conv.title || 'Untitled chat'}
+                      </div>
+                      <div className="sidebar-inline-confirm-actions">
+                        <button className="sidebar-inline-confirm-btn ghost" onClick={closeDeleteModal}>
+                          Cancel
+                        </button>
+                        <button className="sidebar-inline-confirm-btn danger" onClick={confirmDelete}>
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
 
