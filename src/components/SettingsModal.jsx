@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe } from 'lucide-react';
+import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
@@ -8,6 +8,8 @@ import {
   DEFAULT_MAX_DEBATE_ROUNDS,
   DEFAULT_WEB_SEARCH_MODEL,
 } from '../lib/openrouter';
+import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
+import { rankModels } from '../lib/modelRanking';
 import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
 
@@ -15,7 +17,10 @@ export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch,
-    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, dispatch,
+    retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
+    smartRankingMode, streamVirtualizationEnabled, streamVirtualizationKeepLatest,
+    cachePersistenceEnabled, cacheHitCount, cacheEntryCount,
+    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, clearResponseCache, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
@@ -24,6 +29,18 @@ export default function SettingsModal() {
   const [maxRounds, setMaxRounds] = useState(maxDebateRounds);
   const [searchModel, setSearchModel] = useState(webSearchModel);
   const [strictSearch, setStrictSearch] = useState(strictWebSearch);
+  const [retryMaxAttempts, setRetryMaxAttempts] = useState(retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts);
+  const [retryBaseDelayMs, setRetryBaseDelayMs] = useState(retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs);
+  const [retryMaxDelayMs, setRetryMaxDelayMs] = useState(retryPolicy?.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs);
+  const [circuitFailureThreshold, setCircuitFailureThreshold] = useState(retryPolicy?.circuitFailureThreshold ?? DEFAULT_RETRY_POLICY.circuitFailureThreshold);
+  const [circuitCooldownMs, setCircuitCooldownMs] = useState(retryPolicy?.circuitCooldownMs ?? DEFAULT_RETRY_POLICY.circuitCooldownMs);
+  const [budgetEnabled, setBudgetEnabled] = useState(Boolean(budgetGuardrailsEnabled));
+  const [budgetSoftLimit, setBudgetSoftLimit] = useState(Number(budgetSoftLimitUsd || 0));
+  const [budgetAutoApprove, setBudgetAutoApprove] = useState(Number(budgetAutoApproveBelowUsd || 0));
+  const [rankingMode, setRankingMode] = useState(smartRankingMode || 'balanced');
+  const [virtualizationEnabled, setVirtualizationEnabled] = useState(Boolean(streamVirtualizationEnabled));
+  const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
+  const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
@@ -106,6 +123,23 @@ export default function SettingsModal() {
     dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
     dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearch || searchModel.trim() });
     dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
+    dispatch({
+      type: 'SET_RETRY_POLICY',
+      payload: {
+        maxAttempts: retryMaxAttempts,
+        baseDelayMs: retryBaseDelayMs,
+        maxDelayMs: retryMaxDelayMs,
+        circuitFailureThreshold,
+        circuitCooldownMs,
+      },
+    });
+    dispatch({ type: 'SET_BUDGET_GUARDRAILS_ENABLED', payload: budgetEnabled });
+    dispatch({ type: 'SET_BUDGET_SOFT_LIMIT_USD', payload: budgetSoftLimit });
+    dispatch({ type: 'SET_BUDGET_AUTO_APPROVE_BELOW_USD', payload: budgetAutoApprove });
+    dispatch({ type: 'SET_SMART_RANKING_MODE', payload: rankingMode });
+    dispatch({ type: 'SET_STREAM_VIRTUALIZATION_ENABLED', payload: virtualizationEnabled });
+    dispatch({ type: 'SET_STREAM_VIRTUALIZATION_KEEP_LATEST', payload: virtualizationKeepLatest });
+    dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -152,6 +186,15 @@ export default function SettingsModal() {
   }, [modelCatalog, modelCatalogStatus]);
 
   const providerModelOptions = getProviderModelOptions(newModelProvider);
+  const rankedModels = useMemo(
+    () => rankModels({
+      modelCatalog,
+      metrics,
+      preferredMode: rankingMode,
+      limit: 8,
+    }),
+    [modelCatalog, metrics, rankingMode]
+  );
   const editingPreset = useMemo(
     () => modelPresets.find(p => p.id === editingPresetId) || null,
     [modelPresets, editingPresetId]
@@ -230,6 +273,14 @@ export default function SettingsModal() {
     setModels(models.filter((_, i) => i !== index));
   };
 
+  const applyRankedTopModels = (count = 3) => {
+    if (!Array.isArray(rankedModels) || rankedModels.length === 0) return;
+    const top = rankedModels.slice(0, Math.max(1, count)).map((entry) => entry.modelId);
+    if (top.length > 0) {
+      setModels(top);
+    }
+  };
+
   const savePreset = () => {
     const nameValue = editingPresetId ? (presetName.trim() || editingPreset?.name || '') : presetName;
     const payload = buildPresetPayload(nameValue);
@@ -304,6 +355,18 @@ export default function SettingsModal() {
     setMaxRounds(DEFAULT_MAX_DEBATE_ROUNDS);
     setSearchModel(DEFAULT_WEB_SEARCH_MODEL);
     setStrictSearch(false);
+    setRetryMaxAttempts(DEFAULT_RETRY_POLICY.maxAttempts);
+    setRetryBaseDelayMs(DEFAULT_RETRY_POLICY.baseDelayMs);
+    setRetryMaxDelayMs(DEFAULT_RETRY_POLICY.maxDelayMs);
+    setCircuitFailureThreshold(DEFAULT_RETRY_POLICY.circuitFailureThreshold);
+    setCircuitCooldownMs(DEFAULT_RETRY_POLICY.circuitCooldownMs);
+    setBudgetEnabled(false);
+    setBudgetSoftLimit(1.5);
+    setBudgetAutoApprove(0.5);
+    setRankingMode('balanced');
+    setVirtualizationEnabled(true);
+    setVirtualizationKeepLatest(4);
+    setCachePersistence(true);
   };
 
   useEffect(() => {
@@ -315,13 +378,43 @@ export default function SettingsModal() {
     setMaxRounds(maxDebateRounds);
     setSearchModel(webSearchModel);
     setStrictSearch(strictWebSearch);
+    setRetryMaxAttempts(retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts);
+    setRetryBaseDelayMs(retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs);
+    setRetryMaxDelayMs(retryPolicy?.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs);
+    setCircuitFailureThreshold(retryPolicy?.circuitFailureThreshold ?? DEFAULT_RETRY_POLICY.circuitFailureThreshold);
+    setCircuitCooldownMs(retryPolicy?.circuitCooldownMs ?? DEFAULT_RETRY_POLICY.circuitCooldownMs);
+    setBudgetEnabled(Boolean(budgetGuardrailsEnabled));
+    setBudgetSoftLimit(Number(budgetSoftLimitUsd || 0));
+    setBudgetAutoApprove(Number(budgetAutoApproveBelowUsd || 0));
+    setRankingMode(smartRankingMode || 'balanced');
+    setVirtualizationEnabled(Boolean(streamVirtualizationEnabled));
+    setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
+    setCachePersistence(Boolean(cachePersistenceEnabled));
     setRememberKey(rememberApiKey);
     setPresetName('');
     setEditingPresetId(null);
     setSynthProvider(getDirectProviderFromValue(synthesizerModel));
     setConvProvider(getDirectProviderFromValue(convergenceModel));
     setSearchProvider(getDirectProviderFromValue(webSearchModel));
-  }, [showSettings, apiKey, selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel, strictWebSearch, rememberApiKey]);
+  }, [
+    showSettings,
+    apiKey,
+    selectedModels,
+    synthesizerModel,
+    convergenceModel,
+    maxDebateRounds,
+    webSearchModel,
+    strictWebSearch,
+    retryPolicy,
+    budgetGuardrailsEnabled,
+    budgetSoftLimitUsd,
+    budgetAutoApproveBelowUsd,
+    smartRankingMode,
+    streamVirtualizationEnabled,
+    streamVirtualizationKeepLatest,
+    cachePersistenceEnabled,
+    rememberApiKey,
+  ]);
 
   if (!showSettings) return null;
 
@@ -573,6 +666,47 @@ export default function SettingsModal() {
             <p className="settings-hint">
               Examples: <code>anthropic:claude-3.7-sonnet</code>, <code>openai:gpt-4.1</code>, <code>gemini:gemini-2.5-flash</code>.
             </p>
+            <div className="settings-smart-ranking">
+              <label className="settings-label settings-sub-label">
+                <Wand2 size={13} />
+                <span>Smart Ranking</span>
+              </label>
+              <div className="model-add-row">
+                <select
+                  className="settings-input settings-select"
+                  value={rankingMode}
+                  onChange={e => setRankingMode(e.target.value)}
+                >
+                  <option value="balanced">Balanced</option>
+                  <option value="fast">Fastest</option>
+                  <option value="cheap">Lowest Cost</option>
+                  <option value="quality">Highest Quality</option>
+                </select>
+                <button
+                  className="settings-btn-secondary"
+                  onClick={() => applyRankedTopModels(3)}
+                  disabled={rankedModels.length === 0}
+                >
+                  Use Top 3
+                </button>
+              </div>
+              {rankedModels.length > 0 && (
+                <div className="settings-ranked-list">
+                  {rankedModels.slice(0, 6).map((item) => (
+                    <button
+                      key={item.modelId}
+                      className="settings-ranked-item"
+                      onClick={() => addModelId(item.modelId)}
+                      disabled={models.includes(item.modelId)}
+                      title={models.includes(item.modelId) ? 'Already selected' : `Score ${item.score}`}
+                    >
+                      <span>{item.modelId}</span>
+                      <span>{item.score}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {providerStatusState === 'error' && (
               <p className="settings-hint">
                 Provider status unavailable: {providerStatusError || 'check the backend'}.
@@ -717,6 +851,168 @@ export default function SettingsModal() {
             </p>
           </div>
 
+          <div className="settings-section">
+            <label className="settings-label">
+              <Shield size={14} />
+              <span>Retry & Resilience</span>
+            </label>
+            <div className="settings-grid-compact">
+              <label className="settings-inline-field">
+                <span>Max attempts</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={6}
+                  className="settings-input"
+                  value={retryMaxAttempts}
+                  onChange={e => setRetryMaxAttempts(Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-inline-field">
+                <span>Base delay (ms)</span>
+                <input
+                  type="number"
+                  min={100}
+                  max={10000}
+                  step={100}
+                  className="settings-input"
+                  value={retryBaseDelayMs}
+                  onChange={e => setRetryBaseDelayMs(Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-inline-field">
+                <span>Max delay (ms)</span>
+                <input
+                  type="number"
+                  min={retryBaseDelayMs || 100}
+                  max={30000}
+                  step={100}
+                  className="settings-input"
+                  value={retryMaxDelayMs}
+                  onChange={e => setRetryMaxDelayMs(Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-inline-field">
+                <span>Circuit failures</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  className="settings-input"
+                  value={circuitFailureThreshold}
+                  onChange={e => setCircuitFailureThreshold(Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-inline-field">
+                <span>Cooldown (ms)</span>
+                <input
+                  type="number"
+                  min={5000}
+                  max={600000}
+                  step={1000}
+                  className="settings-input"
+                  value={circuitCooldownMs}
+                  onChange={e => setCircuitCooldownMs(Number(e.target.value))}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <DollarSign size={14} />
+              <span>Budget Guardrails</span>
+            </label>
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={budgetEnabled}
+                onChange={e => setBudgetEnabled(e.target.checked)}
+              />
+              <span>Require confirmation for expensive prompts</span>
+            </label>
+            <div className="settings-grid-compact">
+              <label className="settings-inline-field">
+                <span>Soft limit (USD)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.05}
+                  className="settings-input"
+                  value={budgetSoftLimit}
+                  onChange={e => setBudgetSoftLimit(Number(e.target.value))}
+                  disabled={!budgetEnabled}
+                />
+              </label>
+              <label className="settings-inline-field">
+                <span>Auto-approve below</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.05}
+                  className="settings-input"
+                  value={budgetAutoApprove}
+                  onChange={e => setBudgetAutoApprove(Number(e.target.value))}
+                  disabled={!budgetEnabled}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <Gauge size={14} />
+              <span>Performance</span>
+            </label>
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={virtualizationEnabled}
+                onChange={e => setVirtualizationEnabled(e.target.checked)}
+              />
+              <span>Virtualize older rounds for faster rendering</span>
+            </label>
+            <label className="settings-inline-field">
+              <span>Keep latest rounds</span>
+              <input
+                type="number"
+                min={2}
+                max={12}
+                className="settings-input"
+                value={virtualizationKeepLatest}
+                onChange={e => setVirtualizationKeepLatest(Number(e.target.value))}
+                disabled={!virtualizationEnabled}
+              />
+            </label>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <Database size={14} />
+              <span>Response Cache</span>
+            </label>
+            <label className="settings-checkbox">
+              <input
+                type="checkbox"
+                checked={cachePersistence}
+                onChange={e => setCachePersistence(e.target.checked)}
+              />
+              <span>Persist cache across app restarts</span>
+            </label>
+            <div className="settings-cache-row">
+              <span className="settings-hint">
+                Hits: <strong>{cacheHitCount}</strong> · Entries: <strong>{cacheEntryCount}</strong>
+              </span>
+              <button
+                className="settings-btn-secondary"
+                onClick={clearResponseCache}
+                type="button"
+              >
+                Clear Cache
+              </button>
+            </div>
+          </div>
+
           <div className="settings-divider" />
 
           <div className="settings-section">
@@ -737,8 +1033,8 @@ export default function SettingsModal() {
             </div>
             <p className="settings-hint">
               {maxRounds === 1
-                ? 'Single round — models respond once, then synthesis.'
-                : `Up to ${maxRounds} rounds — models debate and refine positions.`}
+                ? 'Single round - models respond once, then synthesis.'
+                : `Up to ${maxRounds} rounds - models debate and refine positions.`}
             </p>
           </div>
         </div>

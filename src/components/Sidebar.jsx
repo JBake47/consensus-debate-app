@@ -1,8 +1,9 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check } from 'lucide-react';
+import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2 } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { searchConversations } from '../lib/searchConversations';
+import { exportConversationReport } from '../lib/reportExport';
 import './Sidebar.css';
 
 export default function Sidebar({ open, onClose }) {
@@ -166,6 +167,11 @@ export default function Sidebar({ open, onClose }) {
     );
   };
 
+  const handleShareReport = (e, conv) => {
+    e.stopPropagation();
+    exportConversationReport(conv);
+  };
+
   const handleImport = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -317,6 +323,13 @@ export default function Sidebar({ open, onClose }) {
                       <Pencil size={12} />
                     </button>
                   )}
+                  <button
+                    className="sidebar-item-action share"
+                    onClick={e => handleShareReport(e, conv)}
+                    title="Export share report"
+                  >
+                    <Share2 size={12} />
+                  </button>
                   <button
                     className="sidebar-item-action export"
                     onClick={e => handleExportOne(e, conv)}

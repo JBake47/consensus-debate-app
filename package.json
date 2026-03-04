@@ -8,7 +8,8 @@
     "server": "node server/index.js",
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node src/lib/retryPolicy.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

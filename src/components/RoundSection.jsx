@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Loader2, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, CheckCircle2, AlertCircle, RotateCcw, GitBranchPlus } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import ModelCard from './ModelCard';
 import ConvergenceBadge from './ConvergenceBadge';
@@ -20,7 +20,7 @@ export default function RoundSection({
   allowRoundRetry = allowRetry,
   allowStreamRetry = allowRetry,
 }) {
-  const { retryRound, debateInProgress } = useDebate();
+  const { retryRound, branchFromRound, debateInProgress } = useDebate();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
   const roundCostMeta = computeRoundCostMeta(round);
@@ -30,6 +30,7 @@ export default function RoundSection({
     (s) => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming') || Boolean(s.error),
   );
   const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
+  const canBranch = isLastTurn && !debateInProgress && status !== 'streaming' && status !== 'pending';
 
   const statusIcon = {
     pending: null,
@@ -71,6 +72,19 @@ export default function RoundSection({
             >
               <RotateCcw size={13} />
               <span>{hasFailedStreams ? 'Retry Failed' : 'Redo Round'}</span>
+            </button>
+          )}
+          {canBranch && (
+            <button
+              className="round-branch-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                branchFromRound(roundIndex);
+              }}
+              title="Create a new branch from this round"
+            >
+              <GitBranchPlus size={13} />
+              <span>Branch</span>
             </button>
           )}
           {convergenceCheck && <ConvergenceBadge convergenceCheck={convergenceCheck} />}

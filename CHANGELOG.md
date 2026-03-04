@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route diagnostics on responses (`routeInfo`) surfaced in card/thread/error UIs for provider circuit-breaker reroutes and blocked routes
 - Provider circuit-breaker tracking with temporary cooldowns and automatic fallback model routing when possible
 - In-memory short-TTL response caching for repeated model/message requests
+- Settings controls for retry policy tuning (attempt count, backoff windows, circuit-breaker thresholds/cooldowns)
+- Budget guardrail UX with pre-send cost estimate and explicit confirmation for high-cost runs
+- Smart model ranking panel in Settings with mode-aware recommendations and one-click top-model apply
+- Persistent response cache storage with live hit/entry counters, cache-hit badges, and clear-cache actions
+- Citation inspectors for model and synthesis outputs with extracted source link lists
+- Round branching action to create checkpointed conversation branches from any completed round
+- Command palette (`Ctrl/Cmd+K` or `/`) with global app actions and shortcuts
+- One-click markdown share report export from both header and sidebar conversation actions
+- Retry policy test script (`npm test`) covering retry classification and backoff bounds
+- Configurable stream render throttling via `VITE_STREAM_RENDER_THROTTLE_MS` to smooth token streaming updates
 
 ### Changed
 - Retry controls now support force-refresh via Shift+Retry for turn, round, stream, synthesis, and retry-all actions
@@ -20,11 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debate loop now streams provisional synthesis drafts while round responses are still arriving
 - Debate progress and internals now recognize adaptive early-stop termination messaging
 - Streaming/completion execution now applies transient auto-retry with exponential backoff + jitter, plus per-provider failure accounting
+- Debate card rendering now supports configurable round virtualization to keep long debates responsive
+- Main chat view now virtualizes older turns by default with one-click expand/collapse controls
+- Markdown and code rendering performance improved through memoized markdown parsing and lazy-loaded syntax highlighting
+- Settings modal and command palette bundles are now lazy-loaded and mounted only when opened
 
 ### Fixed
 - `UPDATE_ROUND_STREAM` now persists `routeInfo`, so routing diagnostics survive incremental stream updates
 - Individual stream retry path now consistently applies routing diagnostics, force-refresh options, and downstream continuation handling
 - Retry flow correctness for failed individual responses now consistently rebuilds debate continuation and synthesis from that round
+
 ## [0.3.14] - 2026-02-09
 
 ### Changed

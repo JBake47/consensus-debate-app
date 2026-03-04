@@ -1,10 +1,11 @@
 import { useRef, useEffect, useState } from 'react';
-import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye, Link2 } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
+import { extractCitations } from '../lib/citationInspector';
 import {
   aggregateCostMetas,
   computeRoundCostMeta,
@@ -156,9 +157,11 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
   const { model, content, status, error } = synthesis;
   const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
+  const [citationsExpanded, setCitationsExpanded] = useState(false);
   const contentRef = useRef(null);
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
   const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
+  const synthesisCitations = extractCitations(content);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -266,6 +269,36 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
           </div>
         )}
       </div>
+
+      {status === 'complete' && synthesisCitations.length > 0 && (
+        <div className="synthesis-citations">
+          <button
+            className="synthesis-citations-toggle"
+            onClick={() => setCitationsExpanded((open) => !open)}
+            type="button"
+          >
+            <Link2 size={12} />
+            <span>Citations ({synthesisCitations.length})</span>
+            {citationsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+          {citationsExpanded && (
+            <div className="synthesis-citations-list">
+              {synthesisCitations.map((citation) => (
+                <a
+                  key={citation.url}
+                  href={citation.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="synthesis-citation-link"
+                >
+                  <span>{citation.label || citation.domain || citation.url}</span>
+                  {citation.domain && <span>{citation.domain}</span>}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {status === 'complete' && rounds && (
         <DebateInternals rounds={rounds} debateMetadata={debateMetadata} />

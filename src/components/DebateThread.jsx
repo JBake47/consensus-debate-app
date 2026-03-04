@@ -17,7 +17,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   const { retryStream, debateInProgress } = useDebate();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const contentRef = useRef(null);
-  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
 
   const color = getModelColor(model);
@@ -104,6 +104,11 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           {routeSummary && (
             <span className={`thread-route-pill ${routeClass}`} title={routeTitle}>
               <span>{routeSummary}</span>
+            </span>
+          )}
+          {cacheHit && (
+            <span className="thread-cache-pill" title="Served from local response cache">
+              Cache hit
             </span>
           )}
         </div>

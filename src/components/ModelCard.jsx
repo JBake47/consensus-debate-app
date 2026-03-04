@@ -1,9 +1,10 @@
-import { useRef, useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe } from 'lucide-react';
+import { useRef, useEffect, useState, useMemo } from 'react';
+import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe, Link2 } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
+import { extractCitations } from '../lib/citationInspector';
 import {
   formatTokenCount,
   formatDuration,
@@ -20,11 +21,12 @@ function isReasoningModel(modelId) {
 
 export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
   const { retryStream, debateInProgress } = useDebate();
-  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo } = stream;
+  const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
   const [collapsed, setCollapsed] = useState(false);
   const reasoningModel = isReasoningModel(model);
   const [reasoningCollapsed, setReasoningCollapsed] = useState(!reasoningModel);
   const [sideBySide, setSideBySide] = useState(reasoningModel);
+  const [citationExpanded, setCitationExpanded] = useState(false);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
@@ -57,6 +59,10 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
+  const citations = useMemo(
+    () => extractCitations(content, searchEvidence?.urls || []),
+    [content, searchEvidence?.urls]
+  );
 
   // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
@@ -154,6 +160,11 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
               <span>{routeSummary}</span>
             </span>
           )}
+          {cacheHit && (
+            <span className="model-card-cache-pill" title="Served from local response cache">
+              Cache hit
+            </span>
+          )}
           <span className={`model-card-status ${status}`}>
             {status === 'streaming' && <Loader2 size={12} className="spinning" />}
             {status === 'error' && <AlertCircle size={12} />}
@@ -179,6 +190,35 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
           {routeInfo?.reason && (
             <div className={`model-card-route-meta ${routeClass}`}>
               {routeInfo.reason}
+            </div>
+          )}
+          {citations.length > 0 && (
+            <div className="model-card-citations">
+              <button
+                className="model-card-citations-toggle"
+                onClick={() => setCitationExpanded((open) => !open)}
+                type="button"
+              >
+                <Link2 size={12} />
+                <span>Citations ({citations.length})</span>
+                {citationExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+              {citationExpanded && (
+                <div className="model-card-citations-list">
+                  {citations.map((citation) => (
+                    <a
+                      key={citation.url}
+                      href={citation.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="model-card-citation-link"
+                    >
+                      <span>{citation.label || citation.domain || citation.url}</span>
+                      {citation.domain && <span className="model-card-citation-domain">{citation.domain}</span>}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {reasoning && sideBySide && content ? (

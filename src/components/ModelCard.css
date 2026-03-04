@@ -206,6 +206,18 @@
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+.model-card-cache-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  color: var(--accent-green);
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.32);
+  white-space: nowrap;
+}
+
 .model-card-search-meta {
   display: flex;
   flex-wrap: wrap;
@@ -240,6 +252,61 @@
 
 .model-card-route-meta.blocked {
   color: #fca5a5;
+}
+
+.model-card-citations {
+  padding: 4px var(--space-md) 0;
+}
+
+.model-card-citations-toggle {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.model-card-citations-toggle:hover {
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.model-card-citations-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-card-citation-link {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  font-size: 11px;
+  color: var(--accent-blue);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  text-decoration: none;
+}
+
+.model-card-citation-link:hover {
+  border-color: rgba(79, 143, 247, 0.45);
+  color: #93c5fd;
+}
+
+.model-card-citation-domain {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .spinning {

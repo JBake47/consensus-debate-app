@@ -48,6 +48,35 @@
   margin: var(--space-xs) var(--space-xs) 0;
 }
 
+.budget-confirm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  border-radius: var(--radius-sm);
+}
+
+.budget-confirm-copy {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.budget-confirm-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.budget-confirm-actions .chat-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
 .attachment-chips {
   display: flex;
   flex-wrap: wrap;

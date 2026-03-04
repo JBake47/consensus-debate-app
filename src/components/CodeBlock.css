@@ -42,6 +42,22 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+.code-block-fallback {
+  margin: 0;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.4);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.code-block-fallback code {
+  font-family: inherit;
+}
+
 .inline-code {
   font-family: var(--font-mono);
   font-size: 0.85em;

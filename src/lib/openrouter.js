@@ -4,11 +4,19 @@ const MODELS_SEARCH_URL = '/api/models/search';
 const PROVIDERS_PROXY_URL = '/api/providers';
 const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90000;
 const MIN_STREAM_STALL_TIMEOUT_MS = 15000;
+const DEFAULT_STREAM_RENDER_THROTTLE_MS = 40;
+const MAX_STREAM_RENDER_THROTTLE_MS = 250;
 
 function getStreamStallTimeoutMs() {
   const configured = Number(import.meta.env.VITE_STREAM_STALL_TIMEOUT_MS);
   if (!Number.isFinite(configured)) return DEFAULT_STREAM_STALL_TIMEOUT_MS;
   return Math.max(MIN_STREAM_STALL_TIMEOUT_MS, Math.floor(configured));
+}
+
+function getStreamRenderThrottleMs() {
+  const configured = Number(import.meta.env.VITE_STREAM_RENDER_THROTTLE_MS);
+  if (!Number.isFinite(configured)) return DEFAULT_STREAM_RENDER_THROTTLE_MS;
+  return Math.max(0, Math.min(MAX_STREAM_RENDER_THROTTLE_MS, Math.floor(configured)));
 }
 
 export class OpenRouterError extends Error {
@@ -98,6 +106,8 @@ function updateReasoningAccumulated(accumulated, incoming) {
 export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false }) {
   const startTime = performance.now();
   const stallTimeoutMs = getStreamStallTimeoutMs();
+  const renderThrottleMs = getStreamRenderThrottleMs();
+  let flushTimerCleanup = null;
   const requestAbortController = new AbortController();
   const forwardAbort = () => requestAbortController.abort();
   if (signal?.aborted) {
@@ -175,6 +185,66 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
     let buffer = '';
     let usage = null;
     let streamError = null;
+    let pendingContentDelta = '';
+    let pendingReasoning = '';
+    let contentFlushTimer = null;
+    let reasoningFlushTimer = null;
+
+    const clearFlushTimers = () => {
+      if (contentFlushTimer != null) {
+        clearTimeout(contentFlushTimer);
+        contentFlushTimer = null;
+      }
+      if (reasoningFlushTimer != null) {
+        clearTimeout(reasoningFlushTimer);
+        reasoningFlushTimer = null;
+      }
+    };
+    flushTimerCleanup = clearFlushTimers;
+
+    const flushContent = () => {
+      if (!pendingContentDelta) return;
+      const delta = pendingContentDelta;
+      pendingContentDelta = '';
+      onChunk?.(delta, accumulated);
+    };
+
+    const flushReasoning = () => {
+      if (!pendingReasoning) return;
+      const latestReasoning = pendingReasoning;
+      pendingReasoning = '';
+      onReasoning?.(latestReasoning);
+    };
+
+    const scheduleContentFlush = () => {
+      if (renderThrottleMs <= 0) {
+        flushContent();
+        return;
+      }
+      if (contentFlushTimer != null) return;
+      contentFlushTimer = setTimeout(() => {
+        contentFlushTimer = null;
+        flushContent();
+      }, renderThrottleMs);
+    };
+
+    const scheduleReasoningFlush = () => {
+      if (renderThrottleMs <= 0) {
+        flushReasoning();
+        return;
+      }
+      if (reasoningFlushTimer != null) return;
+      reasoningFlushTimer = setTimeout(() => {
+        reasoningFlushTimer = null;
+        flushReasoning();
+      }, renderThrottleMs);
+    };
+
+    const flushPendingUpdates = () => {
+      clearFlushTimers();
+      flushContent();
+      flushReasoning();
+    };
 
     const readWithTimeout = async () => {
       let timeoutId = null;
@@ -232,11 +302,13 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
           const parsed = JSON.parse(data);
           if (parsed.type === 'content' && parsed.delta) {
             accumulated += parsed.delta;
-            onChunk?.(parsed.delta, accumulated);
+            pendingContentDelta += parsed.delta;
+            scheduleContentFlush();
           }
           if (parsed.type === 'reasoning' && parsed.delta) {
             accumulatedReasoning = updateReasoningAccumulated(accumulatedReasoning, parsed.delta);
-            onReasoning?.(accumulatedReasoning);
+            pendingReasoning = accumulatedReasoning;
+            scheduleReasoningFlush();
           }
           if (parsed.type === 'done') {
             usage = extractUsage(parsed.usage || {});
@@ -253,6 +325,8 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
       if (streamError) break;
     }
 
+    flushPendingUpdates();
+
     if (streamError) {
       throw new OpenRouterError(streamError, 500, 'stream_error');
     }
@@ -260,6 +334,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
     const durationMs = Math.round(performance.now() - startTime);
     return { content: accumulated, reasoning: accumulatedReasoning || null, usage, durationMs };
   } finally {
+    flushTimerCleanup?.();
     if (signal) {
       signal.removeEventListener('abort', forwardAbort);
     }

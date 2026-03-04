@@ -3,6 +3,8 @@ import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, Send
 import { useDebate } from '../context/DebateContext';
 import { processFile, formatFileSize } from '../lib/fileProcessor';
 import { getImageIncompatibleModels } from '../lib/modelCapabilities';
+import { estimateTurnBudget } from '../lib/budgetEstimator';
+import { formatCostWithQuality } from '../lib/formatTokens';
 import './ChatInput.css';
 
 export default function ChatInput() {
@@ -20,6 +22,13 @@ export default function ChatInput() {
     selectedModels,
     modelCatalog,
     modelCatalogStatus,
+    synthesizerModel,
+    convergenceModel,
+    webSearchModel,
+    maxDebateRounds,
+    budgetGuardrailsEnabled,
+    budgetSoftLimitUsd,
+    budgetAutoApproveBelowUsd,
     dispatch,
   } = useDebate();
   const [input, setInput] = useState('');
@@ -28,6 +37,7 @@ export default function ChatInput() {
   const [dragOver, setDragOver] = useState(false);
   const [editMeta, setEditMeta] = useState(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [budgetConfirm, setBudgetConfirm] = useState(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
@@ -78,10 +88,10 @@ export default function ChatInput() {
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = () => {
-    const trimmed = input.trim();
-    if ((!trimmed && attachments.length === 0) || debateInProgress) return;
-    const currentAttachments = attachments;
+  const performSubmit = useCallback((payload) => {
+    const trimmed = String(payload?.prompt || '').trim();
+    const currentAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    if ((!trimmed && currentAttachments.length === 0) || debateInProgress) return;
     setInput('');
     setAttachments([]);
     const opts = {
@@ -100,6 +110,69 @@ export default function ChatInput() {
     } else {
       startDebate(prompt, opts);
     }
+  }, [
+    debateInProgress,
+    webSearchEnabled,
+    editMeta?.conversationId,
+    activeConversation?.id,
+    dispatch,
+    chatMode,
+    startDebate,
+    startDirect,
+    startParallel,
+  ]);
+
+  const budgetEstimate = useMemo(() => estimateTurnBudget({
+    prompt: input.trim(),
+    attachments,
+    mode: chatMode,
+    selectedModels,
+    synthesizerModel,
+    convergenceModel,
+    webSearchModel,
+    maxDebateRounds,
+    webSearchEnabled,
+    modelCatalog,
+  }), [
+    input,
+    attachments,
+    chatMode,
+    selectedModels,
+    synthesizerModel,
+    convergenceModel,
+    webSearchModel,
+    maxDebateRounds,
+    webSearchEnabled,
+    modelCatalog,
+  ]);
+  const budgetEstimateLabel = formatCostWithQuality({
+    totalCost: budgetEstimate.totalEstimatedCost,
+    quality: budgetEstimate.quality,
+  });
+
+  const handleSubmit = () => {
+    const trimmed = input.trim();
+    if ((!trimmed && attachments.length === 0) || debateInProgress) return;
+
+    const estimatedCost = Number(budgetEstimate.totalEstimatedCost || 0);
+    const softLimit = Number(budgetSoftLimitUsd || 0);
+    const autoApproveBelow = Number(budgetAutoApproveBelowUsd || 0);
+    const shouldConfirmBudget = Boolean(budgetGuardrailsEnabled) &&
+      estimatedCost > 0 &&
+      estimatedCost > softLimit &&
+      estimatedCost > autoApproveBelow;
+
+    if (shouldConfirmBudget) {
+      setBudgetConfirm({
+        estimatedCost,
+        estimateLabel: budgetEstimateLabel,
+        prompt: trimmed,
+        attachments,
+      });
+      return;
+    }
+
+    performSubmit({ prompt: trimmed, attachments });
   };
 
   const handleKeyDown = (e) => {
@@ -145,6 +218,19 @@ export default function ChatInput() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [modeMenuOpen]);
+
+  useEffect(() => {
+    const handleFocusComposer = () => {
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('consensus:focus-composer', handleFocusComposer);
+    return () => window.removeEventListener('consensus:focus-composer', handleFocusComposer);
+  }, []);
+
+  useEffect(() => {
+    if (!debateInProgress) return;
+    setBudgetConfirm(null);
+  }, [debateInProgress]);
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -211,6 +297,36 @@ export default function ChatInput() {
         {editMeta && (
           <div className="edit-mode-banner">
             <span>Editing last message</span>
+          </div>
+        )}
+
+        {budgetConfirm && (
+          <div className="budget-confirm-banner">
+            <div className="budget-confirm-copy">
+              Estimated cost {budgetConfirm.estimateLabel || '$0.00'} exceeds your soft limit.
+            </div>
+            <div className="budget-confirm-actions">
+              <button
+                className="chat-btn chat-btn-cancel-edit"
+                onClick={() => setBudgetConfirm(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="chat-btn chat-btn-submit"
+                onClick={() => {
+                  performSubmit({
+                    prompt: budgetConfirm.prompt,
+                    attachments: budgetConfirm.attachments,
+                  });
+                  setBudgetConfirm(null);
+                }}
+                type="button"
+              >
+                Send Anyway
+              </button>
+            </div>
           </div>
         )}
 
@@ -359,6 +475,11 @@ export default function ChatInput() {
       </div>
       <p className="chat-input-hint">
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line &middot; Drag & drop or paste files
+        {budgetEstimateLabel && (
+          <>
+            {' '}· Est. turn cost <strong>{budgetEstimateLabel}</strong>
+          </>
+        )}
       </p>
     </div>
   );

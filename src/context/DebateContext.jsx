@@ -28,17 +28,19 @@ import {
   buildSummaryPrompt,
 } from '../lib/contextManager';
 import { generateTitle } from '../lib/titleGenerator';
+import {
+  DEFAULT_RETRY_POLICY,
+  normalizeRetryPolicy,
+  isTransientRetryableError,
+  getRetryDelayMs,
+} from '../lib/retryPolicy';
 
 const DebateContext = createContext(null);
 
-const AUTO_RETRY_MAX_ATTEMPTS = 3;
-const AUTO_RETRY_BASE_DELAY_MS = 700;
-const AUTO_RETRY_MAX_DELAY_MS = 5000;
 const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
-const CIRCUIT_BREAKER_THRESHOLD = 3;
-const CIRCUIT_BREAKER_COOLDOWN_MS = 90 * 1000;
 const METRICS_SAMPLE_LIMIT = 120;
+const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v1';
 
 function createDefaultMetrics() {
   return {
@@ -104,6 +106,42 @@ function saveToStorage(key, value) {
   }
 }
 
+function loadPersistedResponseCache() {
+  if (typeof window === 'undefined') return new Map();
+  const raw = loadFromStorage(RESPONSE_CACHE_STORAGE_KEY, []);
+  if (!Array.isArray(raw)) return new Map();
+  const now = Date.now();
+  const map = new Map();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const key = String(item.key || '');
+    if (!key || !item.value) continue;
+    const expiresAt = Number(item.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+    map.set(key, {
+      expiresAt,
+      value: item.value,
+    });
+    if (map.size >= RESPONSE_CACHE_MAX_ENTRIES) break;
+  }
+  return map;
+}
+
+function persistResponseCache(cache) {
+  try {
+    const payload = Array.from(cache.entries())
+      .slice(-RESPONSE_CACHE_MAX_ENTRIES)
+      .map(([key, entry]) => ({
+        key,
+        expiresAt: entry?.expiresAt || 0,
+        value: entry?.value || null,
+      }));
+    saveToStorage(RESPONSE_CACHE_STORAGE_KEY, payload);
+  } catch {
+    // noop
+  }
+}
+
 /**
  * Migrate old turn format (flat streams[]) to new format (rounds[]).
  * Old: { userPrompt, streams[], synthesis }
@@ -161,6 +199,20 @@ if (migrated) {
 }
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
+const loadedRetryPolicy = normalizeRetryPolicy(loadFromStorage('retry_policy', DEFAULT_RETRY_POLICY));
+const loadedResponseCache = loadPersistedResponseCache();
+const loadedBudgetSoftLimitRaw = Number(loadFromStorage('budget_soft_limit_usd', 1.5));
+const loadedBudgetSoftLimit = Number.isFinite(loadedBudgetSoftLimitRaw)
+  ? Math.max(0, loadedBudgetSoftLimitRaw)
+  : 1.5;
+const loadedBudgetAutoApproveRaw = Number(loadFromStorage('budget_auto_approve_below_usd', 0.5));
+const loadedBudgetAutoApprove = Number.isFinite(loadedBudgetAutoApproveRaw)
+  ? Math.max(0, loadedBudgetAutoApproveRaw)
+  : 0.5;
+const loadedVirtualizationKeepLatestRaw = Number(loadFromStorage('stream_virtualization_keep_latest', 4));
+const loadedVirtualizationKeepLatest = Number.isFinite(loadedVirtualizationKeepLatestRaw)
+  ? Math.max(2, Math.min(12, Math.floor(loadedVirtualizationKeepLatestRaw)))
+  : 4;
 
 const rememberApiKey = loadFromStorage('remember_api_key', false);
 if (!rememberApiKey) {
@@ -178,6 +230,16 @@ const initialState = {
   maxDebateRounds: loadFromStorage('max_debate_rounds', DEFAULT_MAX_DEBATE_ROUNDS),
   webSearchModel: loadFromStorage('web_search_model', DEFAULT_WEB_SEARCH_MODEL),
   strictWebSearch: loadFromStorage('strict_web_search', false),
+  retryPolicy: loadedRetryPolicy,
+  budgetGuardrailsEnabled: loadFromStorage('budget_guardrails_enabled', false),
+  budgetSoftLimitUsd: loadedBudgetSoftLimit,
+  budgetAutoApproveBelowUsd: loadedBudgetAutoApprove,
+  smartRankingMode: loadFromStorage('smart_ranking_mode', 'balanced'),
+  streamVirtualizationEnabled: loadFromStorage('stream_virtualization_enabled', true),
+  streamVirtualizationKeepLatest: loadedVirtualizationKeepLatest,
+  cachePersistenceEnabled: loadFromStorage('cache_persistence_enabled', true),
+  cacheHitCount: 0,
+  cacheEntryCount: loadedResponseCache.size,
   chatMode: loadFromStorage('chat_mode', 'debate'),
   focusedMode: loadFromStorage('focused_mode', false),
   webSearchEnabled: false,
@@ -387,6 +449,69 @@ function reducer(state, action) {
       saveToStorage('strict_web_search', action.payload);
       return { ...state, strictWebSearch: action.payload };
     }
+    case 'SET_RETRY_POLICY': {
+      const policy = normalizeRetryPolicy(action.payload);
+      saveToStorage('retry_policy', policy);
+      return { ...state, retryPolicy: policy };
+    }
+    case 'SET_BUDGET_GUARDRAILS_ENABLED': {
+      saveToStorage('budget_guardrails_enabled', action.payload);
+      return { ...state, budgetGuardrailsEnabled: Boolean(action.payload) };
+    }
+    case 'SET_BUDGET_SOFT_LIMIT_USD': {
+      const value = Number(action.payload);
+      const normalized = Number.isFinite(value) ? Math.max(0, value) : 0;
+      saveToStorage('budget_soft_limit_usd', normalized);
+      return { ...state, budgetSoftLimitUsd: normalized };
+    }
+    case 'SET_BUDGET_AUTO_APPROVE_BELOW_USD': {
+      const value = Number(action.payload);
+      const normalized = Number.isFinite(value) ? Math.max(0, value) : 0;
+      saveToStorage('budget_auto_approve_below_usd', normalized);
+      return { ...state, budgetAutoApproveBelowUsd: normalized };
+    }
+    case 'SET_SMART_RANKING_MODE': {
+      const allowed = new Set(['balanced', 'fast', 'cheap', 'quality']);
+      const mode = allowed.has(action.payload) ? action.payload : 'balanced';
+      saveToStorage('smart_ranking_mode', mode);
+      return { ...state, smartRankingMode: mode };
+    }
+    case 'SET_STREAM_VIRTUALIZATION_ENABLED': {
+      saveToStorage('stream_virtualization_enabled', action.payload);
+      return { ...state, streamVirtualizationEnabled: Boolean(action.payload) };
+    }
+    case 'SET_STREAM_VIRTUALIZATION_KEEP_LATEST': {
+      const value = Number(action.payload);
+      const normalized = Number.isFinite(value)
+        ? Math.max(2, Math.min(12, Math.floor(value)))
+        : 4;
+      saveToStorage('stream_virtualization_keep_latest', normalized);
+      return { ...state, streamVirtualizationKeepLatest: normalized };
+    }
+    case 'SET_CACHE_PERSISTENCE_ENABLED': {
+      const enabled = Boolean(action.payload);
+      saveToStorage('cache_persistence_enabled', enabled);
+      return { ...state, cachePersistenceEnabled: enabled };
+    }
+    case 'SET_CACHE_STATS': {
+      return {
+        ...state,
+        cacheHitCount: Number.isFinite(Number(action.payload?.cacheHitCount))
+          ? Math.max(0, Math.floor(Number(action.payload.cacheHitCount)))
+          : state.cacheHitCount,
+        cacheEntryCount: Number.isFinite(Number(action.payload?.cacheEntryCount))
+          ? Math.max(0, Math.floor(Number(action.payload.cacheEntryCount)))
+          : state.cacheEntryCount,
+      };
+    }
+    case 'CLEAR_RESPONSE_CACHE': {
+      localStorage.removeItem(RESPONSE_CACHE_STORAGE_KEY);
+      return {
+        ...state,
+        cacheHitCount: 0,
+        cacheEntryCount: 0,
+      };
+    }
     case 'SET_WEB_SEARCH_ENABLED': {
       return { ...state, webSearchEnabled: action.payload };
     }
@@ -477,6 +602,7 @@ function reducer(state, action) {
         reasoning,
         searchEvidence,
         routeInfo,
+        cacheHit,
       } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         const rounds = [...lastTurn.rounds];
@@ -489,6 +615,7 @@ function reducer(state, action) {
         if (reasoning !== undefined) updates.reasoning = reasoning;
         if (searchEvidence !== undefined) updates.searchEvidence = searchEvidence;
         if (routeInfo !== undefined) updates.routeInfo = routeInfo;
+        if (cacheHit !== undefined) updates.cacheHit = cacheHit;
         streams[streamIndex] = updates;
         round.streams = streams;
         rounds[roundIndex] = round;
@@ -594,6 +721,60 @@ function reducer(state, action) {
       saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
+    case 'BRANCH_FROM_ROUND': {
+      const { conversationId, roundIndex } = action.payload || {};
+      const sourceConversation = state.conversations.find((conversation) => conversation.id === conversationId);
+      if (!sourceConversation || !Array.isArray(sourceConversation.turns) || sourceConversation.turns.length === 0) {
+        return state;
+      }
+      const sourceLastTurn = sourceConversation.turns[sourceConversation.turns.length - 1];
+      const sourceRounds = Array.isArray(sourceLastTurn?.rounds) ? sourceLastTurn.rounds : [];
+      if (sourceRounds.length === 0) return state;
+
+      const keepCount = Math.max(1, Math.min(sourceRounds.length, Math.floor(Number(roundIndex)) + 1));
+      const branchedRounds = sourceRounds.slice(0, keepCount).map((round) => ({
+        ...round,
+        streams: (round.streams || []).map((stream) => ({ ...stream })),
+      }));
+
+      const branchTurn = {
+        ...sourceLastTurn,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: Date.now(),
+        rounds: branchedRounds,
+        synthesis: {
+          model: state.synthesizerModel || sourceLastTurn.synthesis?.model || '',
+          content: '',
+          status: 'pending',
+          error: null,
+        },
+        ensembleResult: sourceLastTurn.mode === 'direct' ? null : sourceLastTurn.ensembleResult || null,
+        debateMetadata: {
+          totalRounds: keepCount,
+          converged: false,
+          terminationReason: 'branch_checkpoint',
+        },
+      };
+
+      const branchConversationId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const branchConversation = {
+        ...sourceConversation,
+        id: branchConversationId,
+        title: `${sourceConversation.title || 'Debate'} (Branch R${keepCount})`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        parentConversationId: sourceConversation.id,
+        branchedFrom: {
+          roundIndex: keepCount - 1,
+          sourceTurnId: sourceLastTurn.id || null,
+        },
+        turns: [...sourceConversation.turns.slice(0, -1), branchTurn],
+      };
+
+      const conversations = [branchConversation, ...state.conversations];
+      saveToStorage('debate_conversations', conversations);
+      return { ...state, conversations, activeConversationId: branchConversationId };
+    }
     case 'SET_DEBATE_IN_PROGRESS': {
       return { ...state, debateInProgress: action.payload };
     }
@@ -640,13 +821,33 @@ function reducer(state, action) {
 export function DebateProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const abortControllerRef = useRef(null);
-  const responseCacheRef = useRef(new Map());
+  const responseCacheRef = useRef(loadedResponseCache);
   const providerCircuitRef = useRef({});
   const metricsRef = useRef(state.metrics);
+  const cacheStatsRef = useRef({
+    cacheHitCount: state.cacheHitCount,
+    cacheEntryCount: state.cacheEntryCount,
+  });
 
   useEffect(() => {
     metricsRef.current = state.metrics;
   }, [state.metrics]);
+
+  useEffect(() => {
+    cacheStatsRef.current = {
+      cacheHitCount: state.cacheHitCount,
+      cacheEntryCount: state.cacheEntryCount,
+    };
+  }, [state.cacheHitCount, state.cacheEntryCount]);
+
+  const syncCacheStats = useCallback((partial = {}) => {
+    const next = {
+      ...cacheStatsRef.current,
+      ...partial,
+    };
+    cacheStatsRef.current = next;
+    dispatch({ type: 'SET_CACHE_STATS', payload: next });
+  }, [dispatch]);
 
   const updateMetrics = useCallback((updater) => {
     const current = normalizeMetrics(metricsRef.current);
@@ -776,6 +977,7 @@ export function DebateProvider({ children }) {
   const activeConversation = state.conversations.find(
     c => c.id === state.activeConversationId
   );
+  const retryPolicy = normalizeRetryPolicy(state.retryPolicy);
 
   /**
    * Run one round of streaming from all models in parallel.
@@ -821,62 +1023,11 @@ export function DebateProvider({ children }) {
     const state = getCircuitState(provider);
     state.failures += 1;
     state.lastError = String(err?.message || err || 'Unknown error');
-    if (state.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+    if (state.failures >= retryPolicy.circuitFailureThreshold) {
       state.openedAt = Date.now();
-      state.openedUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+      state.openedUntil = Date.now() + retryPolicy.circuitCooldownMs;
       state.failures = 0;
     }
-  };
-
-  const parseRetryableStatus = (err) => {
-    const status = Number(err?.status);
-    return Number.isFinite(status) ? status : null;
-  };
-
-  const isNonRetryableError = (err) => {
-    const status = parseRetryableStatus(err);
-    if ([400, 401, 402, 403, 404, 422].includes(status)) return true;
-    const code = String(err?.code || '').toLowerCase();
-    if (
-      code.includes('invalid_key') ||
-      code.includes('invalid_request') ||
-      code.includes('insufficient_credits') ||
-      code.includes('model_not_found') ||
-      code.includes('unsupported')
-    ) {
-      return true;
-    }
-    const message = String(err?.message || '').toLowerCase();
-    return (
-      message.includes('unauthorized') ||
-      message.includes('insufficient credits') ||
-      message.includes('invalid model') ||
-      message.includes('unsupported provider') ||
-      message.includes('bad request') ||
-      message.includes('malformed')
-    );
-  };
-
-  const isTransientRetryableError = (err) => {
-    if (!err || isAbortLikeError(err) || isNonRetryableError(err)) return false;
-    const status = parseRetryableStatus(err);
-    if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
-    const code = String(err?.code || '').toLowerCase();
-    if (code.includes('rate_limit') || code.includes('stream_stalled') || code.includes('timeout')) return true;
-    const message = String(err?.message || '').toLowerCase();
-    return (
-      message.includes('rate limit') ||
-      message.includes('temporarily unavailable') ||
-      message.includes('timeout') ||
-      message.includes('timed out') ||
-      message.includes('fetch failed') ||
-      message.includes('network') ||
-      message.includes('connection reset') ||
-      message.includes('econnreset') ||
-      message.includes('503') ||
-      message.includes('502') ||
-      message.includes('504')
-    );
   };
 
   const waitForRetryDelay = async (ms, signal) => {
@@ -911,12 +1062,18 @@ export function DebateProvider({ children }) {
   };
 
   const getCachedResponse = (cacheKey) => {
+    if (!cacheKey) return null;
     const entry = responseCacheRef.current.get(cacheKey);
     if (!entry) return null;
     if (entry.expiresAt <= Date.now()) {
       responseCacheRef.current.delete(cacheKey);
+      if (state.cachePersistenceEnabled) {
+        persistResponseCache(responseCacheRef.current);
+      }
+      syncCacheStats({ cacheEntryCount: responseCacheRef.current.size });
       return null;
     }
+    syncCacheStats({ cacheHitCount: cacheStatsRef.current.cacheHitCount + 1 });
     return entry.value;
   };
 
@@ -930,22 +1087,49 @@ export function DebateProvider({ children }) {
       expiresAt: Date.now() + RESPONSE_CACHE_TTL_MS,
       value,
     });
+    if (state.cachePersistenceEnabled) {
+      persistResponseCache(responseCacheRef.current);
+    }
+    syncCacheStats({ cacheEntryCount: responseCacheRef.current.size });
   };
 
   const clearExpiredCacheEntries = () => {
+    let changed = false;
     const now = Date.now();
     for (const [key, entry] of responseCacheRef.current.entries()) {
       if (!entry || entry.expiresAt <= now) {
         responseCacheRef.current.delete(key);
+        changed = true;
       }
+    }
+    if (changed) {
+      if (state.cachePersistenceEnabled) {
+        persistResponseCache(responseCacheRef.current);
+      }
+      syncCacheStats({ cacheEntryCount: responseCacheRef.current.size });
     }
   };
 
-  const getRetryDelayMs = (attemptNumber) => {
-    const exp = AUTO_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attemptNumber - 1));
-    const jitter = 0.75 + Math.random() * 0.5;
-    return Math.round(clampNumber(exp * jitter, AUTO_RETRY_BASE_DELAY_MS, AUTO_RETRY_MAX_DELAY_MS));
-  };
+  useEffect(() => {
+    clearExpiredCacheEntries();
+    syncCacheStats({ cacheEntryCount: responseCacheRef.current.size });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (state.cachePersistenceEnabled) {
+      persistResponseCache(responseCacheRef.current);
+    } else {
+      localStorage.removeItem(RESPONSE_CACHE_STORAGE_KEY);
+    }
+  }, [state.cachePersistenceEnabled]);
+
+  const clearResponseCache = useCallback(() => {
+    responseCacheRef.current.clear();
+    localStorage.removeItem(RESPONSE_CACHE_STORAGE_KEY);
+    syncCacheStats({ cacheHitCount: 0, cacheEntryCount: 0 });
+    dispatch({ type: 'CLEAR_RESPONSE_CACHE' });
+  }, [dispatch, syncCacheStats]);
 
   const buildProvisionalSynthesisContent = ({ streams, roundLabel }) => {
     const completed = (streams || []).filter((stream) => stream?.model && stream?.content);
@@ -1389,7 +1573,7 @@ export function DebateProvider({ children }) {
     }
 
     let lastError = null;
-    for (let attempt = 1; attempt <= AUTO_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
       let result = null;
       try {
         updateMetrics((prev) => ({ ...prev, callCount: prev.callCount + 1 }));
@@ -1429,14 +1613,14 @@ export function DebateProvider({ children }) {
 
       const err = lastError || new Error('Request failed');
       markProviderFailure(providerId, err);
-      const shouldRetry = attempt < AUTO_RETRY_MAX_ATTEMPTS && isTransientRetryableError(err);
+      const shouldRetry = attempt < retryPolicy.maxAttempts && isTransientRetryableError(err, isAbortLikeError);
       if (!shouldRetry) {
         addFailureByProvider(providerId);
         updateMetrics((prev) => ({ ...prev, failureCount: prev.failureCount + 1 }));
         throw err;
       }
       updateMetrics((prev) => ({ ...prev, retryAttempts: prev.retryAttempts + 1 }));
-      const delayMs = getRetryDelayMs(attempt);
+      const delayMs = getRetryDelayMs(attempt, retryPolicy);
       await waitForRetryDelay(delayMs, signal);
     }
 
@@ -1474,6 +1658,7 @@ export function DebateProvider({ children }) {
             content: '',
             status: 'streaming',
             error: null,
+            cacheHit: false,
             searchEvidence: searchVerification?.enabled ? null : undefined,
             routeInfo,
           },
@@ -1482,7 +1667,7 @@ export function DebateProvider({ children }) {
         const modelMessages = messagesPerModel ? messagesPerModel[index] : messages;
 
         try {
-          const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
+          const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
             model: effectiveModel,
             messages: modelMessages,
             apiKey,
@@ -1542,6 +1727,7 @@ export function DebateProvider({ children }) {
               usage,
               durationMs,
               reasoning: reasoning || null,
+              cacheHit: Boolean(fromCache),
               searchEvidence,
               routeInfo,
             },
@@ -1553,10 +1739,19 @@ export function DebateProvider({ children }) {
             content,
             index,
             roundIndex,
+            fromCache: Boolean(fromCache),
             routeInfo,
           });
 
-          return { model, content, index, searchEvidence, routeInfo, effectiveModel };
+          return {
+            model,
+            content,
+            index,
+            searchEvidence,
+            routeInfo,
+            effectiveModel,
+            fromCache: Boolean(fromCache),
+          };
         } catch (err) {
           if (err.name === 'AbortError') {
             dispatch({
@@ -2996,6 +3191,17 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode]);
 
+  const branchFromRound = useCallback((roundIndex) => {
+    if (!activeConversation || !activeConversation.id) return;
+    dispatch({
+      type: 'BRANCH_FROM_ROUND',
+      payload: {
+        conversationId: activeConversation.id,
+        roundIndex,
+      },
+    });
+  }, [activeConversation, dispatch]);
+
   const retryRound = useCallback(async (roundIndex, options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
@@ -3428,12 +3634,13 @@ export function DebateProvider({ children }) {
             content: '',
             status: 'streaming',
             error: null,
+            cacheHit: false,
             routeInfo,
           },
         });
 
         try {
-          const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
+          const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
             model: effectiveModel,
             messages: modelMessages,
             apiKey,
@@ -3481,10 +3688,18 @@ export function DebateProvider({ children }) {
               usage,
               durationMs,
               reasoning: reasoning || null,
+              cacheHit: Boolean(fromCache),
               routeInfo,
             },
           });
-          return { model, content, index: si, routeInfo, effectiveModel };
+          return {
+            model,
+            content,
+            index: si,
+            routeInfo,
+            effectiveModel,
+            fromCache: Boolean(fromCache),
+          };
         } catch (err) {
           if (err.name === 'AbortError') throw err;
           const errorMsg = err.message || 'An error occurred';
@@ -3863,6 +4078,7 @@ export function DebateProvider({ children }) {
         content: '',
         status: 'streaming',
         error: null,
+        cacheHit: false,
         routeInfo,
       },
     });
@@ -3871,7 +4087,7 @@ export function DebateProvider({ children }) {
     let retryResult = { content: '', succeeded: false };
 
     try {
-      const { content, reasoning, usage, durationMs } = await runStreamWithFallback({
+      const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
         model: effectiveModel,
         messages: modelMessages,
         apiKey,
@@ -3937,6 +4153,7 @@ export function DebateProvider({ children }) {
             usage,
             durationMs,
             reasoning: reasoning || null,
+            cacheHit: Boolean(fromCache),
             searchEvidence: blockedEvidence,
             routeInfo,
           },
@@ -3955,6 +4172,7 @@ export function DebateProvider({ children }) {
             usage,
             durationMs,
             reasoning: reasoning || null,
+            cacheHit: Boolean(fromCache),
             searchEvidence,
             routeInfo,
           },
@@ -4271,6 +4489,8 @@ export function DebateProvider({ children }) {
     retryStream,
     retryRound,
     retrySynthesis,
+    branchFromRound,
+    clearResponseCache,
   };
 
   return (

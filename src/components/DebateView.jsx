@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -76,10 +76,13 @@ export default function DebateView({ turn, isLastTurn }) {
     retryLastTurn,
     retryStream,
     retryAllFailed,
+    streamVirtualizationEnabled,
+    streamVirtualizationKeepLatest,
     debateInProgress,
   } = useDebate();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const [viewerAttachment, setViewerAttachment] = useState(null);
+  const [showAllRounds, setShowAllRounds] = useState(false);
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
   const isParallelMode = turn.mode === 'parallel';
@@ -90,6 +93,39 @@ export default function DebateView({ turn, isLastTurn }) {
   );
   const turnCostMeta = computeTurnCostMeta(turn);
   const turnCostLabel = formatCostWithQuality(turnCostMeta);
+  const keepLatestRounds = Math.max(2, Number(streamVirtualizationKeepLatest) || 4);
+
+  const roundRenderPlan = (() => {
+    const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
+    if (
+      !streamVirtualizationEnabled ||
+      showAllRounds ||
+      viewMode !== 'cards' ||
+      rounds.length <= keepLatestRounds + 1
+    ) {
+      return {
+        hiddenCount: 0,
+        items: rounds.map((round, roundIndex) => ({ round, roundIndex })),
+      };
+    }
+    const first = { round: rounds[0], roundIndex: 0 };
+    const tail = rounds
+      .slice(-keepLatestRounds)
+      .map((round, offset) => ({
+        round,
+        roundIndex: rounds.length - keepLatestRounds + offset,
+      }));
+    return {
+      hiddenCount: Math.max(0, rounds.length - (1 + tail.length)),
+      items: [first, ...tail],
+    };
+  })();
+
+  const hiddenRoundCount = roundRenderPlan.hiddenCount;
+
+  useEffect(() => {
+    setShowAllRounds(false);
+  }, [turn.id, turn.timestamp]);
 
   const failedStreams = hasRounds
     ? turn.rounds.flatMap((round, roundIndex) =>
@@ -371,7 +407,21 @@ export default function DebateView({ turn, isLastTurn }) {
 
           {viewMode === 'cards' ? (
             <div className="debate-rounds">
-              {turn.rounds.map((round, i) => (
+              {hiddenRoundCount > 0 && !showAllRounds && (
+                <div className="debate-virtualized-banner">
+                  <span>
+                    {hiddenRoundCount} older round{hiddenRoundCount !== 1 ? 's' : ''} hidden for performance.
+                  </span>
+                  <button
+                    className="debate-virtualized-btn"
+                    onClick={() => setShowAllRounds(true)}
+                    type="button"
+                  >
+                    Show All Rounds
+                  </button>
+                </div>
+              )}
+              {roundRenderPlan.items.map(({ round, roundIndex: i }) => (
                 <RoundSection
                   key={round.roundNumber}
                   round={round}
@@ -383,6 +433,18 @@ export default function DebateView({ turn, isLastTurn }) {
                   allowStreamRetry
                 />
               ))}
+              {showAllRounds && hiddenRoundCount > 0 && (
+                <div className="debate-virtualized-banner">
+                  <span>All rounds are visible.</span>
+                  <button
+                    className="debate-virtualized-btn"
+                    onClick={() => setShowAllRounds(false)}
+                    type="button"
+                  >
+                    Collapse Older Rounds
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <DebateThread rounds={turn.rounds} isLastTurn={isLastTurn} allowRetry />

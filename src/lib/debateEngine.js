@@ -281,6 +281,7 @@ export function createRound({ roundNumber, label, models }) {
       error: null,
       usage: null,
       durationMs: null,
+      cacheHit: false,
     })),
     convergenceCheck: null,
   };

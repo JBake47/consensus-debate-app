@@ -168,6 +168,11 @@
   background: rgba(79, 143, 247, 0.1);
 }
 
+.sidebar-item-action.share:hover {
+  color: var(--accent-purple);
+  background: rgba(168, 85, 247, 0.1);
+}
+
 .sidebar-item-action.export:hover {
   color: var(--accent-cyan);
   background: rgba(6, 182, 212, 0.1);
