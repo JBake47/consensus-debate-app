@@ -62,6 +62,35 @@ cd openrouter-debate-app
 npm install
 ```
 
+### Updating an Existing Clone (Other Computers)
+
+`npm install` only updates dependencies. It does not pull new code changes.
+
+Use this sequence to sync your local copy with GitHub:
+
+```bash
+git fetch origin
+git checkout master
+git pull --ff-only origin master
+npm ci
+```
+
+Optional checks:
+
+```bash
+git rev-parse --short HEAD
+npm test
+npm run build
+```
+
+If you have local uncommitted work first:
+
+```bash
+git stash push -u -m "temp before sync"
+git pull --ff-only origin master
+git stash pop
+```
+
 3. Configure server environment variables (example in `.env.example`).
    - Recommended: set provider API keys in `.env` and run the backend so keys stay off the client.
    - Optional: you can also add an OpenRouter override key in the in-app **Settings** modal (stored in the browser).
