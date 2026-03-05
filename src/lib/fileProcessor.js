@@ -1,6 +1,3 @@
-import ExcelJS from 'exceljs';
-import mammoth from 'mammoth';
-
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
 const TEXT_EXTENSIONS = [
   '.txt', '.md', '.mdx', '.json', '.csv', '.xml', '.html', '.htm', '.css', '.js', '.jsx',
@@ -11,6 +8,8 @@ const TEXT_EXTENSIONS = [
 ];
 const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
 const MAX_INLINE_BYTES = 40 * 1024 * 1024;
+let excelJsPromise;
+let mammothPromise;
 
 /**
  * Determine the category of a file.
@@ -69,16 +68,26 @@ export async function processFile(file) {
   }
 }
 
-function readAsDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
-  });
+async function readAsDataURL(file) {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  const buffer = await readAsArrayBuffer(file);
+  const type = String(file?.type || 'application/octet-stream');
+  return `data:${type};base64,${arrayBufferToBase64(buffer)}`;
 }
 
-function readAsText(file) {
+async function readAsText(file) {
+  if (typeof file?.text === 'function') {
+    return file.text();
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -87,7 +96,11 @@ function readAsText(file) {
   });
 }
 
-function readAsArrayBuffer(file) {
+async function readAsArrayBuffer(file) {
+  if (typeof file?.arrayBuffer === 'function') {
+    return file.arrayBuffer();
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -96,8 +109,35 @@ function readAsArrayBuffer(file) {
   });
 }
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  if (typeof btoa === 'function') {
+    return btoa(binary);
+  }
+  throw new Error('Base64 encoding is unavailable in this environment');
+}
+
+async function loadExcelJs() {
+  if (!excelJsPromise) {
+    excelJsPromise = import('exceljs').then((module) => module.default || module);
+  }
+  return excelJsPromise;
+}
+
+async function loadMammoth() {
+  if (!mammothPromise) {
+    mammothPromise = import('mammoth').then((module) => module.default || module);
+  }
+  return mammothPromise;
+}
+
 async function readExcel(file) {
   const buffer = await readAsArrayBuffer(file);
+  const ExcelJS = await loadExcelJs();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   const sheets = [];
@@ -129,6 +169,7 @@ async function readExcel(file) {
 
 async function readWord(file) {
   const buffer = await readAsArrayBuffer(file);
+  const mammoth = await loadMammoth();
   const result = await mammoth.extractRawText({ arrayBuffer: buffer });
   return result.value;
 }
@@ -166,123 +207,6 @@ async function readPdf(file) {
   } catch {
     return '(Failed to parse PDF -- the file may be scanned or encrypted)';
   }
-}
-
-/**
- * Build message content parts for attachments.
- * Returns an array suitable for OpenAI-style multimodal content.
- */
-export function buildAttachmentContent(text, attachments, options = {}) {
-  const safeAttachments = Array.isArray(attachments) ? attachments : [];
-  const videoUrls = Array.isArray(options.videoUrls)
-    ? options.videoUrls.map((url) => String(url || '').trim()).filter(Boolean)
-    : [];
-
-  if (safeAttachments.length === 0 && videoUrls.length === 0) {
-    return text;
-  }
-
-  const parts = [];
-
-  // Add text attachments inline
-  const textAttachments = safeAttachments.filter(a => a.category !== 'image');
-  if (textAttachments.length > 0) {
-    const attachmentText = textAttachments
-      .map(a => {
-        if (a.content) {
-          return `\n\n---\n**Attached file: ${a.name}**\n\`\`\`\n${truncateContent(a.content, 50000)}\n\`\`\``;
-        }
-        return `\n\n---\n**Attached file: ${a.name}**\n(Unable to extract text content from this file.)`;
-      })
-      .join('');
-    text += attachmentText;
-  }
-
-  if (videoUrls.length > 0) {
-    text += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
-  }
-
-  // For image attachments, use multimodal content format
-  const imageAttachments = safeAttachments.filter(a => a.category === 'image');
-  const inlineImageAttachments = imageAttachments
-    .map((attachment) => ({ attachment, inlineUrl: getInlineImageUrl(attachment) }))
-    .filter((entry) => Boolean(entry.inlineUrl));
-  const omittedImageNames = imageAttachments
-    .filter((attachment) => !getInlineImageUrl(attachment))
-    .map((attachment) => attachment.name)
-    .filter(Boolean);
-  if (omittedImageNames.length > 0) {
-    text += `\n\n---\n**Attached images (not included inline):** ${omittedImageNames.join(', ')}`;
-  }
-
-  if (inlineImageAttachments.length > 0 || videoUrls.length > 0) {
-    parts.push({ type: 'text', text });
-    for (const { inlineUrl } of inlineImageAttachments) {
-      parts.push({
-        type: 'image_url',
-        image_url: { url: inlineUrl },
-      });
-    }
-    for (const url of videoUrls) {
-      parts.push({
-        type: 'video_url',
-        video_url: { url },
-      });
-    }
-    return parts;
-  }
-
-  return text;
-}
-
-/**
- * Build text-only attachment content (no image parts) for text-only models.
- */
-export function buildAttachmentTextContent(text, attachments, options = {}) {
-  const safeAttachments = Array.isArray(attachments) ? attachments : [];
-  const videoUrls = Array.isArray(options.videoUrls)
-    ? options.videoUrls.map((url) => String(url || '').trim()).filter(Boolean)
-    : [];
-
-  if (safeAttachments.length === 0 && videoUrls.length === 0) {
-    return text;
-  }
-
-  const textAttachments = safeAttachments.filter(a => a.category !== 'image');
-  if (textAttachments.length > 0) {
-    const attachmentText = textAttachments
-      .map(a => {
-        if (a.content) {
-          return `\n\n---\n**Attached file: ${a.name}**\n\`\`\`\n${truncateContent(a.content, 50000)}\n\`\`\``;
-        }
-        return `\n\n---\n**Attached file: ${a.name}**\n(Unable to extract text content from this file.)`;
-      })
-      .join('');
-    text += attachmentText;
-  }
-
-  const imageAttachments = safeAttachments.filter(a => a.category === 'image');
-  if (imageAttachments.length > 0) {
-    const imageList = imageAttachments.map(a => a.name).join(', ');
-    text += `\n\n---\n**Attached images (not included inline):** ${imageList}`;
-  }
-
-  if (videoUrls.length > 0) {
-    text += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
-  }
-
-  return text;
-}
-
-function truncateContent(content, maxChars) {
-  if (content.length <= maxChars) return content;
-  return content.slice(0, maxChars) + '\n... (truncated)';
-}
-
-function getInlineImageUrl(attachment) {
-  const candidate = String(attachment?.dataUrl || attachment?.content || '').trim();
-  if (!candidate) return '';
-  return candidate.startsWith('data:image/') ? candidate : '';
 }
 
 /**

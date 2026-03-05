@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2, CheckCircle2, AlertCircle, RotateCcw, GitBranchPlus } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import ModelCard from './ModelCard';
 import ConvergenceBadge from './ConvergenceBadge';
 import ConvergencePanel from './ConvergencePanel';
@@ -11,7 +11,7 @@ import {
 } from '../lib/formatTokens';
 import './RoundSection.css';
 
-export default function RoundSection({
+function RoundSection({
   round,
   isLatest,
   roundIndex,
@@ -20,7 +20,8 @@ export default function RoundSection({
   allowRoundRetry = allowRetry,
   allowStreamRetry = allowRetry,
 }) {
-  const { retryRound, branchFromRound, debateInProgress } = useDebate();
+  const { retryRound, branchFromRound } = useDebateActions();
+  const { debateInProgress } = useDebateConversations();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
   const roundCostMeta = computeRoundCostMeta(round);
@@ -115,3 +116,5 @@ export default function RoundSection({
     </div>
   );
 }
+
+export default memo(RoundSection);

@@ -3,20 +3,82 @@ import { Copy, Check } from 'lucide-react';
 import './CodeBlock.css';
 
 let syntaxHighlighterBundlePromise = null;
+const CODE_THEME = {
+  'pre[class*="language-"]': {
+    background: 'rgba(0, 0, 0, 0.4)',
+    color: '#e5eef9',
+    margin: 0,
+    padding: '16px',
+    fontSize: '0.85em',
+    borderRadius: 0,
+  },
+  'code[class*="language-"]': {
+    background: 'none',
+    color: '#e5eef9',
+    fontSize: '0.85em',
+    textShadow: 'none',
+    fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace)',
+  },
+  comment: { color: '#7f8ea3', fontStyle: 'italic' },
+  prolog: { color: '#7f8ea3' },
+  doctype: { color: '#7f8ea3' },
+  cdata: { color: '#7f8ea3' },
+  punctuation: { color: '#9fb3c8' },
+  property: { color: '#7dd3fc' },
+  tag: { color: '#fda4af' },
+  boolean: { color: '#f9a8d4' },
+  number: { color: '#f9a8d4' },
+  constant: { color: '#f9a8d4' },
+  symbol: { color: '#f9a8d4' },
+  deleted: { color: '#f9a8d4' },
+  selector: { color: '#86efac' },
+  'attr-name': { color: '#86efac' },
+  string: { color: '#86efac' },
+  char: { color: '#86efac' },
+  builtin: { color: '#86efac' },
+  inserted: { color: '#86efac' },
+  operator: { color: '#f5d08a' },
+  entity: { color: '#f5d08a', cursor: 'help' },
+  url: { color: '#f5d08a' },
+  atrule: { color: '#c4b5fd' },
+  'attr-value': { color: '#c4b5fd' },
+  keyword: { color: '#c4b5fd' },
+  function: { color: '#93c5fd' },
+  'class-name': { color: '#fde68a' },
+  regex: { color: '#fdba74' },
+  important: { color: '#fdba74', fontWeight: '600' },
+  variable: { color: '#fca5a5' },
+  bold: { fontWeight: '700' },
+  italic: { fontStyle: 'italic' },
+};
+const LANGUAGE_ALIASES = {
+  js: 'javascript',
+  jsx: 'jsx',
+  ts: 'typescript',
+  tsx: 'tsx',
+  sh: 'bash',
+  shell: 'bash',
+  yml: 'yaml',
+  md: 'markdown',
+  py: 'python',
+  rb: 'ruby',
+  rs: 'rust',
+  csharp: 'csharp',
+  cs: 'csharp',
+  cpp: 'cpp',
+  html: 'markup',
+  xml: 'markup',
+};
 
 function loadSyntaxHighlighterBundle() {
   if (!syntaxHighlighterBundlePromise) {
-    syntaxHighlighterBundlePromise = Promise.all([
-      import('react-syntax-highlighter'),
-      import('react-syntax-highlighter/dist/esm/styles/prism'),
-    ])
-      .then(([syntaxModule, themeModule]) => {
-        const SyntaxHighlighter = syntaxModule.Prism || syntaxModule.default?.Prism;
-        const oneDark = themeModule.oneDark || themeModule.default?.oneDark || themeModule.default;
-        if (!SyntaxHighlighter || !oneDark) {
+    syntaxHighlighterBundlePromise = import('react-syntax-highlighter/dist/esm/prism-async-light')
+      .then((syntaxModule) => {
+        const SyntaxHighlighter = syntaxModule.default || syntaxModule.PrismAsyncLight;
+        if (!SyntaxHighlighter) {
           throw new Error('Failed to load syntax highlighter modules');
         }
-        return { SyntaxHighlighter, oneDark };
+        return { SyntaxHighlighter };
       })
       .catch((err) => {
         syntaxHighlighterBundlePromise = null;
@@ -29,8 +91,9 @@ function loadSyntaxHighlighterBundle() {
 export default function CodeBlock({ children, className, inline }) {
   const [copied, setCopied] = useState(false);
   const [bundle, setBundle] = useState(null);
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : '';
+  const match = /language-([A-Za-z0-9_+#-]+)/.exec(className || '');
+  const language = match ? match[1].toLowerCase() : '';
+  const resolvedLanguage = LANGUAGE_ALIASES[language] || language || 'text';
   const code = String(children).replace(/\n$/, '');
 
   useEffect(() => {
@@ -49,23 +112,8 @@ export default function CodeBlock({ children, className, inline }) {
   }, [inline]);
 
   const customTheme = useMemo(() => {
-    if (!bundle?.oneDark) return null;
-    return {
-      ...bundle.oneDark,
-      'pre[class*="language-"]': {
-        ...bundle.oneDark['pre[class*="language-"]'],
-        background: 'rgba(0, 0, 0, 0.4)',
-        margin: 0,
-        padding: '16px',
-        fontSize: '0.85em',
-        borderRadius: 0,
-      },
-      'code[class*="language-"]': {
-        ...bundle.oneDark['code[class*="language-"]'],
-        background: 'none',
-        fontSize: '0.85em',
-      },
-    };
+    if (!bundle?.SyntaxHighlighter) return null;
+    return CODE_THEME;
   }, [bundle]);
 
   if (inline) {
@@ -95,7 +143,7 @@ export default function CodeBlock({ children, className, inline }) {
       {SyntaxHighlighterComponent && customTheme ? (
         <SyntaxHighlighterComponent
           style={customTheme}
-          language={language || 'text'}
+          language={resolvedLanguage}
           PreTag="div"
           wrapLongLines
         >

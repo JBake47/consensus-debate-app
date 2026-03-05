@@ -1,23 +1,23 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useDeferredValue, useState, useMemo, useRef, useEffect } from 'react';
 import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2 } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
-import { searchConversations } from '../lib/searchConversations';
+import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
 import { exportConversationReport } from '../lib/reportExport';
 import './Sidebar.css';
 
+const SIDEBAR_PAGE_SIZE = 150;
+
 export default function Sidebar({ open, onClose }) {
-  const {
-    conversations,
-    activeConversationId,
-    isConversationInProgress,
-    dispatch,
-  } = useDebate();
+  const { dispatch } = useDebateActions();
+  const { conversations, activeConversationId, isConversationInProgress } = useDebateConversations();
   const importInputRef = useRef(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(SIDEBAR_PAGE_SIZE);
+  const [importFeedback, setImportFeedback] = useState(null);
   const editTitleRef = useRef(null);
 
   const sortedConversations = useMemo(
@@ -26,12 +26,7 @@ export default function Sidebar({ open, onClose }) {
   );
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 150);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+  const deferredQuery = useDeferredValue(searchQuery);
 
   useEffect(() => {
     if (!deleteTarget) return;
@@ -44,12 +39,32 @@ export default function Sidebar({ open, onClose }) {
     return () => window.removeEventListener('keydown', handleKey);
   }, [deleteTarget]);
 
+  useEffect(() => {
+    setVisibleCount(SIDEBAR_PAGE_SIZE);
+  }, [searchQuery, conversations.length]);
+
+  useEffect(() => {
+    if (!importFeedback) return undefined;
+    const timer = window.setTimeout(() => setImportFeedback(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [importFeedback]);
+
+  const searchIndex = useMemo(
+    () => (deferredQuery.length >= 2 ? buildConversationSearchIndex(conversations) : []),
+    [conversations, deferredQuery]
+  );
+
   const searchResults = useMemo(
-    () => searchConversations(conversations, debouncedQuery),
-    [conversations, debouncedQuery]
+    () => searchConversationIndex(searchIndex, deferredQuery, 50),
+    [searchIndex, deferredQuery]
   );
 
   const isSearching = searchQuery.length >= 2;
+  const visibleConversations = useMemo(
+    () => sortedConversations.slice(0, visibleCount),
+    [sortedConversations, visibleCount]
+  );
+  const hasMoreConversations = visibleCount < sortedConversations.length;
 
   const handleSearchResultClick = (conversationId) => {
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: conversationId });
@@ -164,18 +179,18 @@ export default function Sidebar({ open, onClose }) {
         } else if (data.id && data.turns) {
           convs = [data];
         } else {
-          alert('Invalid file format.');
+          setImportFeedback({ tone: 'error', message: 'Invalid file format.' });
           return;
         }
         const valid = convs.filter(c => c.id && c.turns && Array.isArray(c.turns));
         if (valid.length === 0) {
-          alert('No valid conversations found in the file.');
+          setImportFeedback({ tone: 'error', message: 'No valid conversations found in the file.' });
           return;
         }
         dispatch({ type: 'IMPORT_CONVERSATIONS', payload: valid });
-        alert(`Imported ${valid.length} conversation(s).`);
+        setImportFeedback({ tone: 'success', message: `Imported ${valid.length} chat${valid.length === 1 ? '' : 's'}.` });
       } catch {
-        alert('Failed to parse file. Make sure it is a valid JSON export.');
+        setImportFeedback({ tone: 'error', message: 'Failed to parse file. Use a valid JSON export.' });
       }
     };
     reader.readAsText(file);
@@ -247,7 +262,7 @@ export default function Sidebar({ open, onClose }) {
               <p>No debates yet</p>
             </div>
           ) : (
-            sortedConversations.map(conv => {
+            visibleConversations.map(conv => {
               const conversationRunning = Boolean(isConversationInProgress?.(conv.id));
               return (
                 <div
@@ -310,7 +325,7 @@ export default function Sidebar({ open, onClose }) {
                     <button
                       className="sidebar-item-action share"
                       onClick={e => handleShareReport(e, conv)}
-                      title="Export share report"
+                      title="Export report"
                     >
                       <Share2 size={12} />
                     </button>
@@ -350,9 +365,23 @@ export default function Sidebar({ open, onClose }) {
               );
             })
           )}
+          {!isSearching && hasMoreConversations && (
+            <button
+              className="sidebar-load-more"
+              onClick={() => setVisibleCount((current) => current + SIDEBAR_PAGE_SIZE)}
+              type="button"
+            >
+              Show {Math.min(SIDEBAR_PAGE_SIZE, sortedConversations.length - visibleCount)} More Chats
+            </button>
+          )}
         </div>
 
         <div className="sidebar-footer">
+          {importFeedback && (
+            <div className={`sidebar-feedback ${importFeedback.tone}`}>
+              {importFeedback.message}
+            </div>
+          )}
           <div className="sidebar-footer-row">
             <button
               className="sidebar-footer-btn-icon"

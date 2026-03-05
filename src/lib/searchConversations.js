@@ -1,120 +1,106 @@
 /**
- * Search across conversations for a query string.
- * Returns an array of results sorted by recency (updatedAt desc).
- * Each result: { conversationId, conversationTitle, updatedAt, matchType, snippet, turnIndex }
+ * Build a lightweight search index so sidebar queries do not rescan the full
+ * conversation tree and repeatedly lowercase large strings on every keypress.
  */
-export function searchConversations(conversations, query) {
+export function buildConversationSearchIndex(conversations) {
+  return [...(Array.isArray(conversations) ? conversations : [])]
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .map((conv) => {
+      const sections = [];
+      const title = String(conv?.title || '').trim();
+      const description = String(conv?.description || '').trim();
+
+      if (title) {
+        sections.push({ matchType: 'title', text: title, lower: title.toLowerCase(), turnIndex: null });
+      }
+
+      if (description) {
+        sections.push({ matchType: 'description', text: description, lower: description.toLowerCase(), turnIndex: null });
+      }
+
+      for (let turnIndex = 0; turnIndex < (conv?.turns || []).length; turnIndex += 1) {
+        const turn = conv.turns[turnIndex];
+        const prompt = String(turn?.userPrompt || '').trim();
+        if (prompt) {
+          sections.push({ matchType: 'prompt', text: prompt, lower: prompt.toLowerCase(), turnIndex });
+        }
+
+        const synthesis = String(turn?.synthesis?.content || '').trim();
+        if (synthesis) {
+          sections.push({ matchType: 'synthesis', text: synthesis, lower: synthesis.toLowerCase(), turnIndex });
+        }
+
+        const finalRound = Array.isArray(turn?.rounds) && turn.rounds.length > 0
+          ? turn.rounds[turn.rounds.length - 1]
+          : null;
+
+        for (const stream of finalRound?.streams || []) {
+          const response = String(stream?.content || '').trim();
+          if (!response) continue;
+          sections.push({ matchType: 'response', text: response, lower: response.toLowerCase(), turnIndex });
+        }
+      }
+
+      return {
+        conversationId: conv?.id,
+        conversationTitle: title || 'Untitled chat',
+        updatedAt: conv?.updatedAt || conv?.createdAt || 0,
+        sections,
+      };
+    })
+    .filter((entry) => entry.conversationId);
+}
+
+export function searchConversationIndex(index, query, limit = 50) {
   if (!query || query.length < 2) return [];
 
   const q = query.toLowerCase();
   const results = [];
 
-  for (const conv of conversations) {
+  for (const entry of Array.isArray(index) ? index : []) {
     let bestMatch = null;
-
-    // Search title
-    if (conv.title && conv.title.toLowerCase().includes(q)) {
+    for (const section of entry.sections) {
+      if (!section.lower.includes(q)) continue;
       bestMatch = {
-        conversationId: conv.id,
-        conversationTitle: conv.title,
-        updatedAt: conv.updatedAt || conv.createdAt || 0,
-        matchType: 'title',
-        snippet: highlightSnippet(conv.title, q),
-        turnIndex: null,
+        conversationId: entry.conversationId,
+        conversationTitle: entry.conversationTitle,
+        updatedAt: entry.updatedAt,
+        matchType: section.matchType,
+        snippet: highlightSnippet(section.text, q),
+        turnIndex: section.turnIndex,
       };
+      break;
     }
-
-    // Search description
-    if (!bestMatch && conv.description && conv.description.toLowerCase().includes(q)) {
-      bestMatch = {
-        conversationId: conv.id,
-        conversationTitle: conv.title,
-        updatedAt: conv.updatedAt || conv.createdAt || 0,
-        matchType: 'description',
-        snippet: highlightSnippet(conv.description, q),
-        turnIndex: null,
-      };
-    }
-
-    // Search turns
-    if (conv.turns) {
-      for (let ti = 0; ti < conv.turns.length; ti++) {
-        const turn = conv.turns[ti];
-
-        // Search user prompt
-        if (!bestMatch && turn.userPrompt && turn.userPrompt.toLowerCase().includes(q)) {
-          bestMatch = {
-            conversationId: conv.id,
-            conversationTitle: conv.title,
-            updatedAt: conv.updatedAt || conv.createdAt || 0,
-            matchType: 'prompt',
-            snippet: highlightSnippet(turn.userPrompt, q),
-            turnIndex: ti,
-          };
-        }
-
-        // Search synthesis content
-        if (!bestMatch && turn.synthesis?.content && turn.synthesis.content.toLowerCase().includes(q)) {
-          bestMatch = {
-            conversationId: conv.id,
-            conversationTitle: conv.title,
-            updatedAt: conv.updatedAt || conv.createdAt || 0,
-            matchType: 'synthesis',
-            snippet: highlightSnippet(turn.synthesis.content, q),
-            turnIndex: ti,
-          };
-        }
-
-        // Search final round stream content
-        if (!bestMatch && turn.rounds && turn.rounds.length > 0) {
-          const finalRound = turn.rounds[turn.rounds.length - 1];
-          if (finalRound.streams) {
-            for (const stream of finalRound.streams) {
-              if (stream.content && stream.content.toLowerCase().includes(q)) {
-                bestMatch = {
-                  conversationId: conv.id,
-                  conversationTitle: conv.title,
-                  updatedAt: conv.updatedAt || conv.createdAt || 0,
-                  matchType: 'response',
-                  snippet: highlightSnippet(stream.content, q),
-                  turnIndex: ti,
-                };
-                break;
-              }
-            }
-          }
-        }
-
-        if (bestMatch) break;
-      }
-    }
-
     if (bestMatch) {
       results.push(bestMatch);
+      if (results.length >= limit) break;
     }
   }
 
-  // Sort by recency
-  results.sort((a, b) => b.updatedAt - a.updatedAt);
   return results;
+}
+
+export function searchConversations(conversations, query, limit = 50) {
+  return searchConversationIndex(buildConversationSearchIndex(conversations), query, limit);
 }
 
 /**
  * Extract ~60 chars of context around the first match.
  */
 export function highlightSnippet(text, query) {
-  const lower = text.toLowerCase();
+  const safeText = String(text || '');
+  const lower = safeText.toLowerCase();
   const idx = lower.indexOf(query.toLowerCase());
-  if (idx === -1) return text.slice(0, 60);
+  if (idx === -1) return safeText.slice(0, 60);
 
   const contextRadius = 30;
   const start = Math.max(0, idx - contextRadius);
-  const end = Math.min(text.length, idx + query.length + contextRadius);
+  const end = Math.min(safeText.length, idx + query.length + contextRadius);
 
   let snippet = '';
   if (start > 0) snippet += '...';
-  snippet += text.slice(start, end);
-  if (end < text.length) snippet += '...';
+  snippet += safeText.slice(start, end);
+  if (end < safeText.length) snippet += '...';
 
   return snippet;
 }

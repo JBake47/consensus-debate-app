@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
-import { formatFileSize } from '../lib/fileProcessor';
+import { formatFileSize } from '../lib/formatFileSize';
 import ModelCard from './ModelCard';
 import RoundSection from './RoundSection';
 import DebateThread from './DebateThread';
@@ -85,17 +85,19 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
   );
 }
 
-export default function DebateView({ turn, isLastTurn }) {
+function DebateView({ turn, isLastTurn }) {
   const {
     editLastTurn,
     retryLastTurn,
     retryStream,
     retryAllFailed,
     retryWebSearch,
+  } = useDebateActions();
+  const {
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
-    debateInProgress,
-  } = useDebate();
+  } = useDebateSettings();
+  const { debateInProgress } = useDebateConversations();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const [viewerAttachment, setViewerAttachment] = useState(null);
   const [showAllRounds, setShowAllRounds] = useState(false);
@@ -141,7 +143,7 @@ export default function DebateView({ turn, isLastTurn }) {
 
   useEffect(() => {
     setShowAllRounds(false);
-  }, [turn.id, turn.timestamp]);
+  }, [turn.id, turn.timestamp, turn.rounds?.length]);
 
   const failedStreams = hasRounds
     ? turn.rounds.flatMap((round, roundIndex) =>
@@ -431,7 +433,7 @@ export default function DebateView({ turn, isLastTurn }) {
               {hiddenRoundCount > 0 && !showAllRounds && (
                 <div className="debate-virtualized-banner">
                   <span>
-                    {hiddenRoundCount} older round{hiddenRoundCount !== 1 ? 's' : ''} hidden for performance.
+                    {hiddenRoundCount} older round{hiddenRoundCount !== 1 ? 's' : ''} compacted automatically.
                   </span>
                   <button
                     className="debate-virtualized-btn"
@@ -491,3 +493,5 @@ export default function DebateView({ turn, isLastTurn }) {
     </div>
   );
 }
+
+export default memo(DebateView);

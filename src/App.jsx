@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2 } from 'lucide-react';
-import { useDebate } from './context/DebateContext';
+import { useDebateActions, useDebateConversations, useDebateUi } from './context/DebateContext';
 import {
   computeConversationCostMeta,
   formatCostWithQuality,
@@ -18,16 +18,9 @@ const CommandPalette = lazy(() => import('./components/CommandPalette'));
 const MAX_VISIBLE_TURNS = 8;
 
 function AppContent() {
-  const {
-    activeConversation,
-    debateInProgress,
-    webSearchEnabled,
-    showSettings,
-    retryLastTurn,
-    retryAllFailed,
-    clearResponseCache,
-    dispatch,
-  } = useDebate();
+  const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
+  const { activeConversation, debateInProgress } = useDebateConversations();
+  const { webSearchEnabled, showSettings } = useDebateUi();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingHeader, setEditingHeader] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -73,6 +66,12 @@ function AppContent() {
     setShowAllTurns(false);
   }, [activeConversation?.id]);
 
+  useEffect(() => {
+    if (turns.length > MAX_VISIBLE_TURNS + 1 && debateInProgress) {
+      setShowAllTurns(false);
+    }
+  }, [turns.length, debateInProgress]);
+
   // Auto-scroll to bottom only when user is already near the bottom
   useEffect(() => {
     const el = scrollRef.current;
@@ -117,6 +116,22 @@ function AppContent() {
   const handleExportReport = () => {
     if (!activeConversation) return;
     exportConversationReport(activeConversation);
+  };
+
+  const handleQuickStart = ({ mode, prompt }) => {
+    if (mode) {
+      dispatch({ type: 'SET_CHAT_MODE', payload: mode });
+    }
+    if (prompt) {
+      window.dispatchEvent(new CustomEvent('consensus:prefill-composer', { detail: { prompt } }));
+    }
+    emitFocusComposer();
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   };
 
   const commands = useMemo(() => ([
@@ -178,10 +193,10 @@ function AppContent() {
     },
     {
       id: 'share-report',
-      title: 'Export Share Report',
+      title: 'Export Report',
       shortcut: 'E',
       icon: <Share2 size={14} />,
-      keywords: 'export markdown report share',
+      keywords: 'export markdown report',
       run: handleExportReport,
     },
   ].filter((item) => Boolean(item.run))), [
@@ -278,23 +293,23 @@ function AppContent() {
             <button
               className="main-header-share"
               onClick={handleExportReport}
-              title="Export share report"
+              title="Export report"
             >
               <Share2 size={13} />
-              <span>Share</span>
+              <span>Export</span>
             </button>
           )}
         </header>
 
         <div className="main-content" ref={scrollRef}>
           {turns.length === 0 ? (
-            <WelcomeScreen />
+            <WelcomeScreen onQuickStart={handleQuickStart} />
           ) : (
             <div className="turns-container">
               {hiddenTurnCount > 0 && !showAllTurns && (
                 <div className="turn-virtualized-banner">
                   <span>
-                    {hiddenTurnCount} older turn{hiddenTurnCount !== 1 ? 's' : ''} hidden for performance.
+                    {hiddenTurnCount} older turn{hiddenTurnCount !== 1 ? 's' : ''} compacted automatically.
                   </span>
                   <button
                     className="turn-virtualized-btn"
@@ -316,6 +331,13 @@ function AppContent() {
               {showAllTurns && hiddenTurnCount > 0 && (
                 <div className="turn-virtualized-banner">
                   <span>All turns are visible.</span>
+                  <button
+                    className="turn-virtualized-btn"
+                    onClick={jumpToLatest}
+                    type="button"
+                  >
+                    Jump to Latest
+                  </button>
                   <button
                     className="turn-virtualized-btn"
                     onClick={() => setShowAllTurns(false)}

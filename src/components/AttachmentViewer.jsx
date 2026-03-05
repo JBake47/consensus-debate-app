@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Download } from 'lucide-react';
-import { formatFileSize } from '../lib/fileProcessor';
+import { formatFileSize } from '../lib/formatFileSize';
 import MarkdownRenderer from './MarkdownRenderer';
 import './AttachmentViewer.css';
 

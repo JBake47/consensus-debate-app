@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { memo, useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp, Loader2, AlertCircle, Brain, Globe, RotateCcw } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ConvergencePanel from './ConvergencePanel';
@@ -15,7 +15,8 @@ import {
 import './DebateThread.css';
 
 function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry }) {
-  const { retryStream, debateInProgress } = useDebate();
+  const { retryStream } = useDebateActions();
+  const { debateInProgress } = useDebateConversations();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const contentRef = useRef(null);
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
@@ -176,7 +177,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   );
 }
 
-export default function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
+function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
   if (!rounds || rounds.length === 0) return null;
 
   return (
@@ -209,3 +210,5 @@ export default function DebateThread({ rounds, isLastTurn = false, allowRetry = 
     </div>
   );
 }
+
+export default memo(DebateThread);

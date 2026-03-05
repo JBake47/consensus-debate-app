@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, MoreHorizontal } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateSettings, useDebateUi } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
   DEFAULT_SYNTHESIZER_MODEL,
@@ -60,6 +60,26 @@ function createPresetId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function arraysEqual(left, right) {
+  const a = Array.isArray(left) ? left : [];
+  const b = Array.isArray(right) ? right : [];
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function retryPoliciesEqual(left, right) {
+  return (
+    Number(left?.maxAttempts) === Number(right?.maxAttempts)
+    && Number(left?.baseDelayMs) === Number(right?.baseDelayMs)
+    && Number(left?.maxDelayMs) === Number(right?.maxDelayMs)
+    && Number(left?.circuitFailureThreshold) === Number(right?.circuitFailureThreshold)
+    && Number(left?.circuitCooldownMs) === Number(right?.circuitCooldownMs)
+  );
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
@@ -68,8 +88,10 @@ export default function SettingsModal() {
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
     cachePersistenceEnabled, cacheHitCount, cacheEntryCount,
-    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, clearResponseCache, resetDiagnostics, dispatch,
-  } = useDebate();
+    rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics,
+  } = useDebateSettings();
+  const { showSettings } = useDebateUi();
+  const { clearResponseCache, resetDiagnostics, dispatch } = useDebateActions();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
   const [synth, setSynth] = useState(synthesizerModel);
@@ -94,6 +116,7 @@ export default function SettingsModal() {
   const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
   const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
+  const [debouncedKeyInput, setDebouncedKeyInput] = useState(apiKey);
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
   const [pickerOpen, setPickerOpen] = useState(null);
@@ -104,6 +127,7 @@ export default function SettingsModal() {
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
   const presetSheetInputRef = useRef(null);
+  const liveApplyReadyRef = useRef(false);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -162,44 +186,29 @@ export default function SettingsModal() {
     };
   };
 
-  const handleSave = () => {
-    const normalizedSynth = normalizeModelForProvider(synthProvider, synth);
-    const normalizedConvergence = normalizeModelForProvider(convProvider, convModel);
-    const normalizedSearch = normalizeModelForProvider(searchProvider, searchModel);
+  const normalizedSynthValue = normalizeModelForProvider(synthProvider, synth) || synth.trim();
+  const normalizedConvergenceValue = normalizeModelForProvider(convProvider, convModel) || convModel.trim();
+  const normalizedSearchValue = normalizeModelForProvider(searchProvider, searchModel) || searchModel.trim();
+  const draftRetryPolicy = useMemo(() => ({
+    maxAttempts: Number(retryMaxAttempts),
+    baseDelayMs: Number(retryBaseDelayMs),
+    maxDelayMs: Number(retryMaxDelayMs),
+    circuitFailureThreshold: Number(circuitFailureThreshold),
+    circuitCooldownMs: Number(circuitCooldownMs),
+  }), [
+    retryMaxAttempts,
+    retryBaseDelayMs,
+    retryMaxDelayMs,
+    circuitFailureThreshold,
+    circuitCooldownMs,
+  ]);
 
-    dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
-    dispatch({ type: 'SET_API_KEY', payload: keyInput.trim() });
-    dispatch({ type: 'SET_MODELS', payload: models });
-    dispatch({ type: 'SET_SYNTHESIZER', payload: normalizedSynth || synth.trim() });
-    dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergence || convModel.trim() });
-    dispatch({ type: 'SET_CONVERGENCE_ON_FINAL_ROUND', payload: convOnFinalRound });
-    dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
-    dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearch || searchModel.trim() });
-    dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
-    dispatch({
-      type: 'SET_RETRY_POLICY',
-      payload: {
-        maxAttempts: retryMaxAttempts,
-        baseDelayMs: retryBaseDelayMs,
-        maxDelayMs: retryMaxDelayMs,
-        circuitFailureThreshold,
-        circuitCooldownMs,
-      },
-    });
-    dispatch({ type: 'SET_BUDGET_GUARDRAILS_ENABLED', payload: budgetEnabled });
-    dispatch({ type: 'SET_BUDGET_SOFT_LIMIT_USD', payload: budgetSoftLimit });
-    dispatch({ type: 'SET_BUDGET_AUTO_APPROVE_BELOW_USD', payload: budgetAutoApprove });
-    dispatch({ type: 'SET_SMART_RANKING_MODE', payload: rankingMode });
-    dispatch({ type: 'SET_SMART_RANKING_PREFER_FLAGSHIP', payload: rankingPreferFlagship });
-    dispatch({ type: 'SET_SMART_RANKING_PREFER_NEW', payload: rankingPreferNew });
-    dispatch({ type: 'SET_SMART_RANKING_ALLOW_PREVIEW', payload: rankingAllowPreview });
-    dispatch({ type: 'SET_STREAM_VIRTUALIZATION_ENABLED', payload: virtualizationEnabled });
-    dispatch({ type: 'SET_STREAM_VIRTUALIZATION_KEEP_LATEST', payload: virtualizationKeepLatest });
-    dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
+  const handleSave = () => {
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
   const handleClose = () => {
+    liveApplyReadyRef.current = false;
     setPresetSheet(null);
     setPresetSheetValue('');
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
@@ -311,6 +320,13 @@ export default function SettingsModal() {
     if (!value) return '';
     return providerId === 'openrouter' ? value : `${providerId}:${value}`;
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedKeyInput(keyInput.trim());
+    }, 240);
+    return () => clearTimeout(timer);
+  }, [keyInput]);
 
   useEffect(() => {
     if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
@@ -602,6 +618,7 @@ export default function SettingsModal() {
 
   useEffect(() => {
     if (!showSettings) return;
+    liveApplyReadyRef.current = false;
     setKeyInput(apiKey);
     setModels(selectedModels);
     setSynth(synthesizerModel);
@@ -626,11 +643,16 @@ export default function SettingsModal() {
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
     setRememberKey(rememberApiKey);
+    setDebouncedKeyInput(apiKey.trim());
     closePresetSheet();
     setSelectedPresetId('');
     setSynthProvider(getDirectProviderFromValue(synthesizerModel));
     setConvProvider(getDirectProviderFromValue(convergenceModel));
     setSearchProvider(getDirectProviderFromValue(webSearchModel));
+    const timer = setTimeout(() => {
+      liveApplyReadyRef.current = true;
+    }, 0);
+    return () => clearTimeout(timer);
   }, [
     showSettings,
     apiKey,
@@ -653,6 +675,114 @@ export default function SettingsModal() {
     streamVirtualizationKeepLatest,
     cachePersistenceEnabled,
     rememberApiKey,
+  ]);
+
+  useEffect(() => {
+    if (!showSettings || !liveApplyReadyRef.current) return;
+
+    if (rememberKey !== rememberApiKey) {
+      dispatch({ type: 'SET_REMEMBER_API_KEY', payload: rememberKey });
+    }
+    if (debouncedKeyInput !== apiKey) {
+      dispatch({ type: 'SET_API_KEY', payload: debouncedKeyInput });
+    }
+    if (!arraysEqual(models, selectedModels)) {
+      dispatch({ type: 'SET_MODELS', payload: models });
+    }
+    if (normalizedSynthValue !== synthesizerModel) {
+      dispatch({ type: 'SET_SYNTHESIZER', payload: normalizedSynthValue });
+    }
+    if (normalizedConvergenceValue !== convergenceModel) {
+      dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergenceValue });
+    }
+    if (Boolean(convOnFinalRound) !== Boolean(convergenceOnFinalRound)) {
+      dispatch({ type: 'SET_CONVERGENCE_ON_FINAL_ROUND', payload: convOnFinalRound });
+    }
+    if (Number(maxRounds) !== Number(maxDebateRounds)) {
+      dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
+    }
+    if (normalizedSearchValue !== webSearchModel) {
+      dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearchValue });
+    }
+    if (Boolean(strictSearch) !== Boolean(strictWebSearch)) {
+      dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
+    }
+    if (!retryPoliciesEqual(draftRetryPolicy, retryPolicy)) {
+      dispatch({ type: 'SET_RETRY_POLICY', payload: draftRetryPolicy });
+    }
+    if (Boolean(budgetEnabled) !== Boolean(budgetGuardrailsEnabled)) {
+      dispatch({ type: 'SET_BUDGET_GUARDRAILS_ENABLED', payload: budgetEnabled });
+    }
+    if (Number(budgetSoftLimit) !== Number(budgetSoftLimitUsd)) {
+      dispatch({ type: 'SET_BUDGET_SOFT_LIMIT_USD', payload: budgetSoftLimit });
+    }
+    if (Number(budgetAutoApprove) !== Number(budgetAutoApproveBelowUsd)) {
+      dispatch({ type: 'SET_BUDGET_AUTO_APPROVE_BELOW_USD', payload: budgetAutoApprove });
+    }
+    if (rankingMode !== smartRankingMode) {
+      dispatch({ type: 'SET_SMART_RANKING_MODE', payload: rankingMode });
+    }
+    if (Boolean(rankingPreferFlagship) !== Boolean(smartRankingPreferFlagship)) {
+      dispatch({ type: 'SET_SMART_RANKING_PREFER_FLAGSHIP', payload: rankingPreferFlagship });
+    }
+    if (Boolean(rankingPreferNew) !== Boolean(smartRankingPreferNew)) {
+      dispatch({ type: 'SET_SMART_RANKING_PREFER_NEW', payload: rankingPreferNew });
+    }
+    if (Boolean(rankingAllowPreview) !== Boolean(smartRankingAllowPreview)) {
+      dispatch({ type: 'SET_SMART_RANKING_ALLOW_PREVIEW', payload: rankingAllowPreview });
+    }
+    if (Boolean(virtualizationEnabled) !== Boolean(streamVirtualizationEnabled)) {
+      dispatch({ type: 'SET_STREAM_VIRTUALIZATION_ENABLED', payload: virtualizationEnabled });
+    }
+    if (Number(virtualizationKeepLatest) !== Number(streamVirtualizationKeepLatest)) {
+      dispatch({ type: 'SET_STREAM_VIRTUALIZATION_KEEP_LATEST', payload: virtualizationKeepLatest });
+    }
+    if (Boolean(cachePersistence) !== Boolean(cachePersistenceEnabled)) {
+      dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
+    }
+  }, [
+    showSettings,
+    rememberKey,
+    rememberApiKey,
+    debouncedKeyInput,
+    apiKey,
+    models,
+    selectedModels,
+    normalizedSynthValue,
+    synthesizerModel,
+    normalizedConvergenceValue,
+    convergenceModel,
+    convOnFinalRound,
+    convergenceOnFinalRound,
+    maxRounds,
+    maxDebateRounds,
+    normalizedSearchValue,
+    webSearchModel,
+    strictSearch,
+    strictWebSearch,
+    draftRetryPolicy,
+    retryPolicy,
+    budgetEnabled,
+    budgetGuardrailsEnabled,
+    budgetSoftLimit,
+    budgetSoftLimitUsd,
+    budgetAutoApprove,
+    budgetAutoApproveBelowUsd,
+    rankingMode,
+    smartRankingMode,
+    rankingPreferFlagship,
+    smartRankingPreferFlagship,
+    rankingPreferNew,
+    smartRankingPreferNew,
+    rankingAllowPreview,
+    smartRankingAllowPreview,
+    virtualizationEnabled,
+    streamVirtualizationEnabled,
+    virtualizationKeepLatest,
+    streamVirtualizationKeepLatest,
+    cachePersistence,
+    cachePersistenceEnabled,
+    dispatch,
   ]);
 
   if (!showSettings) return null;
@@ -786,7 +916,7 @@ export default function SettingsModal() {
                 )}
               </div>
               <p className="settings-hint">
-                Choosing a preset loads it immediately into the draft. <strong>Save Settings</strong> still controls what becomes active app-wide.
+                Choosing a preset applies it immediately. Settings update live while this panel is open.
               </p>
             </div>
           </div>
@@ -1341,7 +1471,7 @@ export default function SettingsModal() {
             className="settings-btn-primary"
             onClick={handleSave}
           >
-            Save Settings
+            Done
           </button>
         </div>
         {presetSheet && (

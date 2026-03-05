@@ -22,7 +22,7 @@ import {
   parseEnsembleVoteResponse,
   getFocusedEnsembleAnalysisPrompt,
 } from '../lib/debateEngine';
-import { buildAttachmentContent, buildAttachmentTextContent } from '../lib/fileProcessor';
+import { buildAttachmentContent, buildAttachmentTextContent } from '../lib/attachmentContent';
 import {
   buildConversationContext,
   buildSummaryPrompt,
@@ -35,7 +35,10 @@ import {
   getRetryDelayMs,
 } from '../lib/retryPolicy';
 
-const DebateContext = createContext(null);
+const DebateActionContext = createContext(null);
+const DebateSettingsContext = createContext(null);
+const DebateUiContext = createContext(null);
+const DebateConversationContext = createContext(null);
 
 const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
@@ -809,7 +812,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.webSearchResult = result;
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'SET_MODEL_CATALOG': {
@@ -834,7 +836,6 @@ function reducer(state, action) {
     }
     case 'SET_METRICS': {
       const metrics = normalizeMetrics(action.payload);
-      saveToStorage('debate_metrics', metrics);
       return { ...state, metrics };
     }
     case 'SET_ACTIVE_CONVERSATION': {
@@ -852,7 +853,6 @@ function reducer(state, action) {
         turns: [],
       };
       const conversations = [conv, ...state.conversations];
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations, activeConversationId: conv.id };
     }
     case 'ADD_TURN': {
@@ -862,7 +862,6 @@ function reducer(state, action) {
           ? { ...c, turns: [...c.turns, action.payload.turn], updatedAt: Date.now() }
           : c
       );
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'ADD_ROUND': {
@@ -870,7 +869,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = [...(lastTurn.rounds || []), round];
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'UPDATE_ROUND_STREAM': {
@@ -905,9 +903,6 @@ function reducer(state, action) {
         rounds[roundIndex] = round;
         lastTurn.rounds = rounds;
       });
-      if (status === 'complete' || status === 'error') {
-        saveToStorage('debate_conversations', conversations);
-      }
       return { ...state, conversations };
     }
     case 'UPDATE_ROUND_STATUS': {
@@ -917,7 +912,6 @@ function reducer(state, action) {
         rounds[roundIndex] = { ...rounds[roundIndex], status };
         lastTurn.rounds = rounds;
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'SET_CONVERGENCE': {
@@ -927,7 +921,6 @@ function reducer(state, action) {
         rounds[roundIndex] = { ...rounds[roundIndex], convergenceCheck };
         lastTurn.rounds = rounds;
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'SET_DEBATE_METADATA': {
@@ -935,7 +928,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.debateMetadata = metadata;
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'SET_ENSEMBLE_RESULT': {
@@ -943,10 +935,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.ensembleResult = ensembleResult;
       });
-      const shouldPersist = ensembleResult.status === 'complete' || ensembleResult.status === 'error';
-      if (shouldPersist) {
-        saveToStorage('debate_conversations', conversations);
-      }
       return { ...state, conversations };
     }
     case 'SET_RUNNING_SUMMARY': {
@@ -954,7 +942,6 @@ function reducer(state, action) {
       const conversations = state.conversations.map(c =>
         c.id === conversationId ? { ...c, runningSummary: summary } : c
       );
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'UPDATE_SYNTHESIS': {
@@ -966,9 +953,6 @@ function reducer(state, action) {
         if (durationMs !== undefined) synth.durationMs = durationMs;
         lastTurn.synthesis = synth;
       });
-      if (status === 'complete' || status === 'error') {
-        saveToStorage('debate_conversations', conversations);
-      }
       return { ...state, conversations };
     }
     case 'SET_CONVERSATION_TITLE': {
@@ -1043,7 +1027,6 @@ function reducer(state, action) {
       if (!changed) {
         return state;
       }
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'SET_CONVERSATION_DESCRIPTION': {
@@ -1051,12 +1034,10 @@ function reducer(state, action) {
       const conversations = state.conversations.map(c =>
         c.id === conversationId ? { ...c, description } : c
       );
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'DELETE_CONVERSATION': {
       const conversations = state.conversations.filter(c => c.id !== action.payload);
-      saveToStorage('debate_conversations', conversations);
       const activeConversationId = state.activeConversationId === action.payload
         ? null
         : state.activeConversationId;
@@ -1069,13 +1050,11 @@ function reducer(state, action) {
       if (newConvs.length === 0) return state;
       const { conversations: migratedNew } = migrateConversations(newConvs);
       const conversations = [...migratedNew, ...state.conversations];
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'RECOVER_INTERRUPTED_RUNS': {
       const { conversations, migrated } = migrateConversations(state.conversations);
       if (!migrated) return state;
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'BRANCH_FROM_ROUND': {
@@ -1132,7 +1111,6 @@ function reducer(state, action) {
       };
 
       const conversations = [branchConversation, ...state.conversations];
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations, activeConversationId: branchConversationId };
     }
     case 'SET_DEBATE_IN_PROGRESS': {
@@ -1154,7 +1132,6 @@ function reducer(state, action) {
         const turns = c.turns.slice(0, -1);
         return { ...c, turns, updatedAt: Date.now() };
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'TRUNCATE_ROUNDS': {
@@ -1162,7 +1139,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = lastTurn.rounds.slice(0, keepCount);
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     case 'RESET_SYNTHESIS': {
@@ -1170,7 +1146,6 @@ function reducer(state, action) {
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.synthesis = { model, content: '', status: 'pending', error: null };
       });
-      saveToStorage('debate_conversations', conversations);
       return { ...state, conversations };
     }
     default:
@@ -1203,6 +1178,22 @@ export function DebateProvider({ children }) {
       cacheEntryCount: state.cacheEntryCount,
     };
   }, [state.cacheHitCount, state.cacheEntryCount]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const timer = window.setTimeout(() => {
+      saveToStorage('debate_conversations', state.conversations);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [state.conversations]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const timer = window.setTimeout(() => {
+      saveToStorage('debate_metrics', state.metrics);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [state.metrics]);
 
   const setAbortController = useCallback((conversationId, controller) => {
     if (!conversationId || !controller) return;
@@ -5025,12 +5016,100 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
 
-  const value = {
-    ...state,
+  const settingsValue = useMemo(() => ({
+    apiKey: state.apiKey,
+    rememberApiKey: state.rememberApiKey,
+    selectedModels: state.selectedModels,
+    synthesizerModel: state.synthesizerModel,
+    convergenceModel: state.convergenceModel,
+    convergenceOnFinalRound: state.convergenceOnFinalRound,
+    maxDebateRounds: state.maxDebateRounds,
+    webSearchModel: state.webSearchModel,
+    strictWebSearch: state.strictWebSearch,
+    retryPolicy: state.retryPolicy,
+    budgetGuardrailsEnabled: state.budgetGuardrailsEnabled,
+    budgetSoftLimitUsd: state.budgetSoftLimitUsd,
+    budgetAutoApproveBelowUsd: state.budgetAutoApproveBelowUsd,
+    smartRankingMode: state.smartRankingMode,
+    smartRankingPreferFlagship: state.smartRankingPreferFlagship,
+    smartRankingPreferNew: state.smartRankingPreferNew,
+    smartRankingAllowPreview: state.smartRankingAllowPreview,
+    streamVirtualizationEnabled: state.streamVirtualizationEnabled,
+    streamVirtualizationKeepLatest: state.streamVirtualizationKeepLatest,
+    cachePersistenceEnabled: state.cachePersistenceEnabled,
+    cacheHitCount: state.cacheHitCount,
+    cacheEntryCount: state.cacheEntryCount,
+    modelPresets: state.modelPresets,
+    modelCatalog: state.modelCatalog,
+    modelCatalogStatus: state.modelCatalogStatus,
+    modelCatalogError: state.modelCatalogError,
+    providerStatus: state.providerStatus,
+    providerStatusState: state.providerStatusState,
+    providerStatusError: state.providerStatusError,
+    metrics: state.metrics,
+  }), [
+    state.apiKey,
+    state.rememberApiKey,
+    state.selectedModels,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.convergenceOnFinalRound,
+    state.maxDebateRounds,
+    state.webSearchModel,
+    state.strictWebSearch,
+    state.retryPolicy,
+    state.budgetGuardrailsEnabled,
+    state.budgetSoftLimitUsd,
+    state.budgetAutoApproveBelowUsd,
+    state.smartRankingMode,
+    state.smartRankingPreferFlagship,
+    state.smartRankingPreferNew,
+    state.smartRankingAllowPreview,
+    state.streamVirtualizationEnabled,
+    state.streamVirtualizationKeepLatest,
+    state.cachePersistenceEnabled,
+    state.cacheHitCount,
+    state.cacheEntryCount,
+    state.modelPresets,
+    state.modelCatalog,
+    state.modelCatalogStatus,
+    state.modelCatalogError,
+    state.providerStatus,
+    state.providerStatusState,
+    state.providerStatusError,
+    state.metrics,
+  ]);
+
+  const uiValue = useMemo(() => ({
+    showSettings: state.showSettings,
+    editingTurn: state.editingTurn,
+    webSearchEnabled: state.webSearchEnabled,
+    chatMode: state.chatMode,
+    focusedMode: state.focusedMode,
+  }), [
+    state.showSettings,
+    state.editingTurn,
+    state.webSearchEnabled,
+    state.chatMode,
+    state.focusedMode,
+  ]);
+
+  const conversationValue = useMemo(() => ({
+    conversations: state.conversations,
+    activeConversationId: state.activeConversationId,
     activeConversation,
     debateInProgress: activeConversationInProgress,
     activeConversationInProgress,
     isConversationInProgress,
+  }), [
+    state.conversations,
+    state.activeConversationId,
+    activeConversation,
+    activeConversationInProgress,
+    isConversationInProgress,
+  ]);
+
+  const actionValue = useMemo(() => ({
     dispatch,
     startDebate,
     startDirect,
@@ -5043,22 +5122,70 @@ export function DebateProvider({ children }) {
     retryStream,
     retryRound,
     retrySynthesis,
-      branchFromRound,
-      clearResponseCache,
-      resetDiagnostics,
-    };
+    branchFromRound,
+    clearResponseCache,
+    resetDiagnostics,
+  }), [
+    dispatch,
+    startDebate,
+    startDirect,
+    startParallel,
+    cancelDebate,
+    editLastTurn,
+    retryLastTurn,
+    retryAllFailed,
+    retryWebSearch,
+    retryStream,
+    retryRound,
+    retrySynthesis,
+    branchFromRound,
+    clearResponseCache,
+    resetDiagnostics,
+  ]);
 
   return (
-    <DebateContext.Provider value={value}>
-      {children}
-    </DebateContext.Provider>
+    <DebateActionContext.Provider value={actionValue}>
+      <DebateSettingsContext.Provider value={settingsValue}>
+        <DebateUiContext.Provider value={uiValue}>
+          <DebateConversationContext.Provider value={conversationValue}>
+            {children}
+          </DebateConversationContext.Provider>
+        </DebateUiContext.Provider>
+      </DebateSettingsContext.Provider>
+    </DebateActionContext.Provider>
   );
 }
 
-export function useDebate() {
-  const context = useContext(DebateContext);
-  if (!context) {
-    throw new Error('useDebate must be used within a DebateProvider');
+function useRequiredContext(context, name) {
+  const value = useContext(context);
+  if (!value) {
+    throw new Error(`${name} must be used within a DebateProvider`);
   }
-  return context;
+  return value;
 }
+
+export function useDebateActions() {
+  return useRequiredContext(DebateActionContext, 'useDebateActions');
+}
+
+export function useDebateSettings() {
+  return useRequiredContext(DebateSettingsContext, 'useDebateSettings');
+}
+
+export function useDebateUi() {
+  return useRequiredContext(DebateUiContext, 'useDebateUi');
+}
+
+export function useDebateConversations() {
+  return useRequiredContext(DebateConversationContext, 'useDebateConversations');
+}
+
+export function useDebate() {
+  return {
+    ...useDebateSettings(),
+    ...useDebateUi(),
+    ...useDebateConversations(),
+    ...useDebateActions(),
+  };
+}
+

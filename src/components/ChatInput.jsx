@@ -1,26 +1,23 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
-import { processFile, formatFileSize } from '../lib/fileProcessor';
+import {
+  useDebateActions,
+  useDebateConversations,
+  useDebateSettings,
+  useDebateUi,
+} from '../context/DebateContext';
 import { getImageIncompatibleModels } from '../lib/modelCapabilities';
 import { estimateTurnBudget } from '../lib/budgetEstimator';
 import { formatCostWithQuality } from '../lib/formatTokens';
+import { formatFileSize } from '../lib/formatFileSize';
 import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
 import './ChatInput.css';
 
 export default function ChatInput() {
+  const { startDebate, startDirect, startParallel, cancelDebate, dispatch } = useDebateActions();
+  const { debateInProgress, activeConversationId } = useDebateConversations();
   const {
     apiKey,
-    startDebate,
-    startDirect,
-    startParallel,
-    cancelDebate,
-    debateInProgress,
-    webSearchEnabled,
-    chatMode,
-    focusedMode,
-    editingTurn,
-    activeConversation,
     selectedModels,
     modelCatalog,
     modelCatalogStatus,
@@ -32,8 +29,8 @@ export default function ChatInput() {
     budgetGuardrailsEnabled,
     budgetSoftLimitUsd,
     budgetAutoApproveBelowUsd,
-    dispatch,
-  } = useDebate();
+  } = useDebateSettings();
+  const { webSearchEnabled, chatMode, focusedMode, editingTurn } = useDebateUi();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -45,6 +42,8 @@ export default function ChatInput() {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
+  const fileWorkerRef = useRef(null);
+  const fileWorkerRequestRef = useRef(0);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -67,26 +66,78 @@ export default function ChatInput() {
     }
   }, [editingTurn, dispatch]);
 
+  const fallbackAttachment = useCallback((file) => ({
+    name: file?.name || 'attachment',
+    size: Number(file?.size || 0),
+    type: file?.type || '',
+    category: 'error',
+    content: '',
+    preview: 'error',
+    error: 'Failed to process file',
+  }), []);
+
+  const ensureFileWorker = useCallback(() => {
+    if (!fileWorkerRef.current) {
+      fileWorkerRef.current = new Worker(new URL('../workers/fileProcessorWorker.js', import.meta.url), { type: 'module' });
+    }
+    return fileWorkerRef.current;
+  }, []);
+
+  const processFilesOnMainThread = useCallback(async (files) => {
+    const { processFile } = await import('../lib/fileProcessor');
+    return Promise.all(
+      Array.from(files).map((file) => processFile(file).catch(() => fallbackAttachment(file)))
+    );
+  }, [fallbackAttachment]);
+
+  const processFilesInWorker = useCallback((files) => {
+    const safeFiles = Array.from(files || []);
+    if (safeFiles.length === 0) return Promise.resolve([]);
+
+    return new Promise((resolve, reject) => {
+      const worker = ensureFileWorker();
+      const requestId = `files-${Date.now()}-${++fileWorkerRequestRef.current}`;
+
+      const cleanup = () => {
+        worker.removeEventListener('message', handleMessage);
+        worker.removeEventListener('error', handleError);
+      };
+
+      const handleMessage = (event) => {
+        if (event.data?.requestId !== requestId) return;
+        cleanup();
+        const nextAttachments = Array.isArray(event.data?.results)
+          ? event.data.results.map((entry, index) => entry?.attachment || fallbackAttachment(safeFiles[index]))
+          : [];
+        resolve(nextAttachments);
+      };
+
+      const handleError = (error) => {
+        cleanup();
+        reject(error);
+      };
+
+      worker.addEventListener('message', handleMessage);
+      worker.addEventListener('error', handleError);
+      worker.postMessage({ requestId, files: safeFiles });
+    });
+  }, [ensureFileWorker, fallbackAttachment]);
+
   const handleFiles = useCallback(async (files) => {
     if (!files || files.length === 0) return;
     setProcessing(true);
     try {
-      const processed = await Promise.all(
-        Array.from(files).map(f => processFile(f).catch(() => ({
-          name: f.name,
-          size: f.size,
-          type: f.type,
-          category: 'error',
-          content: '',
-          preview: 'error',
-          error: 'Failed to process file',
-        })))
-      );
-      setAttachments(prev => [...prev, ...processed]);
+      let processed;
+      try {
+        processed = await processFilesInWorker(files);
+      } catch {
+        processed = await processFilesOnMainThread(files);
+      }
+      setAttachments((prev) => [...prev, ...processed]);
     } finally {
       setProcessing(false);
     }
-  }, []);
+  }, [processFilesInWorker, processFilesOnMainThread]);
 
   const removeAttachment = (index) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -105,7 +156,7 @@ export default function ChatInput() {
       routeInfo: payload?.routeInfo || undefined,
     };
     const prompt = trimmed || '(see attachments)';
-    if (editMeta?.conversationId && editMeta.conversationId === activeConversation?.id) {
+    if (editMeta?.conversationId && editMeta.conversationId === activeConversationId) {
       dispatch({ type: 'REMOVE_LAST_TURN', payload: editMeta.conversationId });
       setEditMeta(null);
     }
@@ -120,7 +171,7 @@ export default function ChatInput() {
     debateInProgress,
     webSearchEnabled,
     editMeta?.conversationId,
-    activeConversation?.id,
+    activeConversationId,
     dispatch,
     chatMode,
     startDebate,
@@ -235,21 +286,21 @@ export default function ChatInput() {
   };
 
   const placeholderByMode = {
-    debate: 'Ask a question to debate across models...',
-    direct: 'Ask a question for a synthesized consensus...',
-    parallel: 'Ask a question for parallel responses...',
+    debate: 'Ask a hard question for a deeper debate...',
+    direct: 'Ask for one best answer...',
+    parallel: 'Ask to compare model answers...',
   };
 
   const modeOptions = [
-    { id: 'debate', label: 'Debate', icon: <Swords size={14} /> },
-    { id: 'direct', label: 'Ensemble', icon: <MessageSquare size={14} /> },
-    { id: 'parallel', label: 'Parallel', icon: <Layers size={14} /> },
+    { id: 'debate', label: 'Deep Debate', icon: <Swords size={14} /> },
+    { id: 'direct', label: 'Best Answer', icon: <MessageSquare size={14} /> },
+    { id: 'parallel', label: 'Compare', icon: <Layers size={14} /> },
   ];
 
   const submitLabelByMode = {
-    debate: 'Debate',
-    direct: 'Send',
-    parallel: 'Parallel',
+    debate: 'Run Debate',
+    direct: 'Get Answer',
+    parallel: 'Compare',
   };
 
   useEffect(() => {
@@ -269,6 +320,22 @@ export default function ChatInput() {
     };
     window.addEventListener('consensus:focus-composer', handleFocusComposer);
     return () => window.removeEventListener('consensus:focus-composer', handleFocusComposer);
+  }, []);
+
+  useEffect(() => {
+    const handlePrefillComposer = (event) => {
+      const prompt = String(event.detail?.prompt || '').trim();
+      if (!prompt) return;
+      setInput(prompt);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener('consensus:prefill-composer', handlePrefillComposer);
+    return () => window.removeEventListener('consensus:prefill-composer', handlePrefillComposer);
+  }, []);
+
+  useEffect(() => () => {
+    fileWorkerRef.current?.terminate();
+    fileWorkerRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -446,10 +513,10 @@ export default function ChatInput() {
               className={`chat-toggle ${focusedMode ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
               disabled={debateInProgress}
-              title={focusedMode ? 'Focused mode: concise, direct responses' : 'Enable focused mode for shorter, sharper outputs'}
+              title={focusedMode ? 'Shorter replies enabled' : 'Prefer shorter, sharper replies'}
             >
               <Zap size={15} />
-              <span>Focused</span>
+              <span>Shorter</span>
             </button>
             <button
               className="chat-toggle"

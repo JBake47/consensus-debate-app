@@ -1,6 +1,6 @@
-import { useRef, useEffect, useState } from 'react';
+import { memo, useRef, useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye, Link2 } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName } from '../lib/openrouter';
@@ -152,8 +152,9 @@ function DebateInternals({ rounds, debateMetadata }) {
   );
 }
 
-export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult }) {
-  const { retrySynthesis, debateInProgress } = useDebate();
+function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult }) {
+  const { retrySynthesis } = useDebateActions();
+  const { debateInProgress } = useDebateConversations();
   const { model, content, status, error } = synthesis;
   const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
@@ -306,3 +307,5 @@ export default function SynthesisView({ synthesis, debateMetadata, isLastTurn, r
     </div>
   );
 }
+
+export default memo(SynthesisView);

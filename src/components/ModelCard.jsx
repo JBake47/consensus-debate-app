@@ -1,6 +1,6 @@
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { memo, useRef, useEffect, useState, useMemo } from 'react';
 import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe, Link2 } from 'lucide-react';
-import { useDebate } from '../context/DebateContext';
+import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
@@ -19,8 +19,9 @@ function isReasoningModel(modelId) {
   return /\bo[13]\b/.test(id) || id.includes('deepseek-r1') || id.includes('qwq') || id.includes('reasoner');
 }
 
-export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
-  const { retryStream, debateInProgress } = useDebate();
+function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
+  const { retryStream } = useDebateActions();
+  const { debateInProgress } = useDebateConversations();
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
   const [collapsed, setCollapsed] = useState(false);
   const reasoningModel = isReasoningModel(model);
@@ -339,3 +340,5 @@ export default function ModelCard({ stream, roundIndex, streamIndex, isLastTurn,
     </div>
   );
 }
+
+export default memo(ModelCard);
