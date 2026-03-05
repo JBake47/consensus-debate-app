@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database } from 'lucide-react';
+import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, MoreHorizontal } from 'lucide-react';
 import { useDebate } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
@@ -15,6 +15,51 @@ import './SettingsModal.css';
 
 const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
 
+function formatDurationCompact(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '--';
+  if (ms >= 10000) return `${Math.round(ms / 1000)}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function presetMatchesDraft(preset, draft) {
+  if (!preset || !draft) return false;
+  const presetModels = Array.isArray(preset.models) ? preset.models : [];
+  const draftModels = Array.isArray(draft.models) ? draft.models : [];
+  if (presetModels.length !== draftModels.length) return false;
+  for (let index = 0; index < presetModels.length; index += 1) {
+    if (presetModels[index] !== draftModels[index]) return false;
+  }
+  return (
+    String(preset.synthesizerModel || '') === String(draft.synthesizerModel || '')
+    && String(preset.convergenceModel || '') === String(draft.convergenceModel || '')
+    && String(preset.webSearchModel || '') === String(draft.webSearchModel || '')
+    && Number(preset.maxDebateRounds || 0) === Number(draft.maxDebateRounds || 0)
+  );
+}
+
+function buildUniquePresetName(baseName, presets, excludeId = null) {
+  const root = String(baseName || 'New Preset').trim() || 'New Preset';
+  const existing = new Set(
+    (presets || [])
+      .filter((preset) => preset?.id !== excludeId)
+      .map((preset) => String(preset?.name || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  if (!existing.has(root.toLowerCase())) return root;
+  let index = 2;
+  let candidate = `${root} ${index}`;
+  while (existing.has(candidate.toLowerCase())) {
+    index += 1;
+    candidate = `${root} ${index}`;
+  }
+  return candidate;
+}
+
+function createPresetId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
@@ -23,7 +68,7 @@ export default function SettingsModal() {
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
     cachePersistenceEnabled, cacheHitCount, cacheEntryCount,
-    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, clearResponseCache, dispatch,
+    showSettings, rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, clearResponseCache, resetDiagnostics, dispatch,
   } = useDebate();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
@@ -52,13 +97,13 @@ export default function SettingsModal() {
   const [newModel, setNewModel] = useState('');
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
   const [pickerOpen, setPickerOpen] = useState(null);
-  const [presetName, setPresetName] = useState('');
-  const [editingPresetId, setEditingPresetId] = useState(null);
-  const [expandedPresets, setExpandedPresets] = useState([]);
+  const [selectedPresetId, setSelectedPresetId] = useState('');
+  const [presetSheet, setPresetSheet] = useState(null);
+  const [presetSheetValue, setPresetSheetValue] = useState('');
   const [synthProvider, setSynthProvider] = useState('openrouter');
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
-  const presetNameInputRef = useRef(null);
+  const presetSheetInputRef = useRef(null);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -155,6 +200,8 @@ export default function SettingsModal() {
   };
 
   const handleClose = () => {
+    setPresetSheet(null);
+    setPresetSheetValue('');
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -211,15 +258,48 @@ export default function SettingsModal() {
     }),
     [modelCatalog, metrics, rankingMode, rankingPreferFlagship, rankingPreferNew, rankingAllowPreview]
   );
-  const editingPreset = useMemo(
-    () => modelPresets.find(p => p.id === editingPresetId) || null,
-    [modelPresets, editingPresetId]
+  const currentPresetSnapshot = useMemo(() => ({
+    models,
+    synthesizerModel: normalizeModelForProvider(synthProvider, synth) || synth,
+    convergenceModel: normalizeModelForProvider(convProvider, convModel) || convModel,
+    maxDebateRounds: Number.isFinite(Number(maxRounds)) ? Number(maxRounds) : 0,
+    webSearchModel: normalizeModelForProvider(searchProvider, searchModel) || searchModel,
+  }), [models, synthProvider, synth, convProvider, convModel, maxRounds, searchProvider, searchModel]);
+  const selectedPreset = useMemo(
+    () => modelPresets.find((preset) => preset.id === selectedPresetId) || null,
+    [modelPresets, selectedPresetId]
   );
-  const canSavePreset = models.length > 0 && (
-    editingPresetId
-      ? Boolean(presetName.trim() || editingPreset?.name)
-      : Boolean(presetName.trim())
+  const activePresetMatch = useMemo(
+    () => modelPresets.find((preset) => presetMatchesDraft(preset, currentPresetSnapshot)) || null,
+    [modelPresets, currentPresetSnapshot]
   );
+  const selectedPresetIsModified = useMemo(
+    () => (selectedPreset ? !presetMatchesDraft(selectedPreset, currentPresetSnapshot) : false),
+    [selectedPreset, currentPresetSnapshot]
+  );
+  const diagnosticsSummary = useMemo(() => {
+    const callCount = Number(metrics?.callCount || 0);
+    const successCount = Number(metrics?.successCount || 0);
+    const failureCount = Number(metrics?.failureCount || 0);
+    const retryAttempts = Number(metrics?.retryAttempts || 0);
+    const retryRecovered = Number(metrics?.retryRecovered || 0);
+    const samples = Array.isArray(metrics?.firstAnswerTimes) ? metrics.firstAnswerTimes : [];
+    const avgFirstAnswerMs = samples.length > 0
+      ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length)
+      : null;
+    const providerFailures = metrics?.failureByProvider && typeof metrics.failureByProvider === 'object'
+      ? Object.entries(metrics.failureByProvider).sort((a, b) => b[1] - a[1])
+      : [];
+
+    return {
+      hasData: callCount > 0 || failureCount > 0 || retryAttempts > 0,
+      totalCalls: callCount,
+      successRate: callCount > 0 ? Math.round((successCount / callCount) * 100) : null,
+      avgFirstAnswer: formatDurationCompact(avgFirstAnswerMs),
+      retryRecovery: retryAttempts > 0 ? `${retryRecovered} of ${retryAttempts}` : 'No retries',
+      topProviderFailure: providerFailures[0] || null,
+    };
+  }, [metrics]);
 
   const getDirectProviderFromValue = (value) => {
     if (!value) return 'openrouter';
@@ -239,13 +319,40 @@ export default function SettingsModal() {
   }, [providerOptions, newModelProvider]);
 
   useEffect(() => {
-    if (!editingPresetId) return;
-    const input = presetNameInputRef.current;
-    if (!input) return;
-    input.focus();
-    const len = input.value.length;
-    input.setSelectionRange(len, len);
-  }, [editingPresetId]);
+    if (!showSettings) return;
+    setSelectedPresetId((current) => {
+      if (current && modelPresets.some((preset) => preset.id === current)) return current;
+      return activePresetMatch?.id || '';
+    });
+  }, [showSettings, modelPresets, activePresetMatch]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    if (!activePresetMatch) return;
+    if (selectedPreset && selectedPresetIsModified) return;
+    if (selectedPresetId === activePresetMatch.id) return;
+    setSelectedPresetId(activePresetMatch.id);
+  }, [showSettings, activePresetMatch, selectedPreset, selectedPresetIsModified, selectedPresetId]);
+
+  useEffect(() => {
+    if (!presetSheet?.requiresValue) return;
+    const timer = setTimeout(() => {
+      presetSheetInputRef.current?.focus();
+      presetSheetInputRef.current?.select();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [presetSheet]);
+
+  useEffect(() => {
+    if (!presetSheet) return;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closePresetSheet();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [presetSheet]);
 
   const coerceDirectModelToOpenRouter = (value) => {
     if (!value || !value.includes(':')) return value;
@@ -297,25 +404,18 @@ export default function SettingsModal() {
     }
   };
 
-  const savePreset = () => {
-    const nameValue = editingPresetId ? (presetName.trim() || editingPreset?.name || '') : presetName;
-    const payload = buildPresetPayload(nameValue);
-    if (!payload) return;
+  const buildPayloadFromPreset = (preset, nameValue) => ({
+    name: String(nameValue || preset?.name || '').trim(),
+    models: Array.isArray(preset?.models) ? [...preset.models] : [],
+    synthesizerModel: preset?.synthesizerModel || '',
+    convergenceModel: preset?.convergenceModel || '',
+    maxDebateRounds: Number.isFinite(Number(preset?.maxDebateRounds)) ? Number(preset.maxDebateRounds) : 0,
+    webSearchModel: preset?.webSearchModel || '',
+  });
 
-    if (editingPresetId) {
-      dispatch({
-        type: 'UPDATE_MODEL_PRESET',
-        payload: { id: editingPresetId, ...payload },
-      });
-    } else {
-      dispatch({
-        type: 'ADD_MODEL_PRESET',
-        payload,
-      });
-    }
-
-    setPresetName('');
-    setEditingPresetId(null);
+  const closePresetSheet = () => {
+    setPresetSheet(null);
+    setPresetSheetValue('');
   };
 
   const loadPresetValues = (preset) => {
@@ -330,38 +430,149 @@ export default function SettingsModal() {
     if (preset.webSearchModel) setSearchProvider(getDirectProviderFromValue(preset.webSearchModel));
   };
 
-  const usePreset = (preset) => {
+  const applyPreset = (preset) => {
     loadPresetValues(preset);
-    setEditingPresetId(null);
-    setPresetName('');
+    setSelectedPresetId(preset.id);
   };
 
-  const editPreset = (preset) => {
-    loadPresetValues(preset);
-    setPresetName(preset.name || '');
-    setEditingPresetId(preset.id);
-    setExpandedPresets((prev) => (prev.includes(preset.id) ? prev : [...prev, preset.id]));
-  };
-
-  const cancelPresetEdit = () => {
-    setEditingPresetId(null);
-    setPresetName('');
-  };
-
-  const deletePreset = (presetId) => {
-    dispatch({ type: 'DELETE_MODEL_PRESET', payload: presetId });
-    if (editingPresetId === presetId) {
-      setEditingPresetId(null);
-      setPresetName('');
+  const handlePresetSelection = (event) => {
+    const nextId = event.target.value;
+    if (!nextId) {
+      setSelectedPresetId('');
+      return;
+    }
+    const preset = modelPresets.find((entry) => entry.id === nextId);
+    if (preset) {
+      applyPreset(preset);
+    } else {
+      setSelectedPresetId(nextId);
     }
   };
 
-  const togglePreset = (presetId) => {
-    setExpandedPresets((prev) => (
-      prev.includes(presetId)
-        ? prev.filter(id => id !== presetId)
-        : [...prev, presetId]
-    ));
+  const openSaveAsPresetSheet = () => {
+    const baseName = selectedPreset?.name
+      ? `${selectedPreset.name} Copy`
+      : activePresetMatch?.name
+        ? `${activePresetMatch.name} Copy`
+        : 'New Preset';
+    setPresetSheet({
+      mode: 'save-as',
+      title: 'Save As Preset',
+      confirmLabel: 'Save Preset',
+      description: 'Create a new preset from the current draft.',
+      requiresValue: true,
+    });
+    setPresetSheetValue(buildUniquePresetName(baseName, modelPresets));
+  };
+
+  const handleUpdatePreset = () => {
+    if (!selectedPreset) return;
+    dispatch({
+      type: 'UPDATE_MODEL_PRESET',
+      payload: {
+        id: selectedPreset.id,
+        ...buildPresetPayload(selectedPreset.name),
+      },
+    });
+  };
+
+  const openRenamePresetSheet = () => {
+    if (!selectedPreset) return;
+    setPresetSheet({
+      mode: 'rename',
+      title: 'Rename Preset',
+      confirmLabel: 'Rename',
+      description: `Rename "${selectedPreset.name}".`,
+      requiresValue: true,
+    });
+    setPresetSheetValue(selectedPreset.name);
+  };
+
+  const openDuplicatePresetSheet = () => {
+    if (!selectedPreset) return;
+    setPresetSheet({
+      mode: 'duplicate',
+      title: 'Duplicate Preset',
+      confirmLabel: 'Duplicate',
+      description: `Create a copy of "${selectedPreset.name}".`,
+      requiresValue: true,
+    });
+    setPresetSheetValue(buildUniquePresetName(`${selectedPreset.name} Copy`, modelPresets));
+  };
+
+  const openDeletePresetSheet = () => {
+    if (!selectedPreset) return;
+    setPresetSheet({
+      mode: 'delete',
+      title: 'Delete Preset',
+      confirmLabel: 'Delete',
+      description: `Delete "${selectedPreset.name}"? This cannot be undone.`,
+      requiresValue: false,
+      destructive: true,
+    });
+    setPresetSheetValue('');
+  };
+
+  const submitPresetSheet = () => {
+    if (!presetSheet) return;
+
+    if (presetSheet.mode === 'save-as') {
+      const trimmedName = String(presetSheetValue || '').trim();
+      if (!trimmedName) return;
+      const nextId = createPresetId();
+      dispatch({
+        type: 'ADD_MODEL_PRESET',
+        payload: {
+          id: nextId,
+          ...buildPresetPayload(buildUniquePresetName(trimmedName, modelPresets)),
+        },
+      });
+      setSelectedPresetId(nextId);
+      closePresetSheet();
+      return;
+    }
+
+    if (presetSheet.mode === 'rename') {
+      if (!selectedPreset) return;
+      const trimmedName = String(presetSheetValue || '').trim();
+      if (!trimmedName) return;
+      dispatch({
+        type: 'UPDATE_MODEL_PRESET',
+        payload: {
+          id: selectedPreset.id,
+          ...buildPayloadFromPreset(
+            selectedPreset,
+            buildUniquePresetName(trimmedName, modelPresets, selectedPreset.id)
+          ),
+        },
+      });
+      closePresetSheet();
+      return;
+    }
+
+    if (presetSheet.mode === 'duplicate') {
+      if (!selectedPreset) return;
+      const trimmedName = String(presetSheetValue || '').trim();
+      if (!trimmedName) return;
+      const nextId = createPresetId();
+      dispatch({
+        type: 'ADD_MODEL_PRESET',
+        payload: {
+          id: nextId,
+          ...buildPayloadFromPreset(selectedPreset, buildUniquePresetName(trimmedName, modelPresets)),
+        },
+      });
+      setSelectedPresetId(nextId);
+      closePresetSheet();
+      return;
+    }
+
+    if (presetSheet.mode === 'delete') {
+      if (!selectedPreset) return;
+      dispatch({ type: 'DELETE_MODEL_PRESET', payload: selectedPreset.id });
+      setSelectedPresetId('');
+      closePresetSheet();
+    }
   };
 
   const resetDefaults = () => {
@@ -415,8 +626,8 @@ export default function SettingsModal() {
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
     setRememberKey(rememberApiKey);
-    setPresetName('');
-    setEditingPresetId(null);
+    closePresetSheet();
+    setSelectedPresetId('');
     setSynthProvider(getDirectProviderFromValue(synthesizerModel));
     setConvProvider(getDirectProviderFromValue(convergenceModel));
     setSearchProvider(getDirectProviderFromValue(webSearchModel));
@@ -490,133 +701,94 @@ export default function SettingsModal() {
             <label className="settings-label">
               <span>Model Presets</span>
             </label>
-            <div className="preset-row">
-              <input
-                ref={presetNameInputRef}
-                type="text"
-                className="settings-input"
-                placeholder="Preset name (e.g. fast, deep-reasoning)"
-                value={presetName}
-                onChange={e => setPresetName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && savePreset()}
-              />
-              <button
-                className="model-add-btn"
-                onClick={savePreset}
-                disabled={!canSavePreset}
-              >
-                <Plus size={14} />
-                {editingPresetId ? 'Save Preset Edit' : 'Save New Preset'}
-              </button>
-              {editingPresetId && (
-                <button
-                  className="settings-btn-secondary"
-                  onClick={cancelPresetEdit}
+            <div className="preset-selector-card">
+              <div className="preset-compact-row">
+                <select
+                  className="settings-input settings-select preset-selector-input"
+                  value={selectedPresetId}
+                  onChange={handlePresetSelection}
                 >
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-            {editingPreset ? (
-              <div className="preset-edit-banner">
-                <div className="preset-edit-title">
-                  Editing preset: <strong>{editingPreset.name}</strong>
-                </div>
-                <div className="preset-edit-text">
-                  Click <strong>Save Preset Edit</strong> to save this preset only. Use <strong>Save Settings</strong> separately to apply app settings.
-                </div>
-                <div className="preset-edit-actions">
+                  <option value="">Custom</option>
+                  {modelPresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+                {selectedPreset && selectedPresetIsModified && (
                   <button
-                    className="model-add-btn"
-                    onClick={savePreset}
-                    disabled={!canSavePreset}
-                  >
-                    Save This Preset
-                  </button>
-                  <button
+                    type="button"
                     className="settings-btn-secondary"
-                    onClick={cancelPresetEdit}
+                    onClick={handleUpdatePreset}
                   >
-                    Cancel Edit
+                    Update Preset
                   </button>
-                </div>
-              </div>
-            ) : (
-              <p className="settings-hint">
-                Click <strong>Edit</strong> on a preset to load it into the form before updating.
-              </p>
-            )}
-            {modelPresets && modelPresets.length > 0 ? (
-              <div className="preset-list">
-                {modelPresets.map((preset) => (
-                  <div
-                    key={preset.id}
-                    className={`preset-item ${editingPresetId === preset.id ? 'is-editing' : ''}`}
-                  >
-                    <div className="preset-summary">
-                      <div className="preset-info">
-                        <span className="preset-name">{preset.name}</span>
-                        <span className="preset-count">{preset.models.length} models</span>
-                      </div>
-                      <div className="preset-actions">
-                        <button className="model-add-btn" onClick={() => usePreset(preset)}>
-                          Load
-                        </button>
-                        <button
-                          className={`settings-btn-secondary ${editingPresetId === preset.id ? 'preset-editing-btn' : ''}`}
-                          onClick={() => editPreset(preset)}
-                        >
-                          {editingPresetId === preset.id ? 'Editing Now' : 'Edit'}
-                        </button>
-                        <button
-                          className="settings-btn-secondary preset-details-btn"
-                          onClick={() => togglePreset(preset.id)}
-                        >
-                          {expandedPresets.includes(preset.id) ? 'Hide' : 'Details'}
-                        </button>
-                        <button className="model-item-remove" onClick={() => deletePreset(preset.id)} title="Delete preset">
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                )}
+                <button
+                  type="button"
+                  className="model-add-btn"
+                  onClick={openSaveAsPresetSheet}
+                >
+                  <Plus size={14} />
+                  Save As...
+                </button>
+                {selectedPreset && (
+                  <details className="preset-menu">
+                    <summary className="preset-menu-trigger" title="Preset Actions">
+                      <MoreHorizontal size={16} />
+                    </summary>
+                    <div className="preset-menu-popover">
+                      <button
+                        type="button"
+                        className="preset-menu-item"
+                        onClick={(event) => {
+                          event.currentTarget.closest('details')?.removeAttribute('open');
+                          openRenamePresetSheet();
+                        }}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-menu-item"
+                        onClick={(event) => {
+                          event.currentTarget.closest('details')?.removeAttribute('open');
+                          openDuplicatePresetSheet();
+                        }}
+                      >
+                        Duplicate
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-menu-item danger"
+                        onClick={(event) => {
+                          event.currentTarget.closest('details')?.removeAttribute('open');
+                          openDeletePresetSheet();
+                        }}
+                      >
+                        Delete
+                      </button>
                     </div>
-                    {expandedPresets.includes(preset.id) && (
-                      <div className="preset-details">
-                        <div className="preset-detail-row">
-                          <span className="preset-detail-label">Models</span>
-                          <div className="preset-model-list">
-                            {preset.models.map((modelId, index) => (
-                              <code key={`${preset.id}-${modelId}-${index}`} className="preset-model-chip">
-                                {modelId}
-                              </code>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="preset-detail-grid">
-                          <div className="preset-detail-row">
-                            <span className="preset-detail-label">Synthesizer</span>
-                            <span className="preset-detail-value preset-detail-value-mono">{preset.synthesizerModel || '-'}</span>
-                          </div>
-                          <div className="preset-detail-row">
-                            <span className="preset-detail-label">Convergence</span>
-                            <span className="preset-detail-value preset-detail-value-mono">{preset.convergenceModel || '-'}</span>
-                          </div>
-                          <div className="preset-detail-row">
-                            <span className="preset-detail-label">Web Search</span>
-                            <span className="preset-detail-value preset-detail-value-mono">{preset.webSearchModel || '-'}</span>
-                          </div>
-                          <div className="preset-detail-row">
-                            <span className="preset-detail-label">Max Rounds</span>
-                            <span className="preset-detail-value">{preset.maxDebateRounds || '-'}</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  </details>
+                )}
               </div>
-            ) : (
-              <p className="settings-hint">Save a preset to quickly switch model lineups.</p>
-            )}
+              <div className={`preset-status ${activePresetMatch ? 'is-match' : selectedPreset ? 'is-modified' : 'is-custom'}`}>
+                {activePresetMatch ? (
+                  <>
+                    Preset: <strong>{activePresetMatch.name}</strong>
+                  </>
+                ) : selectedPreset ? (
+                  <>
+                    Modified from <strong>{selectedPreset.name}</strong>
+                  </>
+                ) : (
+                  'Custom configuration'
+                )}
+              </div>
+              <p className="settings-hint">
+                Choosing a preset loads it immediately into the draft. <strong>Save Settings</strong> still controls what becomes active app-wide.
+              </p>
+            </div>
           </div>
 
           <div className="settings-section">
@@ -978,6 +1150,59 @@ export default function SettingsModal() {
 
           <div className="settings-section">
             <label className="settings-label">
+              <Activity size={14} />
+              <span>Diagnostics</span>
+            </label>
+            <p className="settings-hint">
+              Global browser-level telemetry for provider failures and retry behavior. Useful for debugging routes and outages, not for judging answer quality.
+            </p>
+            {diagnosticsSummary.hasData ? (
+              <>
+                <div className="settings-diagnostics-grid">
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Calls observed</span>
+                    <strong className="settings-diagnostics-value">{diagnosticsSummary.totalCalls}</strong>
+                  </div>
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Success rate</span>
+                    <strong className="settings-diagnostics-value">
+                      {diagnosticsSummary.successRate != null ? `${diagnosticsSummary.successRate}%` : '--'}
+                    </strong>
+                  </div>
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Avg. first answer</span>
+                    <strong className="settings-diagnostics-value">{diagnosticsSummary.avgFirstAnswer}</strong>
+                  </div>
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Retry recovery</span>
+                    <strong className="settings-diagnostics-value">{diagnosticsSummary.retryRecovery}</strong>
+                  </div>
+                </div>
+                {diagnosticsSummary.topProviderFailure && (
+                  <div className="settings-diagnostics-provider">
+                    <span className="settings-diagnostics-provider-label">
+                      Most failures: <strong>{diagnosticsSummary.topProviderFailure[1]}</strong>
+                    </span>
+                    <code>{diagnosticsSummary.topProviderFailure[0]}</code>
+                  </div>
+                )}
+                <div className="settings-diagnostics-actions">
+                  <button
+                    className="settings-btn-secondary"
+                    type="button"
+                    onClick={resetDiagnostics}
+                  >
+                    Reset Diagnostics
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="settings-hint">No diagnostics have been collected in this browser profile yet.</p>
+            )}
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
               <DollarSign size={14} />
               <span>Budget Guardrails</span>
             </label>
@@ -1119,6 +1344,53 @@ export default function SettingsModal() {
             Save Settings
           </button>
         </div>
+        {presetSheet && (
+          <div className="settings-sheet-backdrop" onClick={closePresetSheet}>
+            <div className="settings-sheet glass-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="settings-sheet-header">
+                <h3>{presetSheet.title}</h3>
+                <button className="settings-close" onClick={closePresetSheet}>
+                  <X size={16} />
+                </button>
+              </div>
+              <form
+                className="settings-sheet-body"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitPresetSheet();
+                }}
+              >
+                <p className="settings-hint settings-sheet-text">{presetSheet.description}</p>
+                {presetSheet.requiresValue && (
+                  <input
+                    ref={presetSheetInputRef}
+                    type="text"
+                    className="settings-input"
+                    value={presetSheetValue}
+                    onChange={(event) => setPresetSheetValue(event.target.value)}
+                    placeholder="Preset name"
+                  />
+                )}
+                <div className="settings-sheet-actions">
+                  <button
+                    type="button"
+                    className="settings-btn-secondary"
+                    onClick={closePresetSheet}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className={presetSheet.destructive ? 'settings-btn-danger' : 'settings-btn-primary'}
+                    disabled={presetSheet.requiresValue && !String(presetSheetValue || '').trim()}
+                  >
+                    {presetSheet.confirmLabel}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
       <ModelPickerModal
         open={Boolean(pickerOpen)}

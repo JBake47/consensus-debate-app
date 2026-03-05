@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Provider reliability telemetry has been moved out of the sidebar into Settings as a diagnostics-only panel with a reset action, clearer labels, and better handling for long provider names
+- Model preset UX now uses a single preset picker with contextual Save As/Update actions, modified-state feedback, a compact overflow menu, and in-app sheets instead of browser prompts for rename/save/delete flows
+
 ## [0.3.17] - 2026-03-05
 
 ### Added

@@ -638,7 +638,7 @@ function reducer(state, action) {
       const normalized = name.toLowerCase();
       const existing = state.modelPresets.find(p => p.name.toLowerCase() === normalized);
       const preset = {
-        id: existing?.id || Date.now().toString(),
+        id: existing?.id || action.payload.id || Date.now().toString(),
         name,
         models,
         synthesizerModel: action.payload.synthesizerModel || state.synthesizerModel,
@@ -1579,6 +1579,12 @@ export function DebateProvider({ children }) {
     syncCacheStats({ cacheHitCount: 0, cacheEntryCount: 0 });
     dispatch({ type: 'CLEAR_RESPONSE_CACHE' });
   }, [dispatch, syncCacheStats]);
+
+  const resetDiagnostics = useCallback(() => {
+    const next = createDefaultMetrics();
+    metricsRef.current = next;
+    dispatch({ type: 'SET_METRICS', payload: next });
+  }, [dispatch]);
 
   const buildProvisionalSynthesisContent = ({ streams, roundLabel }) => {
     const completed = (streams || []).filter((stream) => stream?.model && stream?.content);
@@ -5037,9 +5043,10 @@ export function DebateProvider({ children }) {
     retryStream,
     retryRound,
     retrySynthesis,
-    branchFromRound,
-    clearResponseCache,
-  };
+      branchFromRound,
+      clearResponseCache,
+      resetDiagnostics,
+    };
 
   return (
     <DebateContext.Provider value={value}>
