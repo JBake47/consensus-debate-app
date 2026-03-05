@@ -40,7 +40,8 @@ const DebateContext = createContext(null);
 const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
 const METRICS_SAMPLE_LIMIT = 120;
-const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v1';
+const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v2';
+const LEGACY_RESPONSE_CACHE_STORAGE_KEYS = ['response_cache_store_v1'];
 const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
 const TITLE_SOURCE_USER = 'user';
@@ -117,12 +118,43 @@ function saveToStorage(key, value) {
   }
 }
 
+function clearLegacyResponseCacheStorage() {
+  if (typeof window === 'undefined') return;
+  try {
+    for (const key of LEGACY_RESPONSE_CACHE_STORAGE_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // ignore storage access failures
+  }
+}
+
+function hashCacheKeyPayload(value) {
+  const input = String(value || '');
+  let forward = 0x811c9dc5;
+  let reverse = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    const nextCode = input.charCodeAt(index);
+    forward ^= nextCode;
+    forward = Math.imul(forward, 0x01000193);
+
+    const reverseCode = input.charCodeAt(input.length - 1 - index);
+    reverse ^= reverseCode;
+    reverse = Math.imul(reverse, 0x01000193);
+  }
+  const forwardHex = (forward >>> 0).toString(16).padStart(8, '0');
+  const reverseHex = (reverse >>> 0).toString(16).padStart(8, '0');
+  return `${forwardHex}${reverseHex}`;
+}
+
 function shouldRunConvergenceCheck(roundNum, maxRounds, includeFinalRound) {
   if (!Number.isFinite(roundNum) || !Number.isFinite(maxRounds)) return false;
   if (roundNum < 2 || roundNum > maxRounds) return false;
   if (roundNum < maxRounds) return true;
   return Boolean(includeFinalRound) && roundNum === maxRounds;
 }
+
+clearLegacyResponseCacheStorage();
 
 function loadPersistedResponseCache() {
   if (typeof window === 'undefined') return new Map();
@@ -1472,7 +1504,8 @@ export function DebateProvider({ children }) {
 
   const buildResponseCacheKey = ({ model, messages, nativeWebSearch = false }) => {
     const payload = JSON.stringify({ model, nativeWebSearch: Boolean(nativeWebSearch), messages });
-    return `${model}::${payload}`;
+    const hashed = hashCacheKeyPayload(payload);
+    return `${String(model || 'model')}::${payload.length}::${hashed}`;
   };
 
   const getCachedResponse = (cacheKey) => {
@@ -1535,12 +1568,14 @@ export function DebateProvider({ children }) {
       persistResponseCache(responseCacheRef.current);
     } else {
       localStorage.removeItem(RESPONSE_CACHE_STORAGE_KEY);
+      clearLegacyResponseCacheStorage();
     }
   }, [state.cachePersistenceEnabled]);
 
   const clearResponseCache = useCallback(() => {
     responseCacheRef.current.clear();
     localStorage.removeItem(RESPONSE_CACHE_STORAGE_KEY);
+    clearLegacyResponseCacheStorage();
     syncCacheStats({ cacheHitCount: 0, cacheEntryCount: 0 });
     dispatch({ type: 'CLEAR_RESPONSE_CACHE' });
   }, [dispatch, syncCacheStats]);
@@ -1915,6 +1950,7 @@ export function DebateProvider({ children }) {
     convId,
     userPrompt,
     attachments,
+    videoUrls = [],
     webSearchModel,
     apiKey,
     signal,
@@ -1928,7 +1964,7 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const searchPrompt = buildAttachmentTextContent(userPrompt, attachments);
+      const searchPrompt = buildAttachmentTextContent(userPrompt, attachments, { videoUrls });
       const { content: searchContent, usage: searchUsage, durationMs: searchDurationMs } = await chatCompletion({
         model: webSearchModel,
         messages: [
@@ -2215,8 +2251,12 @@ export function DebateProvider({ children }) {
     attachments,
     focusedOverride,
     forceRefresh = false,
+    modelOverrides,
+    routeInfo = null,
   } = {}) => {
-    const models = state.selectedModels;
+    const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
+      ? modelOverrides
+      : state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
@@ -2245,6 +2285,8 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
+      routeInfo,
       mode: 'debate',
       focusedMode: focused,
       webSearchEnabled: Boolean(webSearch),
@@ -2312,7 +2354,9 @@ export function DebateProvider({ children }) {
     const conversationHistory = contextMessages;
 
     // Build user message content with attachments (text inline, images as multimodal parts)
-    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+      videoUrls: routeInfo?.youtubeUrls || [],
+    });
     const initialMessages = [...conversationHistory, { role: 'user', content: userContent }];
 
     let lastCompletedStreams = null;
@@ -2437,6 +2481,7 @@ export function DebateProvider({ children }) {
           convId,
           userPrompt,
           attachments,
+          videoUrls: routeInfo?.youtubeUrls || [],
           webSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -2451,7 +2496,9 @@ export function DebateProvider({ children }) {
             requireEvidence: nativeWebSearchEnabled,
             strictMode: strictWebSearch,
           });
-          const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments);
+          const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+            videoUrls: routeInfo?.youtubeUrls || [],
+          });
           roundMessages = [...conversationHistory, { role: 'user', content: fallbackUserContent }];
           results = await runRound({
             models,
@@ -2646,6 +2693,7 @@ export function DebateProvider({ children }) {
           convId,
           userPrompt,
           attachments,
+          videoUrls: routeInfo?.youtubeUrls || [],
           webSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -2910,8 +2958,12 @@ export function DebateProvider({ children }) {
     attachments,
     focusedOverride,
     forceRefresh = false,
+    modelOverrides,
+    routeInfo = null,
   } = {}) => {
-    const models = state.selectedModels;
+    const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
+      ? modelOverrides
+      : state.selectedModels;
     const synthModel = state.synthesizerModel;
     const webSearchModel = state.webSearchModel;
     const strictWebSearch = state.strictWebSearch;
@@ -2939,6 +2991,8 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
+      routeInfo,
       mode: 'parallel',
       focusedMode: focused,
       webSearchEnabled: Boolean(webSearch),
@@ -2995,7 +3049,9 @@ export function DebateProvider({ children }) {
     });
 
     const conversationHistory = contextMessages;
-    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+      videoUrls: routeInfo?.youtubeUrls || [],
+    });
     const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
     const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
@@ -3052,6 +3108,7 @@ export function DebateProvider({ children }) {
         convId,
         userPrompt,
         attachments,
+        videoUrls: routeInfo?.youtubeUrls || [],
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -3065,7 +3122,9 @@ export function DebateProvider({ children }) {
           requireEvidence: nativeWebSearchEnabled,
           strictMode: strictWebSearch,
         });
-        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments);
+        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+          videoUrls: routeInfo?.youtubeUrls || [],
+        });
         const fallbackInitialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
         results = await runRound({
           models,
@@ -3153,8 +3212,12 @@ export function DebateProvider({ children }) {
     attachments,
     focusedOverride,
     forceRefresh = false,
+    modelOverrides,
+    routeInfo = null,
   } = {}) => {
-    const models = state.selectedModels;
+    const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
+      ? modelOverrides
+      : state.selectedModels;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const webSearchModel = state.webSearchModel;
@@ -3184,6 +3247,8 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
+      routeInfo,
       mode: 'direct',
       focusedMode: focused,
       webSearchEnabled: Boolean(webSearch),
@@ -3245,7 +3310,9 @@ export function DebateProvider({ children }) {
     });
 
     const conversationHistory = contextMessages;
-    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+      videoUrls: routeInfo?.youtubeUrls || [],
+    });
     const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
     const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
@@ -3302,6 +3369,7 @@ export function DebateProvider({ children }) {
         convId,
         userPrompt,
         attachments,
+        videoUrls: routeInfo?.youtubeUrls || [],
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -3315,7 +3383,9 @@ export function DebateProvider({ children }) {
           requireEvidence: nativeWebSearchEnabled,
           strictMode: strictWebSearch,
         });
-        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments);
+        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+          videoUrls: routeInfo?.youtubeUrls || [],
+        });
         const fallbackInitialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
         results = await runRound({
           models,
@@ -3518,6 +3588,8 @@ export function DebateProvider({ children }) {
       attachments: turnAttachments || undefined,
       focusedOverride,
       forceRefresh,
+      modelOverrides: Array.isArray(lastTurn.modelOverrides) ? lastTurn.modelOverrides : undefined,
+      routeInfo: lastTurn.routeInfo || undefined,
     };
     if (turnMode === 'direct') {
       startDirect(prompt, opts);
@@ -3682,6 +3754,7 @@ export function DebateProvider({ children }) {
         convId,
         userPrompt,
         attachments,
+        videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
         webSearchModel: fallbackSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -3693,7 +3766,9 @@ export function DebateProvider({ children }) {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
     });
-    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+    });
     const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
       ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
       : [];
@@ -3764,6 +3839,7 @@ export function DebateProvider({ children }) {
           convId,
           userPrompt,
           attachments,
+          videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
           webSearchModel: fallbackSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -3774,7 +3850,9 @@ export function DebateProvider({ children }) {
             requireEvidence: Boolean(lastTurn.webSearchEnabled),
             strictMode: strictWebSearch,
           });
-          const fallbackUserContent = buildAttachmentContent(fallbackPrompt, attachments);
+          const fallbackUserContent = buildAttachmentContent(fallbackPrompt, attachments, {
+            videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+          });
           initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
           results = await runRound({
             models,
@@ -3977,6 +4055,7 @@ export function DebateProvider({ children }) {
               convId,
               userPrompt,
               attachments,
+              videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
               webSearchModel: fallbackSearchModel,
               apiKey,
               signal: abortController.signal,
@@ -4340,6 +4419,7 @@ export function DebateProvider({ children }) {
             convId,
             userPrompt,
             attachments,
+            videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
             webSearchModel: fallbackSearchModel,
             apiKey,
             signal: abortController.signal,
@@ -4503,7 +4583,9 @@ export function DebateProvider({ children }) {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
     });
-    const userContent = buildAttachmentContent(userMessageContent, attachments);
+    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+    });
     const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
       ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
       : [];
@@ -4865,6 +4947,7 @@ export function DebateProvider({ children }) {
             convId,
             userPrompt,
             attachments,
+            videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
             webSearchModel: fallbackSearchModel,
             apiKey,
             signal: abortController.signal,

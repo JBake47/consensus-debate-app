@@ -14,6 +14,8 @@ A React application with an optional Node proxy that can route requests to OpenR
 - **Convergence Detection**: Automatic checking when models reach consensus
 - **Web Search Integration**: Optional web search to enhance responses with current information
 - **File Attachments**: Upload images, PDFs, Excel, Word documents, and text files
+- **Multimodal Router**: Detects YouTube links and generation requests, then routes to the most capable available model/provider
+- **Artifact Generation**: Automatically generates downloadable images, PDFs, DOCX files, and XLSX files from prompt intent
 - **Auto-Generated Titles**: Conversations automatically get descriptive titles
 
 ### 🔄 Flexible Controls
@@ -132,6 +134,16 @@ npm run preview
 
 ### Backend Proxy (Recommended)
 Use `server/index.js` to keep API keys off the client. Configure provider keys via environment variables.
+
+### Multimodal Orchestration
+- `POST /api/multimodal/orchestrate` runs synchronous orchestration for multimodal planning and artifact generation.
+- `POST /api/multimodal/jobs` enqueues async orchestration jobs.
+- `GET /api/multimodal/jobs/:jobId` returns job status and final orchestration result.
+- `GET /api/artifacts/:artifactId?token=...` serves generated artifacts through short-lived signed URLs.
+- `GET /api/capabilities` exposes provider capability registry, provider health metrics, and multimodal limits.
+- YouTube URLs trigger Gemini-preferred routing when a Gemini-capable provider key is configured.
+- Prompts that request generated assets can produce image, PDF, DOCX, and XLSX attachments automatically.
+- Incoming attachments and generated artifacts pass basic safety checks (size limits, ZIP/macro checks, MIME sanity checks, and malware heuristics).
 
 ### Data Storage
 - Conversation history stored in browser localStorage

@@ -16,9 +16,21 @@ export default function AttachmentViewer({ attachment, onClose }) {
   const [pdfScale, setPdfScale] = useState(1);
   const [pdfError, setPdfError] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [imageError, setImageError] = useState('');
   const canvasRef = useRef(null);
   const renderTaskRef = useRef(null);
   const pdfLoadIdRef = useRef(0);
+
+  function formatAssetLoadError(error, fallback) {
+    const message = String(error?.message || '');
+    if (message.includes('(410)')) {
+      return 'This generated file link has expired. Regenerate the artifact to view or download it again.';
+    }
+    if (message.includes('(403)')) {
+      return 'This generated file link is no longer valid. Regenerate the artifact to continue.';
+    }
+    return fallback;
+  }
 
   const loadPdfjs = useMemo(() => {
     let pdfjsPromise;
@@ -48,7 +60,11 @@ export default function AttachmentViewer({ attachment, onClose }) {
     return undefined;
   }, [attachment]);
 
-  const downloadUrl = attachment?.dataUrl || objectUrl;
+  useEffect(() => {
+    setImageError('');
+  }, [attachment?.name, attachment?.dataUrl, attachment?.downloadUrl]);
+
+  const downloadUrl = attachment?.downloadUrl || attachment?.dataUrl || objectUrl;
   const canDownload = Boolean(downloadUrl);
   const isMarkdown = useMemo(() => isLikelyMarkdown(attachment?.name), [attachment?.name]);
 
@@ -66,7 +82,8 @@ export default function AttachmentViewer({ attachment, onClose }) {
       setPdfLoading(false);
     };
 
-    if (!attachment || attachment.category !== 'pdf' || !attachment.dataUrl) {
+    const pdfSource = attachment?.dataUrl || attachment?.downloadUrl || '';
+    if (!attachment || attachment.category !== 'pdf' || !pdfSource) {
       resetPdfState();
       return undefined;
     }
@@ -78,7 +95,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
     (async () => {
       try {
         const pdfjsLib = await loadPdfjs();
-        const doc = await pdfjsLib.getDocument(attachment.dataUrl).promise;
+        const doc = await pdfjsLib.getDocument(pdfSource).promise;
         if (cancelled || pdfLoadIdRef.current !== currentLoadId) {
           doc.destroy();
           return;
@@ -88,9 +105,9 @@ export default function AttachmentViewer({ attachment, onClose }) {
         setPdfPage(1);
         setPdfScale(1);
         setPdfLoading(false);
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setPdfError('Unable to load PDF preview.');
+          setPdfError(formatAssetLoadError(error, 'Unable to load PDF preview.'));
           setPdfLoading(false);
         }
       }
@@ -146,12 +163,23 @@ export default function AttachmentViewer({ attachment, onClose }) {
   if (!attachment) return null;
 
   const renderBody = () => {
-    if (attachment.category === 'image' && attachment.dataUrl) {
-      return <img className="attachment-viewer-image" src={attachment.dataUrl} alt={attachment.name} />;
+    const imageSrc = attachment?.dataUrl || attachment?.downloadUrl || '';
+    if (attachment.category === 'image' && imageSrc) {
+      if (imageError) {
+        return <div className="attachment-viewer-message">{imageError}</div>;
+      }
+      return (
+        <img
+          className="attachment-viewer-image"
+          src={imageSrc}
+          alt={attachment.name}
+          onError={() => setImageError('Unable to preview image. The generated file link may have expired.')}
+        />
+      );
     }
 
     if (attachment.category === 'pdf') {
-      if (!attachment.dataUrl) {
+      if (!attachment.dataUrl && !attachment.downloadUrl) {
         if (attachment.content) {
           return (
             <div className="attachment-viewer-text">

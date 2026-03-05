@@ -1,7 +1,7 @@
 {
   "name": "consensus",
   "private": true,
-  "version": "0.3.14",
+  "version": "0.3.17",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,15 +9,17 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/retryPolicy.test.js"
+    "test": "node src/lib/retryPolicy.test.js && node src/lib/multimodalOrchestrator.test.js && node server/multimodalApi.test.js"
   },
   "dependencies": {
+    "docx": "^9.6.0",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^5.4.530",
+    "pdfkit": "^0.17.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",

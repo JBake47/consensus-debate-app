@@ -172,15 +172,20 @@ async function readPdf(file) {
  * Build message content parts for attachments.
  * Returns an array suitable for OpenAI-style multimodal content.
  */
-export function buildAttachmentContent(text, attachments) {
-  if (!attachments || attachments.length === 0) {
+export function buildAttachmentContent(text, attachments, options = {}) {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  const videoUrls = Array.isArray(options.videoUrls)
+    ? options.videoUrls.map((url) => String(url || '').trim()).filter(Boolean)
+    : [];
+
+  if (safeAttachments.length === 0 && videoUrls.length === 0) {
     return text;
   }
 
   const parts = [];
 
   // Add text attachments inline
-  const textAttachments = attachments.filter(a => a.category !== 'image');
+  const textAttachments = safeAttachments.filter(a => a.category !== 'image');
   if (textAttachments.length > 0) {
     const attachmentText = textAttachments
       .map(a => {
@@ -193,14 +198,35 @@ export function buildAttachmentContent(text, attachments) {
     text += attachmentText;
   }
 
+  if (videoUrls.length > 0) {
+    text += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
+  }
+
   // For image attachments, use multimodal content format
-  const imageAttachments = attachments.filter(a => a.category === 'image');
-  if (imageAttachments.length > 0) {
+  const imageAttachments = safeAttachments.filter(a => a.category === 'image');
+  const inlineImageAttachments = imageAttachments
+    .map((attachment) => ({ attachment, inlineUrl: getInlineImageUrl(attachment) }))
+    .filter((entry) => Boolean(entry.inlineUrl));
+  const omittedImageNames = imageAttachments
+    .filter((attachment) => !getInlineImageUrl(attachment))
+    .map((attachment) => attachment.name)
+    .filter(Boolean);
+  if (omittedImageNames.length > 0) {
+    text += `\n\n---\n**Attached images (not included inline):** ${omittedImageNames.join(', ')}`;
+  }
+
+  if (inlineImageAttachments.length > 0 || videoUrls.length > 0) {
     parts.push({ type: 'text', text });
-    for (const img of imageAttachments) {
+    for (const { inlineUrl } of inlineImageAttachments) {
       parts.push({
         type: 'image_url',
-        image_url: { url: img.content },
+        image_url: { url: inlineUrl },
+      });
+    }
+    for (const url of videoUrls) {
+      parts.push({
+        type: 'video_url',
+        video_url: { url },
       });
     }
     return parts;
@@ -212,12 +238,17 @@ export function buildAttachmentContent(text, attachments) {
 /**
  * Build text-only attachment content (no image parts) for text-only models.
  */
-export function buildAttachmentTextContent(text, attachments) {
-  if (!attachments || attachments.length === 0) {
+export function buildAttachmentTextContent(text, attachments, options = {}) {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  const videoUrls = Array.isArray(options.videoUrls)
+    ? options.videoUrls.map((url) => String(url || '').trim()).filter(Boolean)
+    : [];
+
+  if (safeAttachments.length === 0 && videoUrls.length === 0) {
     return text;
   }
 
-  const textAttachments = attachments.filter(a => a.category !== 'image');
+  const textAttachments = safeAttachments.filter(a => a.category !== 'image');
   if (textAttachments.length > 0) {
     const attachmentText = textAttachments
       .map(a => {
@@ -230,10 +261,14 @@ export function buildAttachmentTextContent(text, attachments) {
     text += attachmentText;
   }
 
-  const imageAttachments = attachments.filter(a => a.category === 'image');
+  const imageAttachments = safeAttachments.filter(a => a.category === 'image');
   if (imageAttachments.length > 0) {
     const imageList = imageAttachments.map(a => a.name).join(', ');
     text += `\n\n---\n**Attached images (not included inline):** ${imageList}`;
+  }
+
+  if (videoUrls.length > 0) {
+    text += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
   }
 
   return text;
@@ -242,6 +277,12 @@ export function buildAttachmentTextContent(text, attachments) {
 function truncateContent(content, maxChars) {
   if (content.length <= maxChars) return content;
   return content.slice(0, maxChars) + '\n... (truncated)';
+}
+
+function getInlineImageUrl(attachment) {
+  const candidate = String(attachment?.dataUrl || attachment?.content || '').trim();
+  if (!candidate) return '';
+  return candidate.startsWith('data:image/') ? candidate : '';
 }
 
 /**

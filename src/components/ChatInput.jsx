@@ -5,10 +5,12 @@ import { processFile, formatFileSize } from '../lib/fileProcessor';
 import { getImageIncompatibleModels } from '../lib/modelCapabilities';
 import { estimateTurnBudget } from '../lib/budgetEstimator';
 import { formatCostWithQuality } from '../lib/formatTokens';
+import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
 import './ChatInput.css';
 
 export default function ChatInput() {
   const {
+    apiKey,
     startDebate,
     startDirect,
     startParallel,
@@ -22,6 +24,7 @@ export default function ChatInput() {
     selectedModels,
     modelCatalog,
     modelCatalogStatus,
+    providerStatus,
     synthesizerModel,
     convergenceModel,
     webSearchModel,
@@ -38,6 +41,7 @@ export default function ChatInput() {
   const [editMeta, setEditMeta] = useState(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [budgetConfirm, setBudgetConfirm] = useState(null);
+  const [orchestrating, setOrchestrating] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
@@ -91,12 +95,14 @@ export default function ChatInput() {
   const performSubmit = useCallback((payload) => {
     const trimmed = String(payload?.prompt || '').trim();
     const currentAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
-    if ((!trimmed && currentAttachments.length === 0) || debateInProgress) return;
+    if ((!trimmed && currentAttachments.length === 0) || debateInProgress || orchestrating) return;
     setInput('');
     setAttachments([]);
     const opts = {
       webSearch: webSearchEnabled,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+      modelOverrides: Array.isArray(payload?.modelOverrides) ? payload.modelOverrides : undefined,
+      routeInfo: payload?.routeInfo || undefined,
     };
     const prompt = trimmed || '(see attachments)';
     if (editMeta?.conversationId && editMeta.conversationId === activeConversation?.id) {
@@ -120,6 +126,44 @@ export default function ChatInput() {
     startDebate,
     startDirect,
     startParallel,
+    orchestrating,
+  ]);
+
+  const submitWithOrchestration = useCallback(async ({ prompt, attachments: rawAttachments }) => {
+    const trimmed = String(prompt || '').trim();
+    const currentAttachments = Array.isArray(rawAttachments) ? rawAttachments : [];
+    if ((!trimmed && currentAttachments.length === 0) || debateInProgress || orchestrating) return;
+
+    setOrchestrating(true);
+    try {
+      const orchestrated = await orchestrateMultimodalTurn({
+        prompt: trimmed,
+        attachments: currentAttachments,
+        selectedModels,
+        synthesizerModel,
+        providerStatus,
+        apiKey,
+      });
+
+      performSubmit({
+        prompt: orchestrated.prompt || trimmed,
+        attachments: orchestrated.attachments || currentAttachments,
+        modelOverrides: orchestrated.modelOverrides || undefined,
+        routeInfo: orchestrated.routeInfo || undefined,
+      });
+    } catch {
+      performSubmit({ prompt: trimmed, attachments: currentAttachments });
+    } finally {
+      setOrchestrating(false);
+    }
+  }, [
+    debateInProgress,
+    orchestrating,
+    selectedModels,
+    synthesizerModel,
+    providerStatus,
+    apiKey,
+    performSubmit,
   ]);
 
   const budgetEstimate = useMemo(() => estimateTurnBudget({
@@ -152,7 +196,7 @@ export default function ChatInput() {
 
   const handleSubmit = () => {
     const trimmed = input.trim();
-    if ((!trimmed && attachments.length === 0) || debateInProgress) return;
+    if ((!trimmed && attachments.length === 0) || debateInProgress || orchestrating) return;
 
     const estimatedCost = Number(budgetEstimate.totalEstimatedCost || 0);
     const softLimit = Number(budgetSoftLimitUsd || 0);
@@ -172,7 +216,7 @@ export default function ChatInput() {
       return;
     }
 
-    performSubmit({ prompt: trimmed, attachments });
+    submitWithOrchestration({ prompt: trimmed, attachments });
   };
 
   const handleKeyDown = (e) => {
@@ -316,7 +360,7 @@ export default function ChatInput() {
               <button
                 className="chat-btn chat-btn-submit"
                 onClick={() => {
-                  performSubmit({
+                  submitWithOrchestration({
                     prompt: budgetConfirm.prompt,
                     attachments: budgetConfirm.attachments,
                   });
@@ -410,7 +454,7 @@ export default function ChatInput() {
             <button
               className="chat-toggle"
               onClick={() => fileInputRef.current?.click()}
-              disabled={debateInProgress || processing}
+              disabled={debateInProgress || processing || orchestrating}
               title="Attach files"
             >
               <Paperclip size={15} />
@@ -461,7 +505,7 @@ export default function ChatInput() {
                 <button
                   className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
                   onClick={handleSubmit}
-                  disabled={!input.trim() && attachments.length === 0}
+                  disabled={(!input.trim() && attachments.length === 0) || orchestrating}
                 >
                   {chatMode === 'debate' && <Swords size={16} />}
                   {chatMode === 'direct' && <Send size={16} />}
@@ -475,6 +519,7 @@ export default function ChatInput() {
       </div>
       <p className="chat-input-hint">
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line &middot; Drag & drop or paste files
+        {orchestrating && ' · Preparing multimodal tools...'}
         {budgetEstimateLabel && (
           <>
             {' '}· Est. turn cost <strong>{budgetEstimateLabel}</strong>

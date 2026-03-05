@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-03-05
+
 ### Added
 - Sidebar reliability panel visibility toggle with persisted preference (`sidebar_reliability_visible`)
 - Web Search error panel now includes a retry action that re-runs legacy search and redoes debate/synthesis from round 1
@@ -24,6 +26,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Redo Round` now forces a full re-run of that round's model outputs before continuation/synthesis
 - Stop button now reliably targets the active conversation when clicked from the input controls
 - Final-round convergence outcomes are no longer overwritten as `max_rounds_reached` when convergence is detected
+- Localhost-only API access no longer trusts spoofed `X-Forwarded-For` loopback addresses when `TRUST_PROXY=true`
+- Sync multimodal orchestration now aborts promptly on client disconnects and reuses queued jobs instead of duplicating work during fallback
+- Persistent response-cache entries now use hashed keys and clear legacy cache storage so full prompt/attachment payloads are not kept in `localStorage`
+
+## [0.3.16] - 2026-03-05
+
+### Added
+- Async multimodal orchestration queue endpoints (`POST /api/multimodal/jobs`, `GET /api/multimodal/jobs/:jobId`) with in-memory job lifecycle tracking
+- Signed generated-artifact delivery endpoint (`GET /api/artifacts/:artifactId?token=...`) with TTL-based storage and cleanup
+- Capabilities and health introspection endpoint (`GET /api/capabilities`) exposing provider capability registry, health metrics, routing version, and multimodal limits
+- Security validation for inbound and generated multimodal files including MIME sniffing, Office ZIP structure checks, macro payload blocking, PDF page-count guardrails, and malware heuristics
+- Fallback extraction path for OCR and YouTube transcript-style insights with provider/model routing records
+- Multimodal orchestrator unit tests and backend integration test coverage for capabilities, async jobs, and signed artifact downloads
+
+### Changed
+- Multimodal routing now uses capability-aware candidate scoring with quality/latency/cost/reliability weighting and provider health signals
+- Frontend multimodal orchestration now prefers async job submission/polling with synchronous endpoint fallback
+- Attachment viewer now supports signed `downloadUrl` artifacts for preview/download and handles expired/invalid link errors more clearly
+- Attachment content assembly now only inlines image data when a valid `data:image/...` payload is available, while still listing omitted images in text context
+- Environment and documentation now include multimodal job/artifact limits and lifecycle configuration
+
+### Fixed
+- ZIP EOCD safety inspection now correctly locates central directory metadata instead of rejecting valid archives in some cases
+- Generated non-inline images are no longer attached to model requests as invalid/empty multimodal image parts
 
 ## [0.3.15] - 2026-03-04
 
@@ -347,7 +373,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.14...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.17...HEAD
+[0.3.17]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.16...v0.3.17
+[0.3.16]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.15...v0.3.16
+[0.3.15]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.14...v0.3.15
 [0.3.14]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.11...v0.3.12
