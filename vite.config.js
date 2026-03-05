@@ -17,9 +17,6 @@ export default defineConfig({
           if (id.includes('pdfjs-dist')) {
             return 'pdf'
           }
-          if (id.includes('exceljs') || id.includes('mammoth')) {
-            return 'attachments'
-          }
           return null
         },
       },

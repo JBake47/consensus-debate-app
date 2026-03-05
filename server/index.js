@@ -4,6 +4,7 @@ import { timingSafeEqual, randomBytes, createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
+import mammoth from 'mammoth';
 import PDFDocument from 'pdfkit';
 import {
   Document as DocxDocument,
@@ -43,6 +44,7 @@ const PDF_INTENT_REGEX = /\b(pdf|portable document)\b/i;
 const XLSX_INTENT_REGEX = /\b(xlsx|excel|spreadsheet|workbook)\b/i;
 const GENERATE_INTENT_REGEX = /\b(generate|create|make|produce|export|output|save|convert)\b/i;
 const DOC_GENERATION_MAX_BYTES = Number(process.env.DOC_GENERATION_MAX_BYTES || 12 * 1024 * 1024);
+const FILE_TEXT_EXTRACTION_MAX_BYTES = Number(process.env.FILE_TEXT_EXTRACTION_MAX_BYTES || 12 * 1024 * 1024);
 const ARTIFACT_TTL_MS = Number(process.env.ARTIFACT_TTL_MS || 24 * 60 * 60 * 1000);
 const ARTIFACT_STORE_DIR = process.env.ARTIFACT_STORE_DIR
   ? path.resolve(process.env.ARTIFACT_STORE_DIR)
@@ -171,6 +173,66 @@ function createRequestAbortContext(req, res) {
   };
 }
 
+function decodeRequestHeaderValue(value) {
+  const raw = String(value || '');
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function sanitizeUploadedFileName(value) {
+  return decodeRequestHeaderValue(value)
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .trim();
+}
+
+function getExtractableFileCategory(fileName) {
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  if (['.xlsx', '.xls', '.xlsm'].includes(ext)) return 'excel';
+  if (ext === '.docx') return 'word';
+  return '';
+}
+
+function stringifySpreadsheetCell(value) {
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    if (value.richText) {
+      return value.richText.map((part) => part.text || '').join('');
+    }
+    if (value.text) return String(value.text);
+    if (value.result != null) return String(value.result);
+    if (value.formula) return String(value.formula);
+    if (value.hyperlink) return value.text || value.hyperlink;
+    if (value instanceof Date) return value.toISOString();
+    if (value.error) return String(value.error);
+  }
+  return String(value);
+}
+
+async function extractExcelTextFromBuffer(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheets = [];
+  workbook.eachSheet((worksheet) => {
+    const rows = [];
+    worksheet.eachRow((row) => {
+      const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+      rows.push(values.map((value) => stringifySpreadsheetCell(value)).join(','));
+    });
+    sheets.push(`--- Sheet: ${worksheet.name} ---\n${rows.join('\n')}`);
+  });
+  return sheets.join('\n\n');
+}
+
+async function extractWordTextFromBuffer(buffer) {
+  const result = await mammoth.extractRawText({ buffer });
+  return String(result?.value || '');
+}
+
 app.use('/api', (req, res, next) => {
   if (ALLOW_REMOTE_API) {
     next();
@@ -193,6 +255,34 @@ app.use('/api', (req, res, next) => {
 function sendSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
+
+app.post('/api/files/extract-text', express.raw({ type: 'application/octet-stream', limit: FILE_TEXT_EXTRACTION_MAX_BYTES }), async (req, res) => {
+  const fileName = sanitizeUploadedFileName(req.get('x-file-name'));
+  const category = getExtractableFileCategory(fileName);
+  const body = req.body;
+
+  if (!fileName || !category) {
+    res.status(400).json({ error: 'Unsupported file type for text extraction.' });
+    return;
+  }
+
+  if (!Buffer.isBuffer(body) || body.length === 0) {
+    res.status(400).json({ error: 'File body is required.' });
+    return;
+  }
+
+  try {
+    const content = category === 'excel'
+      ? await extractExcelTextFromBuffer(body)
+      : await extractWordTextFromBuffer(body);
+    res.json({ content, category });
+  } catch (error) {
+    res.status(422).json({
+      error: `Failed to extract text from ${category} file.`,
+      details: process.env.NODE_ENV === 'development' ? String(error?.message || error) : undefined,
+    });
+  }
+});
 
 async function ensureArtifactStoreDir() {
   await fs.mkdir(ARTIFACT_STORE_DIR, { recursive: true });

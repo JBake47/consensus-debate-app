@@ -7,18 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-03-05
+
+### Added
+- Welcome screen quick-start actions that prefill the composer and switch to a matching mode for comparison, best-answer, or deep-debate workflows
+- Server-side Office text extraction endpoint for Word and Excel attachments (`POST /api/files/extract-text`)
+
 ### Changed
 - Provider reliability telemetry has been moved out of the sidebar into Settings as a diagnostics-only panel with a reset action, clearer labels, and better handling for long provider names
 - Model preset UX now uses a single preset picker with contextual Save As/Update actions, modified-state feedback, a compact overflow menu, and in-app sheets instead of browser prompts for rename/save/delete flows
 - Settings now apply live while the panel is open, with preset selection updating the active draft immediately and the footer simplified to a `Done` action
 - Composer mode labels and onboarding copy now describe user outcomes (`Compare`, `Best Answer`, `Deep Debate`) instead of internal implementation terms
 - Sidebar import feedback now uses in-app status messages, chat history search is indexed/lazy, and large chat lists progressively reveal more rows instead of rendering everything at once
-- Attachment processing now runs through a dedicated worker path with lazy-loaded document parsers, while Vite chunks markdown and document tooling into separate build artifacts
+- Attachment processing now runs through a dedicated worker path, with Word/Excel text extraction moved server-side and the browser bundle trimmed down to PDF-only document tooling
 - Conversation persistence and diagnostics persistence are now debounced at the provider layer instead of writing synchronously from hot reducer paths
 - Older turns and rounds are now described as being compacted automatically, with a jump-to-latest affordance when expanded
-
-### Added
-- Welcome screen quick-start actions that prefill the composer and switch to a matching mode for comparison, best-answer, or deep-debate workflows
 
 ## [0.3.17] - 2026-03-05
 
@@ -386,7 +389,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.17...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.18...HEAD
+[0.3.18]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.17...v0.3.18
 [0.3.17]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.16...v0.3.17
 [0.3.16]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.15...v0.3.16
 [0.3.15]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.14...v0.3.15

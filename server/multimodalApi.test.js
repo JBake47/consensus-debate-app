@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
+import ExcelJS from 'exceljs';
+import { Document as DocxDocument, Packer as DocxPacker, Paragraph } from 'docx';
 
 function randomPort() {
   return 39000 + Math.floor(Math.random() * 1500);
@@ -102,6 +104,46 @@ await withServer({}, async ({ baseUrl }) => {
     assert.equal(typeof data.limits, 'object');
     assert.equal(typeof data.capabilityRegistry.routingVersion, 'string');
     assert.equal(typeof data.limits.maxAttachments, 'number');
+  });
+
+  await runTest('POST /api/files/extract-text extracts Word and Excel text server-side', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Budget');
+    worksheet.addRow(['Item', 'Amount']);
+    worksheet.addRow(['Servers', 42]);
+    const excelBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const excelResponse = await fetch(`${baseUrl}/api/files/extract-text`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent('budget.xlsx'),
+      },
+      body: excelBuffer,
+    });
+    assert.equal(excelResponse.status, 200);
+    const excelData = await excelResponse.json();
+    assert.equal(excelData.category, 'excel');
+    assert.equal(excelData.content.includes('--- Sheet: Budget ---'), true);
+    assert.equal(excelData.content.includes('Servers,42'), true);
+
+    const doc = new DocxDocument({
+      sections: [{ children: [new Paragraph('Hello from the server-side Word extractor.')] }],
+    });
+    const wordBuffer = await DocxPacker.toBuffer(doc);
+
+    const wordResponse = await fetch(`${baseUrl}/api/files/extract-text`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent('notes.docx'),
+      },
+      body: wordBuffer,
+    });
+    assert.equal(wordResponse.status, 200);
+    const wordData = await wordResponse.json();
+    assert.equal(wordData.category, 'word');
+    assert.equal(wordData.content.includes('Hello from the server-side Word extractor.'), true);
   });
 
   await runTest('async multimodal job completes and artifact signed url is downloadable', async () => {

@@ -8,8 +8,7 @@ const TEXT_EXTENSIONS = [
 ];
 const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
 const MAX_INLINE_BYTES = 40 * 1024 * 1024;
-let excelJsPromise;
-let mammothPromise;
+const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
 
 /**
  * Determine the category of a file.
@@ -55,9 +54,9 @@ export async function processFile(file) {
     case 'image':
       return { ...base, content: dataUrl, preview: 'image' };
     case 'excel':
-      return { ...base, content: await readExcel(file), preview: 'text' };
+      return { ...base, content: await readOfficeDocument(file, 'excel'), preview: 'text' };
     case 'word':
-      return { ...base, content: await readWord(file), preview: 'text' };
+      return { ...base, content: await readOfficeDocument(file, 'word'), preview: 'text' };
     case 'pdf':
       return { ...base, content: await readPdf(file), preview: 'text' };
     case 'binary':
@@ -121,57 +120,34 @@ function arrayBufferToBase64(buffer) {
   throw new Error('Base64 encoding is unavailable in this environment');
 }
 
-async function loadExcelJs() {
-  if (!excelJsPromise) {
-    excelJsPromise = import('exceljs').then((module) => module.default || module);
+async function readOfficeDocument(file, category) {
+  if (file.size > SERVER_TEXT_EXTRACTION_MAX_BYTES) {
+    return '(File too large to extract a text preview. Reattach it when sending if the model needs the full document.)';
   }
-  return excelJsPromise;
-}
 
-async function loadMammoth() {
-  if (!mammothPromise) {
-    mammothPromise = import('mammoth').then((module) => module.default || module);
-  }
-  return mammothPromise;
-}
-
-async function readExcel(file) {
-  const buffer = await readAsArrayBuffer(file);
-  const ExcelJS = await loadExcelJs();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const sheets = [];
-  workbook.eachSheet((worksheet) => {
-    const rows = [];
-    worksheet.eachRow((row) => {
-      const values = Array.isArray(row.values) ? row.values.slice(1) : [];
-      const cells = values.map((value) => {
-        if (value == null) return '';
-        if (typeof value === 'object') {
-          if (value.richText) {
-            return value.richText.map(part => part.text || '').join('');
-          }
-          if (value.text) return String(value.text);
-          if (value.result != null) return String(value.result);
-          if (value.formula) return String(value.formula);
-          if (value.hyperlink) return value.text || value.hyperlink;
-          if (value instanceof Date) return value.toISOString();
-          if (value.error) return String(value.error);
-        }
-        return String(value);
-      });
-      rows.push(cells.join(','));
+  try {
+    const response = await fetch('/api/files/extract-text', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent(file?.name || 'attachment'),
+      },
+      body: file,
     });
-    sheets.push(`--- Sheet: ${worksheet.name} ---\n${rows.join('\n')}`);
-  });
-  return sheets.join('\n\n');
-}
 
-async function readWord(file) {
-  const buffer = await readAsArrayBuffer(file);
-  const mammoth = await loadMammoth();
-  const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-  return result.value;
+    if (!response.ok) {
+      throw new Error(`Server extraction failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    return typeof payload?.content === 'string'
+      ? payload.content
+      : '';
+  } catch {
+    return category === 'excel'
+      ? '(Failed to extract spreadsheet text preview.)'
+      : '(Failed to extract Word document text preview.)';
+  }
 }
 
 let pdfjsLibPromise;
