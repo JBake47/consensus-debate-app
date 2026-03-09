@@ -9,7 +9,7 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/retryPolicy.test.js && node src/lib/multimodalOrchestrator.test.js && node server/multimodalApi.test.js"
+    "test": "node src/lib/retryPolicy.test.js && node src/lib/webSearch.test.js && node src/lib/multimodalOrchestrator.test.js && node server/searchMetadata.test.js && node server/multimodalApi.test.js"
   },
   "dependencies": {
     "docx": "^9.6.0",

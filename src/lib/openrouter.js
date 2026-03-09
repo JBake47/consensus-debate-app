@@ -2,6 +2,7 @@ const API_PROXY_URL = '/api/chat';
 const MODELS_PROXY_URL = '/api/models';
 const MODELS_SEARCH_URL = '/api/models/search';
 const PROVIDERS_PROXY_URL = '/api/providers';
+const CAPABILITIES_PROXY_URL = '/api/capabilities';
 const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90000;
 const MIN_STREAM_STALL_TIMEOUT_MS = 15000;
 const DEFAULT_STREAM_RENDER_THROTTLE_MS = 40;
@@ -184,6 +185,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
     let accumulatedReasoning = '';
     let buffer = '';
     let usage = null;
+    let searchMetadata = null;
     let streamError = null;
     let pendingContentDelta = '';
     let pendingReasoning = '';
@@ -312,6 +314,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
           }
           if (parsed.type === 'done') {
             usage = extractUsage(parsed.usage || {});
+            searchMetadata = parsed.searchMetadata || null;
           }
           if (parsed.type === 'error') {
             streamError = parsed.message || 'Stream error';
@@ -332,7 +335,13 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
     }
 
     const durationMs = Math.round(performance.now() - startTime);
-    return { content: accumulated, reasoning: accumulatedReasoning || null, usage, durationMs };
+    return {
+      content: accumulated,
+      reasoning: accumulatedReasoning || null,
+      usage,
+      durationMs,
+      searchMetadata,
+    };
   } finally {
     flushTimerCleanup?.();
     if (signal) {
@@ -392,7 +401,13 @@ export async function chatCompletion({ model, messages, apiKey, signal, nativeWe
   const content = data.content || '';
   const reasoning = data.reasoning || null;
   const usage = extractUsage(data.usage || {});
-  return { content, reasoning, usage, durationMs };
+  return {
+    content,
+    reasoning,
+    usage,
+    durationMs,
+    searchMetadata: data.searchMetadata || null,
+  };
 }
 
 /**
@@ -434,6 +449,14 @@ export async function fetchProviders() {
   const response = await fetch(PROVIDERS_PROXY_URL);
   if (!response.ok) {
     throw new OpenRouterError('Failed to fetch providers', response.status);
+  }
+  return response.json();
+}
+
+export async function fetchCapabilities() {
+  const response = await fetch(CAPABILITIES_PROXY_URL);
+  if (!response.ok) {
+    throw new OpenRouterError('Failed to fetch capabilities', response.status);
   }
   return response.json();
 }

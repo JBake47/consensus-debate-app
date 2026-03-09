@@ -3,7 +3,7 @@ import {
   streamChat,
   chatCompletion,
   fetchModels,
-  fetchProviders,
+  fetchCapabilities,
   DEFAULT_DEBATE_MODELS,
   DEFAULT_SYNTHESIZER_MODEL,
   DEFAULT_CONVERGENCE_MODEL,
@@ -34,6 +34,12 @@ import {
   isTransientRetryableError,
   getRetryDelayMs,
 } from '../lib/retryPolicy';
+import {
+  buildSearchEvidence,
+  canUseNativeWebSearch,
+  getSearchResponseCachePolicy,
+  shouldFallbackForMissingSearchEvidence,
+} from '../lib/webSearch';
 
 const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
@@ -454,6 +460,7 @@ const initialState = {
   modelCatalogStatus: 'idle',
   modelCatalogError: null,
   providerStatus: { openrouter: false, anthropic: false, openai: false, gemini: false },
+  capabilityRegistry: null,
   providerStatusState: 'idle',
   providerStatusError: null,
   metrics: loadedMetrics,
@@ -826,6 +833,9 @@ function reducer(state, action) {
     }
     case 'SET_PROVIDER_STATUS': {
       return { ...state, providerStatus: action.payload };
+    }
+    case 'SET_CAPABILITY_REGISTRY': {
+      return { ...state, capabilityRegistry: action.payload || null };
     }
     case 'SET_PROVIDER_STATUS_STATE': {
       return {
@@ -1332,14 +1342,23 @@ export function DebateProvider({ children }) {
 
     dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'loading', error: null } });
 
-    fetchProviders()
-      .then((providers) => {
+    fetchCapabilities()
+      .then((payload) => {
         if (cancelled) return;
+        const capabilityRegistry = payload?.capabilityRegistry || null;
+        const providers = Object.fromEntries(
+          Object.entries(capabilityRegistry?.providers || {}).map(([providerId, info]) => [
+            providerId,
+            Boolean(info?.enabled),
+          ])
+        );
         dispatch({ type: 'SET_PROVIDER_STATUS', payload: providers });
+        dispatch({ type: 'SET_CAPABILITY_REGISTRY', payload: capabilityRegistry });
         dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'ready', error: null } });
       })
       .catch((err) => {
         if (cancelled) return;
+        dispatch({ type: 'SET_CAPABILITY_REGISTRY', payload: null });
         dispatch({ type: 'SET_PROVIDER_STATUS_STATE', payload: { status: 'error', error: err.message || 'Failed to load providers' } });
       });
 
@@ -1515,14 +1534,18 @@ export function DebateProvider({ children }) {
     return entry.value;
   };
 
-  const setCachedResponse = (cacheKey, value) => {
+  const setCachedResponse = (cacheKey, value, ttlMs = RESPONSE_CACHE_TTL_MS) => {
     if (!cacheKey || !value?.content) return;
+    const normalizedTtlMs = Number.isFinite(Number(ttlMs))
+      ? Math.max(0, Math.floor(Number(ttlMs)))
+      : RESPONSE_CACHE_TTL_MS;
+    if (normalizedTtlMs <= 0) return;
     if (responseCacheRef.current.size >= RESPONSE_CACHE_MAX_ENTRIES) {
       const oldestKey = responseCacheRef.current.keys().next().value;
       if (oldestKey) responseCacheRef.current.delete(oldestKey);
     }
     responseCacheRef.current.set(cacheKey, {
-      expiresAt: Date.now() + RESPONSE_CACHE_TTL_MS,
+      expiresAt: Date.now() + normalizedTtlMs,
       value,
     });
     if (state.cachePersistenceEnabled) {
@@ -1647,144 +1670,72 @@ export function DebateProvider({ children }) {
     };
   };
 
-  const SEARCH_URL_REGEX = /https?:\/\/[^\s)\]}>"']+/gi;
-  const SEARCH_ABSOLUTE_DATE_REGEXES = [
-    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},\s+\d{4}\b/gi,
-    /\b\d{4}-\d{2}-\d{2}\b/g,
-    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,
-  ];
-  const SEARCH_TIMESTAMP_HINT_REGEXES = [
-    /\b(published|updated|timestamp|as of|last updated|posted)\b/gi,
-    /\b\d{1,2}:\d{2}\s?(?:am|pm|utc|gmt|est|edt|cst|cdt|pst|pdt)?\b/gi,
-  ];
-  const REALTIME_PROMPT_REGEX = /\b(today|current|currently|latest|right now|as of|up[- ]to[- ]date|recent|newest)\b/i;
-  const DATE_QUERY_PROMPT_REGEX = /\b(what(?:'s| is)\s+(?:today(?:'s)?\s+date|the\s+date|today)|what day is it|current date|date today)\b/i;
+  const supportsNativeWebSearchForModel = useCallback((model) => (
+    canUseNativeWebSearch({
+      model,
+      providerStatus: state.providerStatus,
+      capabilityRegistry: state.capabilityRegistry,
+      modelCatalog: state.modelCatalog,
+    })
+  ), [state.providerStatus, state.capabilityRegistry, state.modelCatalog]);
 
-  const collectRegexMatches = (text, regexes) => {
-    const source = String(text || '');
-    const values = new Set();
-    for (const regex of regexes) {
-      const matches = source.match(regex);
-      if (!matches) continue;
-      for (const match of matches) {
-        const cleaned = String(match || '').trim();
-        if (cleaned) values.add(cleaned);
-      }
-    }
-    return Array.from(values);
-  };
-
-  const normalizeUrl = (rawUrl) => {
-    const cleaned = String(rawUrl || '').replace(/[),.;]+$/, '');
-    if (!cleaned) return null;
-    try {
-      const parsed = new URL(cleaned);
-      return parsed.toString();
-    } catch {
-      return null;
-    }
-  };
-
-  const parseDateCandidate = (candidate) => {
-    const raw = String(candidate || '').trim().replace(/[),.;]+$/, '');
-    if (!raw) return null;
-    const normalized = raw.replace(/\b(\d{1,2})\/(\d{1,2})\/(\d{2})\b/, (_m, month, day, year) => `${month}/${day}/20${year}`);
-    const parsedMs = Date.parse(normalized);
-    if (!Number.isFinite(parsedMs)) return null;
-    return parsedMs;
-  };
-
-  const buildSearchEvidence = ({
-    prompt,
-    content,
-    strictMode = false,
-    mode = 'native',
-    fallbackApplied = false,
-    fallbackReason = null,
+  const buildNativeWebSearchStrategy = useCallback(({
+    models,
+    webSearchEnabled,
+    fallbackSearchModel,
+    forceLegacy = false,
   }) => {
-    const text = String(content || '');
-    const urls = Array.from(
-      new Set(
-        (text.match(SEARCH_URL_REGEX) || [])
-          .map(normalizeUrl)
-          .filter(Boolean)
-      )
-    );
-    const sources = Array.from(
-      new Set(
-        urls
-          .map((url) => {
-            try {
-              return new URL(url).hostname.replace(/^www\./, '');
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean)
-      )
-    );
-    const absoluteDateMentions = collectRegexMatches(text, SEARCH_ABSOLUTE_DATE_REGEXES);
-    const dateEpochs = absoluteDateMentions.map(parseDateCandidate).filter(Number.isFinite);
-    const timestampMentions = collectRegexMatches(text, SEARCH_TIMESTAMP_HINT_REGEXES);
-    const realtimeIntent = REALTIME_PROMPT_REGEX.test(String(prompt || ''));
-    const explicitDateQuery = DATE_QUERY_PROMPT_REGEX.test(String(prompt || ''));
-
-    const requiredSources = strictMode ? 2 : 1;
-    const requiredAbsoluteDates = realtimeIntent ? 1 : 0;
-    const requiredTimestampHints = strictMode && realtimeIntent ? 1 : 0;
-    const freshnessWindowDays = explicitDateQuery ? 1 : 45;
-
-    const issues = [];
-    if (sources.length < requiredSources) {
-      issues.push(`Only ${sources.length} source${sources.length === 1 ? '' : 's'} detected.`);
-    }
-    if (requiredAbsoluteDates > 0 && dateEpochs.length < requiredAbsoluteDates) {
-      issues.push('Missing absolute date evidence.');
-    }
-    if (requiredTimestampHints > 0 && timestampMentions.length < requiredTimestampHints) {
-      issues.push('Missing publication timestamp cues.');
+    const selectedModels = Array.isArray(models) ? models.filter(Boolean) : [];
+    if (!webSearchEnabled || selectedModels.length === 0) {
+      return {
+        nativeWebSearch: false,
+        needsLegacyPreflight: false,
+        fallbackReason: null,
+      };
     }
 
-    let staleDays = null;
-    if (realtimeIntent && dateEpochs.length > 0) {
-      const newestDate = Math.max(...dateEpochs);
-      staleDays = Math.floor((Date.now() - newestDate) / (24 * 60 * 60 * 1000));
-      if (staleDays > freshnessWindowDays) {
-        issues.push(`Latest cited date appears stale (${staleDays} days old).`);
-      }
+    if (forceLegacy && fallbackSearchModel) {
+      return {
+        nativeWebSearch: false,
+        needsLegacyPreflight: true,
+        fallbackReason: 'Native web search bypassed; using legacy web-search context.',
+      };
     }
 
-    const searchUsed = sources.length > 0 || timestampMentions.length > 0 || dateEpochs.length > 0;
-    const verified = issues.length === 0;
+    const eligibleModels = selectedModels.filter((model) => supportsNativeWebSearchForModel(model));
+    if (eligibleModels.length === 0) {
+      return {
+        nativeWebSearch: false,
+        needsLegacyPreflight: Boolean(fallbackSearchModel),
+        fallbackReason: fallbackSearchModel
+          ? 'Selected models do not support native web search; using legacy web-search context.'
+          : null,
+      };
+    }
 
+    if (eligibleModels.length === selectedModels.length) {
+      return {
+        nativeWebSearch: true,
+        needsLegacyPreflight: false,
+        fallbackReason: null,
+      };
+    }
+
+    if (fallbackSearchModel) {
+      return {
+        nativeWebSearch: false,
+        needsLegacyPreflight: true,
+        fallbackReason: 'Some selected models do not support native web search; using legacy web-search context.',
+      };
+    }
+
+    const eligibleSet = new Set(eligibleModels);
     return {
-      mode,
-      searchUsed,
-      verified,
-      strictMode,
-      sourceCount: sources.length,
-      sources,
-      urlCount: urls.length,
-      urls,
-      absoluteDateCount: absoluteDateMentions.length,
-      timestampCount: timestampMentions.length,
-      realtimeIntent,
-      staleDays,
-      issues,
-      primaryIssue: issues[0] || null,
-      fallbackApplied,
-      fallbackReason,
-      canRetryWithLegacy: !verified,
-      checkedAt: Date.now(),
+      nativeWebSearch: (model) => eligibleSet.has(model),
+      needsLegacyPreflight: false,
+      fallbackReason: null,
     };
-  };
-
-  const shouldFallbackForMissingSearchEvidence = (results) => {
-    if (!Array.isArray(results) || results.length === 0) return false;
-    const completed = results.filter((result) => result && !result.error && result.content);
-    if (completed.length === 0) return false;
-    return completed.some((result) => result.searchEvidence && result.searchEvidence.canRetryWithLegacy);
-  };
+  }, [supportsNativeWebSearchForModel]);
 
   const enforceStrictSearchEvidence = ({ results, convId, roundIndex, strictMode = false }) => {
     if (!strictMode || !Array.isArray(results)) return results;
@@ -2006,11 +1957,16 @@ export function DebateProvider({ children }) {
     nativeWebSearch = false,
     forceRefresh = false,
     cacheable = true,
+    cachePolicy = null,
   }) => {
     clearExpiredCacheEntries();
     const providerId = getModelProviderId(model);
-    const cacheKey = cacheable ? buildResponseCacheKey({ model, messages, nativeWebSearch }) : '';
-    if (cacheable && !forceRefresh) {
+    const cacheAllowed = cacheable && (cachePolicy?.cacheable ?? true);
+    const cacheTtlMs = Number.isFinite(Number(cachePolicy?.ttlMs))
+      ? Math.max(0, Math.floor(Number(cachePolicy.ttlMs)))
+      : RESPONSE_CACHE_TTL_MS;
+    const cacheKey = cacheAllowed ? buildResponseCacheKey({ model, messages, nativeWebSearch }) : '';
+    if (cacheAllowed && !forceRefresh) {
       const cached = getCachedResponse(cacheKey);
       if (cached) {
         if (cached.content) onChunk?.(cached.content, cached.content);
@@ -2052,8 +2008,8 @@ export function DebateProvider({ children }) {
           retryRecovered: prev.retryRecovered + (attempt > 1 ? 1 : 0),
         }));
         const finalized = { ...result, fromCache: false, retryCount: attempt - 1 };
-        if (cacheable && finalized.content) {
-          setCachedResponse(cacheKey, finalized);
+        if (cacheAllowed && finalized.content) {
+          setCachedResponse(cacheKey, finalized, cacheTtlMs);
         }
         return finalized;
       }
@@ -2095,6 +2051,22 @@ export function DebateProvider({ children }) {
         const route = resolveModelRoute(model, models);
         const effectiveModel = route.effectiveModel || model;
         const routeInfo = route.routeInfo || null;
+        const useNativeSearchForModel = typeof nativeWebSearch === 'function'
+          ? Boolean(nativeWebSearch(model))
+          : Boolean(nativeWebSearch);
+        const searchMode = typeof searchVerification?.mode === 'function'
+          ? searchVerification.mode({ model, index, useNativeSearchForModel })
+          : (
+            searchVerification?.mode
+            || (useNativeSearchForModel ? 'native' : 'legacy_context')
+          );
+        const cachePolicy = searchVerification?.enabled
+          ? getSearchResponseCachePolicy({
+            prompt: searchVerification.prompt,
+            searchEnabled: true,
+            defaultTtlMs: RESPONSE_CACHE_TTL_MS,
+          })
+          : null;
 
         dispatch({
           type: 'UPDATE_ROUND_STREAM',
@@ -2114,13 +2086,14 @@ export function DebateProvider({ children }) {
         const modelMessages = messagesPerModel ? messagesPerModel[index] : messages;
 
         try {
-          const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
+          const { content, reasoning, usage, durationMs, fromCache, searchMetadata } = await runStreamWithFallback({
             model: effectiveModel,
             messages: modelMessages,
             apiKey,
             signal,
-            nativeWebSearch,
+            nativeWebSearch: useNativeSearchForModel,
             forceRefresh,
+            cachePolicy,
             onChunk: (_delta, accumulated) => {
               dispatch({
                 type: 'UPDATE_ROUND_STREAM',
@@ -2155,8 +2128,9 @@ export function DebateProvider({ children }) {
             ? buildSearchEvidence({
               prompt: searchVerification.prompt,
               content,
+              searchMetadata,
               strictMode: Boolean(searchVerification.strictMode),
-              mode: searchVerification.mode || (nativeWebSearch ? 'native' : 'legacy_context'),
+              mode: searchMode,
               fallbackApplied: Boolean(searchVerification.fallbackApplied),
               fallbackReason: searchVerification.fallbackReason || null,
             })
@@ -2195,6 +2169,7 @@ export function DebateProvider({ children }) {
             content,
             index,
             searchEvidence,
+            searchMetadata,
             routeInfo,
             effectiveModel,
             fromCache: Boolean(fromCache),
@@ -2248,6 +2223,7 @@ export function DebateProvider({ children }) {
     attachments,
     focusedOverride,
     forceRefresh = false,
+    forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
   } = {}) => {
@@ -2310,6 +2286,12 @@ export function DebateProvider({ children }) {
     let webSearchContext = '';
     const nativeWebSearchEnabled = Boolean(webSearch);
     const canUseLegacySearchFallback = Boolean(webSearchModel);
+    const nativeSearchStrategy = buildNativeWebSearchStrategy({
+      models,
+      webSearchEnabled: nativeWebSearchEnabled,
+      fallbackSearchModel: webSearchModel,
+      forceLegacy: forceLegacyWebSearch,
+    });
 
     // Build rich conversation context with smart management
     const currentConv = state.conversations.find(c => c.id === convId);
@@ -2339,6 +2321,22 @@ export function DebateProvider({ children }) {
       }).catch(() => {
         // Summarization failed — not critical, continue without it
       });
+    }
+
+    if (nativeSearchStrategy.needsLegacyPreflight) {
+      webSearchContext = await runLegacyWebSearch({
+        convId,
+        userPrompt,
+        attachments,
+        videoUrls: routeInfo?.youtubeUrls || [],
+        webSearchModel,
+        apiKey,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) {
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
     }
 
     // If web search returned results, prepend them as context
@@ -2439,8 +2437,15 @@ export function DebateProvider({ children }) {
           prompt: userPrompt,
           strictMode: roundNum === 1 ? strictWebSearch : false,
           mode: roundNum === 1
-            ? (webSearchContext ? 'legacy_context' : 'native')
+            ? ({ useNativeSearchForModel }) => {
+              if (webSearchContext) return 'legacy_context';
+              return useNativeSearchForModel ? 'native' : 'native_skipped';
+            }
             : (hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchContext ? 'legacy_context' : 'debate_rebuttal')),
+          fallbackApplied: roundNum === 1 && Boolean(webSearchContext && nativeSearchStrategy.fallbackReason),
+          fallbackReason: roundNum === 1 && webSearchContext
+            ? nativeSearchStrategy.fallbackReason
+            : null,
         }
         : null;
 
@@ -2452,7 +2457,9 @@ export function DebateProvider({ children }) {
         roundIndex,
         apiKey,
         signal: abortController.signal,
-        nativeWebSearch: roundNum === 1 && nativeWebSearchEnabled && !webSearchContext,
+        nativeWebSearch: roundNum === 1 && nativeWebSearchEnabled && !webSearchContext
+          ? nativeSearchStrategy.nativeWebSearch
+          : false,
         searchVerification: roundSearchVerification,
         forceRefresh,
         onModelSuccess: handleRoundModelSuccess,
@@ -2462,7 +2469,8 @@ export function DebateProvider({ children }) {
         roundNum === 1 &&
         nativeWebSearchEnabled &&
         !webSearchContext &&
-        canUseLegacySearchFallback;
+        canUseLegacySearchFallback &&
+        Boolean(nativeSearchStrategy.nativeWebSearch);
       const fallbackForNativeErrors = shouldConsiderSearchFallback
         ? shouldFallbackToLegacyWebSearch(results)
         : false;
@@ -2845,7 +2853,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -2955,6 +2963,7 @@ export function DebateProvider({ children }) {
     attachments,
     focusedOverride,
     forceRefresh = false,
+    forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
   } = {}) => {
@@ -3012,6 +3021,12 @@ export function DebateProvider({ children }) {
     let webSearchContext = '';
     const nativeWebSearchEnabled = Boolean(webSearch);
     const canUseLegacySearchFallback = Boolean(webSearchModel);
+    const nativeSearchStrategy = buildNativeWebSearchStrategy({
+      models,
+      webSearchEnabled: nativeWebSearchEnabled,
+      fallbackSearchModel: webSearchModel,
+      forceLegacy: forceLegacyWebSearch,
+    });
 
     // Build conversation context
     const currentConv = state.conversations.find(c => c.id === convId);
@@ -3038,6 +3053,22 @@ export function DebateProvider({ children }) {
           payload: { conversationId: convId, summary },
         });
       }).catch(() => {});
+    }
+
+    if (nativeSearchStrategy.needsLegacyPreflight) {
+      webSearchContext = await runLegacyWebSearch({
+        convId,
+        userPrompt,
+        attachments,
+        videoUrls: routeInfo?.youtubeUrls || [],
+        webSearchModel,
+        apiKey,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) {
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
     }
 
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchContext, webSearchModel, {
@@ -3069,13 +3100,20 @@ export function DebateProvider({ children }) {
       roundIndex: 0,
       apiKey,
       signal: abortController.signal,
-      nativeWebSearch: nativeWebSearchEnabled && !webSearchContext,
+      nativeWebSearch: nativeWebSearchEnabled && !webSearchContext
+        ? nativeSearchStrategy.nativeWebSearch
+        : false,
       searchVerification: nativeWebSearchEnabled
         ? {
           enabled: true,
           prompt: userPrompt,
           strictMode: strictWebSearch,
-          mode: webSearchContext ? 'legacy_context' : 'native',
+          mode: ({ useNativeSearchForModel }) => {
+            if (webSearchContext) return 'legacy_context';
+            return useNativeSearchForModel ? 'native' : 'native_skipped';
+          },
+          fallbackApplied: Boolean(webSearchContext && nativeSearchStrategy.fallbackReason),
+          fallbackReason: webSearchContext ? nativeSearchStrategy.fallbackReason : null,
         }
         : null,
       forceRefresh,
@@ -3089,7 +3127,8 @@ export function DebateProvider({ children }) {
     const shouldConsiderSearchFallback =
       nativeWebSearchEnabled &&
       !webSearchContext &&
-      canUseLegacySearchFallback;
+      canUseLegacySearchFallback &&
+      Boolean(nativeSearchStrategy.nativeWebSearch);
     const fallbackForNativeErrors = shouldConsiderSearchFallback
       ? shouldFallbackToLegacyWebSearch(results)
       : false;
@@ -3202,13 +3241,14 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const startDirect = useCallback(async (userPrompt, {
     webSearch = false,
     attachments,
     focusedOverride,
     forceRefresh = false,
+    forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
   } = {}) => {
@@ -3273,6 +3313,12 @@ export function DebateProvider({ children }) {
     let webSearchContext = '';
     const nativeWebSearchEnabled = Boolean(webSearch);
     const canUseLegacySearchFallback = Boolean(webSearchModel);
+    const nativeSearchStrategy = buildNativeWebSearchStrategy({
+      models,
+      webSearchEnabled: nativeWebSearchEnabled,
+      fallbackSearchModel: webSearchModel,
+      forceLegacy: forceLegacyWebSearch,
+    });
 
     // Build conversation context
     const currentConv = state.conversations.find(c => c.id === convId);
@@ -3299,6 +3345,22 @@ export function DebateProvider({ children }) {
           payload: { conversationId: convId, summary },
         });
       }).catch(() => {});
+    }
+
+    if (nativeSearchStrategy.needsLegacyPreflight) {
+      webSearchContext = await runLegacyWebSearch({
+        convId,
+        userPrompt,
+        attachments,
+        videoUrls: routeInfo?.youtubeUrls || [],
+        webSearchModel,
+        apiKey,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) {
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
     }
 
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchContext, webSearchModel, {
@@ -3330,13 +3392,20 @@ export function DebateProvider({ children }) {
       roundIndex: 0,
       apiKey,
       signal: abortController.signal,
-      nativeWebSearch: nativeWebSearchEnabled && !webSearchContext,
+      nativeWebSearch: nativeWebSearchEnabled && !webSearchContext
+        ? nativeSearchStrategy.nativeWebSearch
+        : false,
       searchVerification: nativeWebSearchEnabled
         ? {
           enabled: true,
           prompt: userPrompt,
           strictMode: strictWebSearch,
-          mode: webSearchContext ? 'legacy_context' : 'native',
+          mode: ({ useNativeSearchForModel }) => {
+            if (webSearchContext) return 'legacy_context';
+            return useNativeSearchForModel ? 'native' : 'native_skipped';
+          },
+          fallbackApplied: Boolean(webSearchContext && nativeSearchStrategy.fallbackReason),
+          fallbackReason: webSearchContext ? nativeSearchStrategy.fallbackReason : null,
         }
         : null,
       forceRefresh,
@@ -3350,7 +3419,8 @@ export function DebateProvider({ children }) {
     const shouldConsiderSearchFallback =
       nativeWebSearchEnabled &&
       !webSearchContext &&
-      canUseLegacySearchFallback;
+      canUseLegacySearchFallback &&
+      Boolean(nativeSearchStrategy.nativeWebSearch);
     const fallbackForNativeErrors = shouldConsiderSearchFallback
       ? shouldFallbackToLegacyWebSearch(results)
       : false;
@@ -3461,7 +3531,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const cancelDebate = useCallback((conversationId = null) => {
     const normalizedConversationId = (
@@ -3569,6 +3639,7 @@ export function DebateProvider({ children }) {
   const retryLastTurn = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
+    const forceLegacyWebSearch = Boolean(options.forceLegacyWebSearch);
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     const prompt = lastTurn.userPrompt;
     const turnAttachments = lastTurn.attachments;
@@ -3585,6 +3656,7 @@ export function DebateProvider({ children }) {
       attachments: turnAttachments || undefined,
       focusedOverride,
       forceRefresh,
+      forceLegacyWebSearch,
       modelOverrides: Array.isArray(lastTurn.modelOverrides) ? lastTurn.modelOverrides : undefined,
       routeInfo: lastTurn.routeInfo || undefined,
     };
@@ -3738,6 +3810,12 @@ export function DebateProvider({ children }) {
     let webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
     const wsModel = webSearchResult?.model || '';
     const fallbackSearchModel = wsModel || state.webSearchModel;
+    const nativeSearchStrategy = buildNativeWebSearchStrategy({
+      models,
+      webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+      fallbackSearchModel,
+      forceLegacy: roundIndex === 0 && forceLegacyWebSearch,
+    });
     const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
     const hasExistingLaterRoundRefresh = didUseLaterRoundSearchRefresh(lastTurn.rounds);
     let laterRoundSearchRefreshesUsed = hasExistingLaterRoundRefresh
@@ -3745,7 +3823,7 @@ export function DebateProvider({ children }) {
       : 0;
     let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
     let legacySearchPreflightAttempted = false;
-    if (roundIndex === 0 && forceLegacyWebSearch && Boolean(lastTurn.webSearchEnabled) && fallbackSearchModel) {
+    if (roundIndex === 0 && nativeSearchStrategy.needsLegacyPreflight) {
       legacySearchPreflightAttempted = true;
       webSearchCtx = await runLegacyWebSearch({
         convId,
@@ -3758,7 +3836,9 @@ export function DebateProvider({ children }) {
       });
       if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
     }
-    const useNativeWebSearch = Boolean(lastTurn.webSearchEnabled && !webSearchCtx);
+    const useNativeWebSearch = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && !webSearchCtx
+      ? nativeSearchStrategy.nativeWebSearch
+      : false;
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
@@ -3810,7 +3890,12 @@ export function DebateProvider({ children }) {
             enabled: true,
             prompt: userPrompt,
             strictMode: strictWebSearch,
-            mode: useNativeWebSearch ? 'native' : 'legacy_context',
+            mode: ({ useNativeSearchForModel }) => {
+              if (webSearchCtx) return 'legacy_context';
+              return useNativeSearchForModel ? 'native' : 'native_skipped';
+            },
+            fallbackApplied: Boolean(webSearchCtx && nativeSearchStrategy.fallbackReason),
+            fallbackReason: webSearchCtx ? nativeSearchStrategy.fallbackReason : null,
           }
           : null,
         forceRefresh,
@@ -3818,7 +3903,7 @@ export function DebateProvider({ children }) {
 
       const shouldConsiderSearchFallback =
         roundIndex === 0 &&
-        useNativeWebSearch &&
+        Boolean(useNativeWebSearch) &&
         Boolean(fallbackSearchModel) &&
         !legacySearchPreflightAttempted;
       const fallbackForNativeErrors = shouldConsiderSearchFallback
@@ -4128,6 +4213,17 @@ export function DebateProvider({ children }) {
         const route = resolveModelRoute(model, models);
         const effectiveModel = route.effectiveModel || model;
         const routeInfo = route.routeInfo || null;
+        const useNativeSearchForModel = roundIndex === 0
+          && (typeof useNativeWebSearch === 'function'
+            ? Boolean(useNativeWebSearch(model))
+            : Boolean(useNativeWebSearch));
+        const cachePolicy = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
+          ? getSearchResponseCachePolicy({
+            prompt: userPrompt,
+            searchEnabled: true,
+            defaultTtlMs: RESPONSE_CACHE_TTL_MS,
+          })
+          : null;
         // Build messages for this model
         let modelMessages;
         if (roundIndex === 0) {
@@ -4159,13 +4255,14 @@ export function DebateProvider({ children }) {
         });
 
         try {
-          const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
+          const { content, reasoning, usage, durationMs, fromCache, searchMetadata } = await runStreamWithFallback({
             model: effectiveModel,
             messages: modelMessages,
             apiKey,
             signal: abortController.signal,
-            nativeWebSearch: roundIndex === 0 && useNativeWebSearch,
+            nativeWebSearch: useNativeSearchForModel,
             forceRefresh,
+            cachePolicy,
             onChunk: (_delta, accumulated) => {
               dispatch({
                 type: 'UPDATE_ROUND_STREAM',
@@ -4195,6 +4292,54 @@ export function DebateProvider({ children }) {
               });
             },
           });
+          const searchEvidence = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
+            ? buildSearchEvidence({
+              prompt: userPrompt,
+              content,
+              searchMetadata,
+              strictMode: strictWebSearch,
+              mode: webSearchCtx ? 'legacy_context' : (useNativeSearchForModel ? 'native' : 'native_skipped'),
+              fallbackApplied: Boolean(webSearchCtx && nativeSearchStrategy.fallbackReason),
+              fallbackReason: webSearchCtx ? nativeSearchStrategy.fallbackReason : null,
+            })
+            : undefined;
+          if (roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && strictWebSearch && searchEvidence && !searchEvidence.verified) {
+            const message = searchEvidence.primaryIssue
+              ? `Strict web-search mode blocked this response: ${searchEvidence.primaryIssue}`
+              : 'Strict web-search mode blocked this response: unable to verify web evidence.';
+            const blockedEvidence = {
+              ...searchEvidence,
+              strictBlocked: true,
+              strictError: message,
+            };
+            dispatch({
+              type: 'UPDATE_ROUND_STREAM',
+              payload: {
+                conversationId: convId,
+                roundIndex,
+                streamIndex: si,
+                content: '',
+                status: 'error',
+                error: message,
+                usage,
+                durationMs,
+                reasoning: reasoning || null,
+                searchEvidence: blockedEvidence,
+                cacheHit: Boolean(fromCache),
+                routeInfo,
+              },
+            });
+            return {
+              model,
+              content: '',
+              index: si,
+              error: message,
+              searchEvidence: blockedEvidence,
+              routeInfo,
+              effectiveModel,
+              fromCache: Boolean(fromCache),
+            };
+          }
           dispatch({
             type: 'UPDATE_ROUND_STREAM',
             payload: {
@@ -4207,6 +4352,7 @@ export function DebateProvider({ children }) {
               usage,
               durationMs,
               reasoning: reasoning || null,
+              searchEvidence,
               cacheHit: Boolean(fromCache),
               routeInfo,
             },
@@ -4215,6 +4361,7 @@ export function DebateProvider({ children }) {
             model,
             content,
             index: si,
+            searchEvidence,
             routeInfo,
             effectiveModel,
             fromCache: Boolean(fromCache),
@@ -4484,7 +4631,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, buildNativeWebSearchStrategy, setAbortController]);
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -4512,7 +4659,7 @@ export function DebateProvider({ children }) {
     if (!lastTurn.webSearchEnabled || !lastTurn.webSearchResult) return;
     if (!Array.isArray(lastTurn.rounds) || lastTurn.rounds.length === 0) return;
     if (lastTurn.mode === 'parallel') {
-      retryLastTurn({ forceRefresh });
+      retryLastTurn({ forceRefresh, forceLegacyWebSearch: true });
       return;
     }
     retryRound(0, {
@@ -4569,13 +4716,37 @@ export function DebateProvider({ children }) {
     let webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
     const wsModel = webSearchResult?.model || '';
     const fallbackSearchModel = wsModel || state.webSearchModel;
+    const nativeSearchStrategy = buildNativeWebSearchStrategy({
+      models,
+      webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+      fallbackSearchModel,
+    });
     const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
     const hasExistingLaterRoundRefresh = didUseLaterRoundSearchRefresh(lastTurn.rounds);
     let laterRoundSearchRefreshesUsed = hasExistingLaterRoundRefresh
       ? MAX_LATER_ROUND_SEARCH_REFRESHES
       : 0;
     let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
-    const useNativeWebSearch = Boolean(lastTurn.webSearchEnabled && !webSearchCtx);
+    if (roundIndex === 0 && nativeSearchStrategy.needsLegacyPreflight) {
+      webSearchCtx = await runLegacyWebSearch({
+        convId,
+        userPrompt,
+        attachments,
+        videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+        webSearchModel: fallbackSearchModel,
+        apiKey,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) {
+        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+        return;
+      }
+    }
+    const useNativeWebSearch = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && !webSearchCtx
+      ? (typeof nativeSearchStrategy.nativeWebSearch === 'function'
+        ? Boolean(nativeSearchStrategy.nativeWebSearch(targetModel))
+        : Boolean(nativeSearchStrategy.nativeWebSearch))
+      : false;
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
@@ -4627,13 +4798,20 @@ export function DebateProvider({ children }) {
     let retryResult = { content: '', succeeded: false };
 
     try {
-      const { content, reasoning, usage, durationMs, fromCache } = await runStreamWithFallback({
+      const { content, reasoning, usage, durationMs, fromCache, searchMetadata } = await runStreamWithFallback({
         model: effectiveModel,
         messages: modelMessages,
         apiKey,
         signal: abortController.signal,
         nativeWebSearch: roundIndex === 0 && useNativeWebSearch,
         forceRefresh,
+        cachePolicy: roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
+          ? getSearchResponseCachePolicy({
+            prompt: userPrompt,
+            searchEnabled: true,
+            defaultTtlMs: RESPONSE_CACHE_TTL_MS,
+          })
+          : null,
         onChunk: (_delta, accumulated) => {
           dispatch({
             type: 'UPDATE_ROUND_STREAM',
@@ -4667,8 +4845,11 @@ export function DebateProvider({ children }) {
         ? buildSearchEvidence({
           prompt: userPrompt,
           content,
+          searchMetadata,
           strictMode: strictWebSearch,
-          mode: useNativeWebSearch ? 'native' : 'legacy_context',
+          mode: webSearchCtx ? 'legacy_context' : (useNativeWebSearch ? 'native' : 'native_skipped'),
+          fallbackApplied: Boolean(webSearchCtx && nativeSearchStrategy.fallbackReason),
+          fallbackReason: webSearchCtx ? nativeSearchStrategy.fallbackReason : null,
         })
         : undefined;
 
@@ -5014,7 +5195,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, buildNativeWebSearchStrategy, setAbortController]);
 
   const settingsValue = useMemo(() => ({
     apiKey: state.apiKey,
@@ -5044,6 +5225,7 @@ export function DebateProvider({ children }) {
     modelCatalogStatus: state.modelCatalogStatus,
     modelCatalogError: state.modelCatalogError,
     providerStatus: state.providerStatus,
+    capabilityRegistry: state.capabilityRegistry,
     providerStatusState: state.providerStatusState,
     providerStatusError: state.providerStatusError,
     metrics: state.metrics,
@@ -5075,6 +5257,7 @@ export function DebateProvider({ children }) {
     state.modelCatalogStatus,
     state.modelCatalogError,
     state.providerStatus,
+    state.capabilityRegistry,
     state.providerStatusState,
     state.providerStatusError,
     state.metrics,

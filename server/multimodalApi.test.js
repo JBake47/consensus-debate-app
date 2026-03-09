@@ -103,6 +103,7 @@ await withServer({}, async ({ baseUrl }) => {
     assert.equal(typeof data.providerHealth, 'object');
     assert.equal(typeof data.limits, 'object');
     assert.equal(typeof data.capabilityRegistry.routingVersion, 'string');
+    assert.equal(typeof data.capabilityRegistry.providers?.openrouter?.capabilities?.webSearchNative, 'boolean');
     assert.equal(typeof data.limits.maxAttachments, 'number');
   });
 

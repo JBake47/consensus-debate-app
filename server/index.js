@@ -17,6 +17,7 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
+import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
 
 dotenv.config();
 
@@ -557,10 +558,12 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
       content: data.choices?.[0]?.message?.content || '',
       reasoning: data.choices?.[0]?.message?.reasoning || null,
       usage: data.usage || null,
+      searchMetadata: nativeWebSearch ? extractSearchMetadata('openrouter', data) : null,
     };
   }
 
   let usage = null;
+  let searchMetadata = { citations: [], dateHints: [] };
   await readSseStream(response, async (_event, data) => {
     if (data === '[DONE]') return;
     let parsed;
@@ -568,6 +571,9 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
       parsed = JSON.parse(data);
     } catch {
       return;
+    }
+    if (nativeWebSearch) {
+      searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('openrouter', parsed));
     }
     const delta = parsed.choices?.[0]?.delta;
     if (delta?.content) {
@@ -585,7 +591,7 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
     }
   });
 
-  sendSse(res, { type: 'done', usage });
+  sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
 }
 
@@ -653,11 +659,17 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
         cost: data.usage.cost ?? null,
       }
       : null;
-    return { content, reasoning, usage };
+    return {
+      content,
+      reasoning,
+      usage,
+      searchMetadata: nativeWebSearch ? extractSearchMetadata('anthropic', data) : null,
+    };
   }
 
   const blockTypes = new Map();
   let usage = null;
+  let searchMetadata = { citations: [], dateHints: [] };
 
   await readSseStream(response, async (event, data) => {
     if (!data || data === '[DONE]') return;
@@ -666,6 +678,9 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
       parsed = JSON.parse(data);
     } catch {
       return;
+    }
+    if (nativeWebSearch) {
+      searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('anthropic', parsed));
     }
 
     if (event === 'message_start') {
@@ -731,7 +746,7 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     }
   });
 
-  sendSse(res, { type: 'done', usage });
+  sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
 }
 
@@ -778,10 +793,12 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
       content: message?.content || '',
       reasoning: message?.reasoning || message?.reasoning_content || null,
       usage: data.usage || null,
+      searchMetadata: nativeWebSearch ? extractSearchMetadata('openai', data) : null,
     };
   }
 
   let usage = null;
+  let searchMetadata = { citations: [], dateHints: [] };
   await readSseStream(response, async (_event, data) => {
     if (data === '[DONE]') return;
     let parsed;
@@ -789,6 +806,9 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
       parsed = JSON.parse(data);
     } catch {
       return;
+    }
+    if (nativeWebSearch) {
+      searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('openai', parsed));
     }
     const delta = parsed.choices?.[0]?.delta;
     if (delta?.content) {
@@ -805,7 +825,7 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
     }
   });
 
-  sendSse(res, { type: 'done', usage });
+  sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
 }
 
@@ -847,10 +867,16 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
   if (!stream) {
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-    return { content: text, reasoning: null, usage: data.usageMetadata || null };
+    return {
+      content: text,
+      reasoning: null,
+      usage: data.usageMetadata || null,
+      searchMetadata: nativeWebSearch ? extractSearchMetadata('gemini', data) : null,
+    };
   }
 
   let usage = null;
+  let searchMetadata = { citations: [], dateHints: [] };
   await readSseStream(response, async (_event, data) => {
     if (!data || data === '[DONE]') return;
     let parsed;
@@ -858,6 +884,9 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
       parsed = JSON.parse(data);
     } catch {
       return;
+    }
+    if (nativeWebSearch) {
+      searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('gemini', parsed));
     }
     const text = parsed.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
     if (text) {
@@ -868,7 +897,7 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
     }
   });
 
-  sendSse(res, { type: 'done', usage });
+  sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
 }
 
@@ -894,6 +923,7 @@ function buildCapabilityRegistry(providerStatus) {
       enabled: Boolean(providerStatus.openrouter),
       capabilities: {
         chat: true,
+        webSearchNative: true,
         imageInput: true,
         imageOutput: false,
         videoInput: true,
@@ -909,6 +939,7 @@ function buildCapabilityRegistry(providerStatus) {
       enabled: Boolean(providerStatus.anthropic),
       capabilities: {
         chat: true,
+        webSearchNative: true,
         imageInput: true,
         imageOutput: false,
         videoInput: false,
@@ -924,6 +955,7 @@ function buildCapabilityRegistry(providerStatus) {
       enabled: Boolean(providerStatus.openai),
       capabilities: {
         chat: true,
+        webSearchNative: true,
         imageInput: true,
         imageOutput: true,
         videoInput: false,
@@ -940,6 +972,7 @@ function buildCapabilityRegistry(providerStatus) {
       enabled: Boolean(providerStatus.gemini),
       capabilities: {
         chat: true,
+        webSearchNative: true,
         imageInput: true,
         imageOutput: false,
         videoInput: true,
