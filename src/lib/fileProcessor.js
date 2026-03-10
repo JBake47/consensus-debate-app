@@ -52,7 +52,7 @@ export async function processFile(file) {
 
   switch (category) {
     case 'image':
-      return { ...base, content: dataUrl, preview: 'image' };
+      return { ...base, content: '', preview: 'image' };
     case 'excel':
       return { ...base, content: await readOfficeDocument(file, 'excel'), preview: 'text' };
     case 'word':

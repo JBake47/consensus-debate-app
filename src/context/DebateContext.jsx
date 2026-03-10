@@ -40,6 +40,7 @@ import {
   getSearchResponseCachePolicy,
   shouldFallbackForMissingSearchEvidence,
 } from '../lib/webSearch';
+import { persistConversationsSnapshot } from '../lib/conversationPersistence';
 
 const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
@@ -49,6 +50,7 @@ const DebateConversationContext = createContext(null);
 const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
 const METRICS_SAMPLE_LIMIT = 120;
+const CONVERSATIONS_STORAGE_KEY = 'debate_conversations';
 const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v2';
 const LEGACY_RESPONSE_CACHE_STORAGE_KEYS = ['response_cache_store_v1'];
 const TITLE_SOURCE_SEED = 'seed';
@@ -400,10 +402,10 @@ function migrateConversations(conversations) {
   return { conversations: result, migrated };
 }
 
-const rawConversations = loadFromStorage('debate_conversations', []);
+const rawConversations = loadFromStorage(CONVERSATIONS_STORAGE_KEY, []);
 const { conversations: migratedConversations, migrated } = migrateConversations(rawConversations);
 if (migrated) {
-  saveToStorage('debate_conversations', migratedConversations);
+  persistConversationsSnapshot(localStorage, CONVERSATIONS_STORAGE_KEY, migratedConversations);
 }
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
@@ -1168,6 +1170,7 @@ export function DebateProvider({ children }) {
   const abortControllersRef = useRef(new Map());
   const responseCacheRef = useRef(loadedResponseCache);
   const providerCircuitRef = useRef({});
+  const conversationsRef = useRef(state.conversations);
   const metricsRef = useRef(state.metrics);
   const cacheStatsRef = useRef({
     cacheHitCount: state.cacheHitCount,
@@ -1177,6 +1180,10 @@ export function DebateProvider({ children }) {
   useEffect(() => {
     dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
   }, [dispatch]);
+
+  useEffect(() => {
+    conversationsRef.current = state.conversations;
+  }, [state.conversations]);
 
   useEffect(() => {
     metricsRef.current = state.metrics;
@@ -1192,10 +1199,26 @@ export function DebateProvider({ children }) {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const timer = window.setTimeout(() => {
-      saveToStorage('debate_conversations', state.conversations);
+      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, state.conversations);
     }, 180);
     return () => window.clearTimeout(timer);
   }, [state.conversations]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const flushConversations = () => {
+      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, conversationsRef.current);
+    };
+
+    window.addEventListener('pagehide', flushConversations);
+    window.addEventListener('beforeunload', flushConversations);
+
+    return () => {
+      window.removeEventListener('pagehide', flushConversations);
+      window.removeEventListener('beforeunload', flushConversations);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

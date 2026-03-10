@@ -7,18 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-03-10
+
 ### Added
 - Structured web-search metadata extraction and test coverage for provider citations/date hints across the client and API proxy
+- Conversation persistence compaction tests covering quota fallback behavior and retention of final visible answers
 
 ### Changed
 - Real-time search prompts now bypass the response cache, while other search-enabled runs use a shorter cache TTL to reduce stale answers
 - Search runs now use capability-aware native-search routing, preflighting directly into legacy search context when selected models lack native search support
 - Search evidence verification now prefers structured provider metadata when available instead of relying only on citation/date regexes in model output
+- Conversation snapshots now compact oversized attachment previews, reasoning traces, and web-search payloads before saving to browser storage, with an unload flush to reduce stale snapshots
 
 ### Fixed
 - Native-to-legacy web-search fallback now uses a majority threshold for missing evidence instead of rerunning an entire round because of a single weak response
 - Retry and re-run search paths now reuse the same capability-aware native/legacy search decision logic as fresh runs
 - Provider-backed search citations and publication timestamps are now preserved through streaming and non-streaming proxy responses
+- Reloading older chats no longer falls back to a stale interrupted snapshot when `localStorage` fills up, which previously surfaced as missing responses and `All models failed` states
+- Image attachments no longer duplicate inline base64 payloads in both `dataUrl` and `content`, reducing chat-history storage pressure
 
 ## [0.3.18] - 2026-03-05
 
