@@ -4,6 +4,104 @@ import { searchModels } from '../lib/openrouter';
 import './ModelPickerModal.css';
 
 const PAGE_SIZE = 60;
+const TOKEN_FORMATTER = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+function toFiniteNumber(value) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getContextLength(model) {
+  return (
+    toFiniteNumber(model?.context_length) ??
+    toFiniteNumber(model?.top_provider?.context_length) ??
+    toFiniteNumber(model?.architecture?.context_length) ??
+    toFiniteNumber(model?.top_provider?.max_prompt_tokens)
+  );
+}
+
+function getMaxOutput(model) {
+  return (
+    toFiniteNumber(model?.top_provider?.max_completion_tokens) ??
+    toFiniteNumber(model?.max_completion_tokens) ??
+    toFiniteNumber(model?.max_output_tokens) ??
+    toFiniteNumber(model?.architecture?.max_completion_tokens)
+  );
+}
+
+function normalizePricePerMillion(rawValue) {
+  const raw = toFiniteNumber(rawValue);
+  if (raw == null) return null;
+  return raw > 0.01 ? raw : raw * 1_000_000;
+}
+
+function formatTokens(value) {
+  if (value == null) return 'N/A';
+  return TOKEN_FORMATTER.format(value);
+}
+
+function formatTokensTitle(value) {
+  if (value == null) return 'Unavailable';
+  return `${value.toLocaleString()} tokens`;
+}
+
+function formatPrice(value) {
+  if (value == null) return 'N/A';
+  if (value === 0) return '$0/M';
+  const digits = value >= 100 ? 0 : value >= 10 ? 2 : value >= 1 ? 2 : value >= 0.01 ? 3 : 4;
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: digits })}/M`;
+}
+
+function formatPriceTitle(value) {
+  if (value == null) return 'Unavailable';
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} per million tokens`;
+}
+
+function getModelStats(model) {
+  const pricing = model?.pricing || {};
+  const contextLength = getContextLength(model);
+  const maxOutput = getMaxOutput(model);
+  const inputPrice = normalizePricePerMillion(pricing.prompt ?? pricing.input ?? pricing.input_per_token ?? pricing.prompt_per_token);
+  const outputPrice = normalizePricePerMillion(pricing.completion ?? pricing.output ?? pricing.output_per_token ?? pricing.completion_per_token);
+  const cacheRead = normalizePricePerMillion(pricing.input_cache_read ?? pricing.cache_read);
+  const cacheWrite = normalizePricePerMillion(pricing.input_cache_write ?? pricing.cache_write);
+
+  return [
+    {
+      label: 'Total Context',
+      value: formatTokens(contextLength),
+      title: formatTokensTitle(contextLength),
+    },
+    {
+      label: 'Max Output',
+      value: formatTokens(maxOutput),
+      title: formatTokensTitle(maxOutput),
+    },
+    {
+      label: 'Input Price',
+      value: formatPrice(inputPrice),
+      title: formatPriceTitle(inputPrice),
+    },
+    {
+      label: 'Output Price',
+      value: formatPrice(outputPrice),
+      title: formatPriceTitle(outputPrice),
+    },
+    {
+      label: 'Cache Read',
+      value: formatPrice(cacheRead),
+      title: formatPriceTitle(cacheRead),
+    },
+    {
+      label: 'Cache Write',
+      value: formatPrice(cacheWrite),
+      title: formatPriceTitle(cacheWrite),
+    },
+  ];
+}
 
 export default function ModelPickerModal({ open, onClose, onAdd, provider = 'openrouter', apiKey = '' }) {
   const [query, setQuery] = useState('');
@@ -87,20 +185,31 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
           )}
           {!loading && !error && results.length > 0 && (
             <div className="model-picker-list">
-              {results.map((model) => (
-                <div key={model.id} className="model-picker-item">
-                  <div className="model-picker-info">
-                    <div className="model-picker-name">{formatModelId(model.id)}</div>
-                    <div className="model-picker-desc">
-                      {provider === 'openrouter' ? model.name || model.id : model.id}
+              {results.map((model) => {
+                const stats = getModelStats(model);
+                return (
+                  <div key={model.id} className="model-picker-item">
+                    <div className="model-picker-info">
+                      <div className="model-picker-name">{formatModelId(model.id)}</div>
+                      <div className="model-picker-desc">
+                        {provider === 'openrouter' ? model.name || model.id : model.id}
+                      </div>
+                      <div className="model-picker-stats">
+                        {stats.map((stat) => (
+                          <div key={stat.label} className="model-picker-stat" title={stat.title}>
+                            <span className="model-picker-stat-label">{stat.label}</span>
+                            <span className="model-picker-stat-value">{stat.value}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
+                    <button className="model-picker-add" onClick={() => onAdd(model.id)}>
+                      <Plus size={14} />
+                      Add
+                    </button>
                   </div>
-                  <button className="model-picker-add" onClick={() => onAdd(model.id)}>
-                    <Plus size={14} />
-                    Add
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-03-11
+
+### Added
+- Expandable response viewer modal for model answers, thread messages, synthesis output, and web-search responses, with copy support and live streaming updates
+- Model picker stats for total context, max output, input price, output price, cache read price, and cache write price
+- Persistent app-wide light and dark theme mode with a header toggle, command-palette action, and Settings control
+
+### Changed
+- Model picker layout now presents pricing and token-limit metadata in a responsive multi-column grid
+- Header and shared surface styling now use theme tokens so the app renders cleanly in both light and dark modes
+
+### Fixed
+- Reset Defaults in Settings now restores theme mode to the shared default along with the other persisted settings
+
 ## [0.3.19] - 2026-03-10
 
 ### Added
@@ -408,7 +422,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.18...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.20...HEAD
+[0.3.20]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.19...v0.3.20
+[0.3.19]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.17...v0.3.18
 [0.3.17]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.16...v0.3.17
 [0.3.16]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.15...v0.3.16

@@ -41,6 +41,7 @@ import {
   shouldFallbackForMissingSearchEvidence,
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
+import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
 
 const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
@@ -452,6 +453,7 @@ const initialState = {
   streamVirtualizationEnabled: loadFromStorage('stream_virtualization_enabled', true),
   streamVirtualizationKeepLatest: loadedVirtualizationKeepLatest,
   cachePersistenceEnabled: loadFromStorage('cache_persistence_enabled', true),
+  themeMode: getStoredThemeMode(),
   cacheHitCount: 0,
   cacheEntryCount: loadedResponseCache.size,
   chatMode: loadFromStorage('chat_mode', 'debate'),
@@ -785,6 +787,11 @@ function reducer(state, action) {
       const enabled = Boolean(action.payload);
       saveToStorage('cache_persistence_enabled', enabled);
       return { ...state, cachePersistenceEnabled: enabled };
+    }
+    case 'SET_THEME_MODE': {
+      const mode = normalizeThemeMode(action.payload);
+      saveToStorage(THEME_STORAGE_KEY, mode);
+      return { ...state, themeMode: mode };
     }
     case 'SET_CACHE_STATS': {
       return {
@@ -1176,6 +1183,10 @@ export function DebateProvider({ children }) {
     cacheHitCount: state.cacheHitCount,
     cacheEntryCount: state.cacheEntryCount,
   });
+
+  useEffect(() => {
+    applyThemeMode(state.themeMode);
+  }, [state.themeMode]);
 
   useEffect(() => {
     dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
@@ -5241,6 +5252,7 @@ export function DebateProvider({ children }) {
     streamVirtualizationEnabled: state.streamVirtualizationEnabled,
     streamVirtualizationKeepLatest: state.streamVirtualizationKeepLatest,
     cachePersistenceEnabled: state.cachePersistenceEnabled,
+    themeMode: state.themeMode,
     cacheHitCount: state.cacheHitCount,
     cacheEntryCount: state.cacheEntryCount,
     modelPresets: state.modelPresets,
@@ -5273,6 +5285,7 @@ export function DebateProvider({ children }) {
     state.streamVirtualizationEnabled,
     state.streamVirtualizationKeepLatest,
     state.cachePersistenceEnabled,
+    state.themeMode,
     state.cacheHitCount,
     state.cacheEntryCount,
     state.modelPresets,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, MoreHorizontal } from 'lucide-react';
+import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, MoreHorizontal, Sun } from 'lucide-react';
 import { useDebateActions, useDebateSettings, useDebateUi } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
@@ -10,6 +10,7 @@ import {
 } from '../lib/openrouter';
 import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
 import { rankModels } from '../lib/modelRanking';
+import { DEFAULT_THEME_MODE } from '../lib/theme';
 import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
 
@@ -87,7 +88,7 @@ export default function SettingsModal() {
     retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
-    cachePersistenceEnabled, cacheHitCount, cacheEntryCount,
+    cachePersistenceEnabled, themeMode, cacheHitCount, cacheEntryCount,
     rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics,
   } = useDebateSettings();
   const { showSettings } = useDebateUi();
@@ -115,6 +116,7 @@ export default function SettingsModal() {
   const [virtualizationEnabled, setVirtualizationEnabled] = useState(Boolean(streamVirtualizationEnabled));
   const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
   const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
+  const [themeSelection, setThemeSelection] = useState(themeMode || DEFAULT_THEME_MODE);
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [debouncedKeyInput, setDebouncedKeyInput] = useState(apiKey);
   const [newModel, setNewModel] = useState('');
@@ -614,6 +616,7 @@ export default function SettingsModal() {
     setVirtualizationEnabled(true);
     setVirtualizationKeepLatest(4);
     setCachePersistence(true);
+    setThemeSelection(DEFAULT_THEME_MODE);
   };
 
   useEffect(() => {
@@ -642,6 +645,7 @@ export default function SettingsModal() {
     setVirtualizationEnabled(Boolean(streamVirtualizationEnabled));
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
+    setThemeSelection(themeMode || DEFAULT_THEME_MODE);
     setRememberKey(rememberApiKey);
     setDebouncedKeyInput(apiKey.trim());
     closePresetSheet();
@@ -674,6 +678,7 @@ export default function SettingsModal() {
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
     cachePersistenceEnabled,
+    themeMode,
     rememberApiKey,
   ]);
 
@@ -740,6 +745,9 @@ export default function SettingsModal() {
     if (Boolean(cachePersistence) !== Boolean(cachePersistenceEnabled)) {
       dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
     }
+    if (themeSelection !== themeMode) {
+      dispatch({ type: 'SET_THEME_MODE', payload: themeSelection });
+    }
   }, [
     showSettings,
     rememberKey,
@@ -782,6 +790,8 @@ export default function SettingsModal() {
     streamVirtualizationKeepLatest,
     cachePersistence,
     cachePersistenceEnabled,
+    themeSelection,
+    themeMode,
     dispatch,
   ]);
 
@@ -824,6 +834,24 @@ export default function SettingsModal() {
               <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">
                 openrouter.ai/keys
               </a>
+            </p>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <Sun size={14} />
+              <span>Theme</span>
+            </label>
+            <select
+              className="settings-input settings-select"
+              value={themeSelection}
+              onChange={e => setThemeSelection(e.target.value)}
+            >
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <p className="settings-hint">
+              Applies immediately and stays saved on this device.
             </p>
           </div>
 

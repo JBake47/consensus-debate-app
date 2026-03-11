@@ -3,6 +3,7 @@ import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Im
 import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
+import ExpandButton from './ExpandButton';
 import { formatFileSize } from '../lib/formatFileSize';
 import ModelCard from './ModelCard';
 import RoundSection from './RoundSection';
@@ -11,6 +12,7 @@ import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import EnsembleResultPanel from './EnsembleResultPanel';
 import AttachmentViewer from './AttachmentViewer';
+import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import {
@@ -23,6 +25,7 @@ import './DebateView.css';
 
 function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
   const [collapsed, setCollapsed] = useState(true);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const { status, content, model, error, durationMs } = webSearchResult;
 
   return (
@@ -42,6 +45,7 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
           )}
           {status === 'complete' && (
             <>
+              {content && <ExpandButton onClick={() => setViewerOpen(true)} />}
               {content && <CopyButton text={content} />}
               <span className="web-search-badge complete">Done</span>
               {durationMs != null && (
@@ -81,6 +85,15 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
       {status === 'error' && error && (
         <div className="web-search-error">{error}</div>
       )}
+
+      <ResponseViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        title="Web Search"
+        subtitle={model ? getModelDisplayName(model) : 'Search response'}
+        content={content}
+        status={status}
+      />
     </div>
   );
 }

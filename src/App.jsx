@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
-import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2 } from 'lucide-react';
-import { useDebateActions, useDebateConversations, useDebateUi } from './context/DebateContext';
+import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon } from 'lucide-react';
+import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
 import {
   computeConversationCostMeta,
   formatCostWithQuality,
@@ -20,6 +20,7 @@ const MAX_VISIBLE_TURNS = 8;
 function AppContent() {
   const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
   const { activeConversation, debateInProgress } = useDebateConversations();
+  const { themeMode } = useDebateSettings();
   const { webSearchEnabled, showSettings } = useDebateUi();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingHeader, setEditingHeader] = useState(false);
@@ -118,6 +119,10 @@ function AppContent() {
     exportConversationReport(activeConversation);
   };
 
+  const toggleTheme = () => {
+    dispatch({ type: 'SET_THEME_MODE', payload: themeMode === 'light' ? 'dark' : 'light' });
+  };
+
   const handleQuickStart = ({ mode, prompt }) => {
     if (mode) {
       dispatch({ type: 'SET_CHAT_MODE', payload: mode });
@@ -168,6 +173,14 @@ function AppContent() {
       run: () => dispatch({ type: 'SET_WEB_SEARCH_ENABLED', payload: !webSearchEnabled }),
     },
     {
+      id: 'toggle-theme',
+      title: themeMode === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode',
+      shortcut: 'T',
+      icon: themeMode === 'light' ? <Moon size={14} /> : <Sun size={14} />,
+      keywords: 'theme appearance dark light mode',
+      run: toggleTheme,
+    },
+    {
       id: 'retry-last',
       title: 'Retry Last Turn',
       shortcut: 'R',
@@ -201,6 +214,7 @@ function AppContent() {
     },
   ].filter((item) => Boolean(item.run))), [
     dispatch,
+    themeMode,
     webSearchEnabled,
     retryLastTurn,
     retryAllFailed,
@@ -289,6 +303,14 @@ function AppContent() {
               <span>{conversationCostLabel}</span>
             </div>
           )}
+          <button
+            className="main-header-theme"
+            onClick={toggleTheme}
+            title={themeMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={themeMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {themeMode === 'light' ? <Moon size={14} /> : <Sun size={14} />}
+          </button>
           {activeConversation && (
             <button
               className="main-header-share"

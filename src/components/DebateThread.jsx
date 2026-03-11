@@ -4,6 +4,8 @@ import { useDebateActions, useDebateConversations } from '../context/DebateConte
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ConvergencePanel from './ConvergencePanel';
+import ExpandButton from './ExpandButton';
+import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import {
   formatTokenCount,
@@ -18,6 +20,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   const { retryStream } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
@@ -68,6 +71,9 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           <span className="thread-message-model">{displayName}</span>
           <span className="thread-message-round">R{roundNumber}</span>
           {status === 'streaming' && <Loader2 size={12} className="spinning" />}
+          {(status === 'streaming' || status === 'complete') && content && (
+            <ExpandButton onClick={() => setViewerOpen(true)} />
+          )}
           {status === 'complete' && content && (
             <CopyButton text={content} />
           )}
@@ -173,6 +179,15 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           </div>
         )}
       </div>
+
+      <ResponseViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        title={displayName}
+        subtitle={`${provider} response · Round ${roundNumber}`}
+        content={content}
+        status={status}
+      />
     </div>
   );
 }

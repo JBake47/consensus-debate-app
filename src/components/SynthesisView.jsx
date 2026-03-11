@@ -3,6 +3,8 @@ import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, C
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
+import ExpandButton from './ExpandButton';
+import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { extractCitations } from '../lib/citationInspector';
@@ -159,6 +161,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
   const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
   const [citationsExpanded, setCitationsExpanded] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
   const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
@@ -186,6 +189,9 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
           <span className="synthesis-model">{getModelDisplayName(model)}</span>
         </div>
         <div className="synthesis-badges">
+          {(status === 'streaming' || status === 'complete') && content && (
+            <ExpandButton onClick={() => setViewerOpen(true)} />
+          )}
           {status === 'complete' && content && (
             <CopyButton text={content} />
           )}
@@ -304,6 +310,15 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
       {status === 'complete' && rounds && (
         <DebateInternals rounds={rounds} debateMetadata={debateMetadata} />
       )}
+
+      <ResponseViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        title={ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}
+        subtitle={getModelDisplayName(model)}
+        content={content}
+        status={status}
+      />
     </div>
   );
 }

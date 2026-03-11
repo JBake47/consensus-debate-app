@@ -3,6 +3,8 @@ import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe, 
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
+import ExpandButton from './ExpandButton';
+import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { extractCitations } from '../lib/citationInspector';
 import {
@@ -28,6 +30,7 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
   const [reasoningCollapsed, setReasoningCollapsed] = useState(!reasoningModel);
   const [sideBySide, setSideBySide] = useState(reasoningModel);
   const [citationExpanded, setCitationExpanded] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
@@ -116,7 +119,10 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
             <span className="model-card-name">{displayName}</span>
           </div>
         </div>
-        <div className="model-card-status-area">
+          <div className="model-card-status-area">
+          {(status === 'streaming' || status === 'complete') && content && (
+            <ExpandButton onClick={() => setViewerOpen(true)} />
+          )}
           {status === 'complete' && content && (
             <CopyButton text={content} />
           )}
@@ -337,6 +343,15 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
           )}
         </>
       )}
+
+      <ResponseViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        title={displayName}
+        subtitle={`${provider} response`}
+        content={content}
+        status={status}
+      />
     </div>
   );
 }
