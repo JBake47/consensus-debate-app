@@ -45,6 +45,28 @@
   animation: threadMsgIn 300ms ease;
 }
 
+.thread-message.fullscreen-panel {
+  width: 100%;
+  height: 100%;
+  padding: clamp(16px, 3vw, 28px);
+  overflow: auto;
+  animation: none;
+}
+
+.thread-message.fullscreen-panel .thread-message-header {
+  padding-right: 72px;
+}
+
+.thread-message.fullscreen-panel .thread-message-body {
+  flex: 1;
+}
+
+.thread-message.fullscreen-panel .scroll-preview {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
 @keyframes threadMsgIn {
   from { opacity: 0; transform: translateX(-8px); }
   to { opacity: 1; transform: translateX(0); }
@@ -81,7 +103,8 @@
   align-items: center;
   gap: var(--space-xs);
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  row-gap: 6px;
 }
 
 .thread-message-provider {
@@ -150,7 +173,8 @@
   padding: 2px 7px;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .thread-search-pill.verified {
@@ -179,7 +203,8 @@
   padding: 2px 7px;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .thread-route-pill.routed {
@@ -203,7 +228,7 @@
   color: var(--accent-green);
   background: rgba(34, 197, 94, 0.12);
   border: 1px solid rgba(34, 197, 94, 0.3);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .thread-search-meta {
@@ -248,8 +273,12 @@
 .thread-message-content {
   font-size: var(--text-sm);
   line-height: 1.6;
-  max-height: 500px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.thread-message-content.scroll-preview {
+  height: var(--response-preview-height);
 }
 
 .thread-message-error {
@@ -318,9 +347,13 @@
   padding: var(--space-xs) var(--space-sm);
   background: rgba(168, 85, 247, 0.04);
   border-radius: var(--radius-sm);
-  max-height: 200px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   opacity: 0.85;
+}
+
+.thread-reasoning-text.scroll-preview {
+  max-height: var(--reasoning-preview-height);
 }
 
 .thread-reasoning-text p {
@@ -370,4 +403,15 @@
 .thread-system-reason {
   font-weight: 400;
   opacity: 0.8;
+}
+
+@media (max-width: 720px) {
+  .thread-message-stats {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+
+  .thread-convergence-panel {
+    margin-left: 0;
+  }
 }

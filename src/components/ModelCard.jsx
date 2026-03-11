@@ -63,6 +63,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
+  const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
+  const hasReasoningPreview = Boolean(reasoning);
   const citations = useMemo(
     () => extractCitations(content, searchEvidence?.urls || []),
     [content, searchEvidence?.urls]
@@ -106,9 +108,9 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
     error: 'Failed',
   }[status];
 
-  return (
+  const card = (
     <div
-      className={`model-card glass-panel ${status}`}
+      className={`model-card glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}
       style={{ '--card-accent': color }}
     >
       <div className="model-card-header" onClick={() => setCollapsed(!collapsed)}>
@@ -120,8 +122,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
           </div>
         </div>
           <div className="model-card-status-area">
-          {(status === 'streaming' || status === 'complete') && content && (
-            <ExpandButton onClick={() => setViewerOpen(true)} />
+          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
+            <ExpandButton onClick={() => { setCollapsed(false); setViewerOpen(true); }} />
           )}
           {status === 'complete' && content && (
             <CopyButton text={content} />
@@ -256,14 +258,20 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                   </div>
                 </div>
                 {!reasoningCollapsed && (
-                  <div className="model-card-reasoning-content" ref={reasoningRef}>
+                  <div
+                    className={`model-card-reasoning-content ${hasReasoningPreview ? 'scroll-preview' : ''}`}
+                    ref={reasoningRef}
+                  >
                     <div className="model-card-reasoning-text markdown-content">
                       <MarkdownRenderer>{reasoning}</MarkdownRenderer>
                     </div>
                   </div>
                 )}
               </div>
-              <div className="model-card-content side-by-side" ref={contentRef}>
+              <div
+                className={`model-card-content side-by-side ${hasContentPreview ? 'scroll-preview' : ''}`}
+                ref={contentRef}
+              >
                 <div className="markdown-content">
                   <MarkdownRenderer>{content}</MarkdownRenderer>
                   {status === 'streaming' && <span className="cursor-blink" />}
@@ -307,7 +315,10 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                     </div>
                   </div>
                   {!reasoningCollapsed && (
-                    <div className="model-card-reasoning-content" ref={reasoningRef}>
+                    <div
+                      className={`model-card-reasoning-content ${hasReasoningPreview ? 'scroll-preview' : ''}`}
+                      ref={reasoningRef}
+                    >
                       <div className="model-card-reasoning-text markdown-content">
                         <MarkdownRenderer>{reasoning}</MarkdownRenderer>
                       </div>
@@ -316,7 +327,10 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                   )}
                 </div>
               )}
-              <div className="model-card-content" ref={contentRef}>
+              <div
+                className={`model-card-content ${hasContentPreview ? 'scroll-preview' : ''}`}
+                ref={contentRef}
+              >
                 {status === 'pending' && (
                   <div className="model-card-pending">
                     <div className="pulse-dots">
@@ -344,16 +358,14 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
         </>
       )}
 
-      <ResponseViewerModal
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        title={displayName}
-        subtitle={`${provider} response`}
-        content={content}
-        status={status}
-      />
     </div>
   );
+
+  return viewerOpen ? (
+    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
+      {card}
+    </ResponseViewerModal>
+  ) : card;
 }
 
 export default memo(ModelCard);

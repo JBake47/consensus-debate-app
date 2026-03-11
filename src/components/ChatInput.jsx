@@ -463,80 +463,6 @@ export default function ChatInput() {
         )}
 
         <div className="chat-input-row">
-          <div className="chat-input-toggles">
-            <button
-              className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
-              onClick={toggleWebSearch}
-              disabled={debateInProgress}
-              title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
-            >
-              <Globe size={15} />
-              <span>Search</span>
-            </button>
-            <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
-              <button
-                className="chat-mode-select"
-                onClick={() => setModeMenuOpen((open) => !open)}
-                disabled={debateInProgress}
-                aria-haspopup="listbox"
-                aria-expanded={modeMenuOpen}
-                type="button"
-              >
-                <span className="chat-mode-select-icon">
-                  {modeOptions.find(option => option.id === chatMode)?.icon}
-                </span>
-                <span>{modeOptions.find(option => option.id === chatMode)?.label || 'Mode'}</span>
-                <ChevronDown size={12} className="chat-mode-select-caret" />
-              </button>
-              {modeMenuOpen && !debateInProgress && (
-                <div className="chat-mode-menu" role="listbox" aria-label="Chat mode">
-                  {modeOptions.map((option) => (
-                    <button
-                      key={option.id}
-                      className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
-                      onClick={() => {
-                        setChatMode(option.id);
-                        setModeMenuOpen(false);
-                      }}
-                      role="option"
-                      aria-selected={chatMode === option.id}
-                      type="button"
-                    >
-                      <span className="chat-mode-option-icon">{option.icon}</span>
-                      <span>{option.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button
-              className={`chat-toggle ${focusedMode ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
-              disabled={debateInProgress}
-              title={focusedMode ? 'Shorter replies enabled' : 'Prefer shorter, sharper replies'}
-            >
-              <Zap size={15} />
-              <span>Shorter</span>
-            </button>
-            <button
-              className="chat-toggle"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={debateInProgress || processing || orchestrating}
-              title="Attach files"
-            >
-              <Paperclip size={15} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              style={{ display: 'none' }}
-              onChange={e => {
-                handleFiles(e.target.files);
-                e.target.value = '';
-              }}
-            />
-          </div>
           <textarea
             ref={textareaRef}
             className="chat-textarea"
@@ -548,48 +474,124 @@ export default function ChatInput() {
             rows={1}
             disabled={false}
           />
-          <div className="chat-input-actions">
-            {debateInProgress ? (
-              <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()}>
-                <Square size={16} />
-                <span>Stop</span>
+          <div className="chat-input-footer">
+            <div className="chat-input-toggles">
+              <button
+                className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
+                onClick={toggleWebSearch}
+                disabled={debateInProgress}
+                title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
+              >
+                <Globe size={15} />
+                <span>Search</span>
               </button>
-            ) : (
-              <>
-                {editMeta && (
-                  <button
-                    className="chat-btn chat-btn-cancel-edit"
-                    onClick={() => {
-                      setInput('');
-                      setAttachments([]);
-                      setEditMeta(null);
-                    }}
-                  >
-                    <X size={16} />
-                    <span>Cancel Edit</span>
-                  </button>
-                )}
+              <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
                 <button
-                  className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
-                  onClick={handleSubmit}
-                  disabled={(!input.trim() && attachments.length === 0) || orchestrating}
+                  className="chat-mode-select"
+                  onClick={() => setModeMenuOpen((open) => !open)}
+                  disabled={debateInProgress}
+                  aria-haspopup="listbox"
+                  aria-expanded={modeMenuOpen}
+                  type="button"
                 >
-                  {chatMode === 'debate' && <Swords size={16} />}
-                  {chatMode === 'direct' && <Send size={16} />}
-                  {chatMode === 'parallel' && <Layers size={16} />}
-                  <span>{submitLabelByMode[chatMode] || 'Send'}</span>
+                  <span className="chat-mode-select-icon">
+                    {modeOptions.find(option => option.id === chatMode)?.icon}
+                  </span>
+                  <span>{modeOptions.find(option => option.id === chatMode)?.label || 'Mode'}</span>
+                  <ChevronDown size={12} className="chat-mode-select-caret" />
                 </button>
-              </>
-            )}
+                {modeMenuOpen && !debateInProgress && (
+                  <div className="chat-mode-menu" role="listbox" aria-label="Chat mode">
+                    {modeOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setChatMode(option.id);
+                          setModeMenuOpen(false);
+                        }}
+                        role="option"
+                        aria-selected={chatMode === option.id}
+                        type="button"
+                      >
+                        <span className="chat-mode-option-icon">{option.icon}</span>
+                        <span>{option.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                className={`chat-toggle ${focusedMode ? 'active' : ''}`}
+                onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
+                disabled={debateInProgress}
+                title={focusedMode ? 'Shorter replies enabled' : 'Prefer shorter, sharper replies'}
+              >
+                <Zap size={15} />
+                <span>Shorter</span>
+              </button>
+              <button
+                className="chat-toggle"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={debateInProgress || processing || orchestrating}
+                title="Attach files"
+              >
+                <Paperclip size={15} />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: 'none' }}
+                onChange={e => {
+                  handleFiles(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+            <div className="chat-input-actions">
+              {debateInProgress ? (
+                <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()}>
+                  <Square size={16} />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <>
+                  {editMeta && (
+                    <button
+                      className="chat-btn chat-btn-cancel-edit"
+                      onClick={() => {
+                        setInput('');
+                        setAttachments([]);
+                        setEditMeta(null);
+                      }}
+                    >
+                      <X size={16} />
+                      <span>Cancel Edit</span>
+                    </button>
+                  )}
+                  <button
+                    className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
+                    onClick={handleSubmit}
+                    disabled={(!input.trim() && attachments.length === 0) || orchestrating}
+                  >
+                    {chatMode === 'debate' && <Swords size={16} />}
+                    {chatMode === 'direct' && <Send size={16} />}
+                    {chatMode === 'parallel' && <Layers size={16} />}
+                    <span>{submitLabelByMode[chatMode] || 'Send'}</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
       <p className="chat-input-hint">
-        Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line &middot; Drag & drop or paste files
-        {orchestrating && ' · Preparing multimodal tools...'}
+        Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line {' | '} Drag and drop or paste files
+        {orchestrating && ' | Preparing multimodal tools...'}
         {budgetEstimateLabel && (
           <>
-            {' '}· Est. turn cost <strong>{budgetEstimateLabel}</strong>
+            {' | '} Est. turn cost <strong>{budgetEstimateLabel}</strong>
           </>
         )}
       </p>

@@ -17,35 +17,37 @@ export default function DebateProgressBar({ rounds, debateMetadata }) {
 
   return (
     <div className="debate-progress-bar">
-      <div className="progress-track">
-        {rounds.map((round, i) => {
-          const isComplete = round.status === 'complete';
-          const isActive = round.status === 'streaming';
-          const isError = round.status === 'error';
-          const confidence = round.convergenceCheck?.confidence;
+      <div className="progress-track-scroll">
+        <div className="progress-track">
+          {rounds.map((round, i) => {
+            const isComplete = round.status === 'complete';
+            const isActive = round.status === 'streaming';
+            const isError = round.status === 'error';
+            const confidence = round.convergenceCheck?.confidence;
 
-          return (
-            <div key={i} className="progress-step-wrapper">
-              {i > 0 && (
-                <div className={`progress-connector ${isComplete || isActive ? 'active' : ''}`} />
-              )}
-              <div
-                className={`progress-step ${isComplete ? 'complete' : ''} ${isActive ? 'active' : ''} ${isError ? 'error' : ''}`}
-                title={`${round.label}${confidence != null ? ` - ${confidence}% confidence` : ''}`}
-              >
-                {isComplete && <CheckCircle2 size={14} />}
-                {isActive && <Loader2 size={14} className="spinning" />}
-                {!isComplete && !isActive && <Circle size={14} />}
+            return (
+              <div key={i} className="progress-step-wrapper">
+                {i > 0 && (
+                  <div className={`progress-connector ${isComplete || isActive ? 'active' : ''}`} />
+                )}
+                <div
+                  className={`progress-step ${isComplete ? 'complete' : ''} ${isActive ? 'active' : ''} ${isError ? 'error' : ''}`}
+                  title={`${round.label}${confidence != null ? ` - ${confidence}% confidence` : ''}`}
+                >
+                  {isComplete && <CheckCircle2 size={14} />}
+                  {isActive && <Loader2 size={14} className="spinning" />}
+                  {!isComplete && !isActive && <Circle size={14} />}
+                </div>
+                <span className="progress-step-label">{round.label}</span>
+                {confidence != null && (
+                  <span className={`progress-step-confidence ${getConfidenceColor(confidence)}`}>
+                    {confidence}%
+                  </span>
+                )}
               </div>
-              <span className="progress-step-label">{round.label}</span>
-              {confidence != null && (
-                <span className={`progress-step-confidence ${getConfidenceColor(confidence)}`}>
-                  {confidence}%
-                </span>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       <div className="progress-meta-row">

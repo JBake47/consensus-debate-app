@@ -71,34 +71,24 @@ function getModelStats(model) {
 
   return [
     {
-      label: 'Total Context',
+      label: 'Context',
       value: formatTokens(contextLength),
-      title: formatTokensTitle(contextLength),
+      title: `Total Context: ${formatTokensTitle(contextLength)}`,
     },
     {
-      label: 'Max Output',
+      label: 'Max',
       value: formatTokens(maxOutput),
-      title: formatTokensTitle(maxOutput),
+      title: `Max Output: ${formatTokensTitle(maxOutput)}`,
     },
     {
-      label: 'Input Price',
-      value: formatPrice(inputPrice),
-      title: formatPriceTitle(inputPrice),
+      label: 'In / Out',
+      value: `${formatPrice(inputPrice)} / ${formatPrice(outputPrice)}`,
+      title: `Input Price: ${formatPriceTitle(inputPrice)} | Output Price: ${formatPriceTitle(outputPrice)}`,
     },
     {
-      label: 'Output Price',
-      value: formatPrice(outputPrice),
-      title: formatPriceTitle(outputPrice),
-    },
-    {
-      label: 'Cache Read',
-      value: formatPrice(cacheRead),
-      title: formatPriceTitle(cacheRead),
-    },
-    {
-      label: 'Cache Write',
-      value: formatPrice(cacheWrite),
-      title: formatPriceTitle(cacheWrite),
+      label: 'Cache R / W',
+      value: `${formatPrice(cacheRead)} / ${formatPrice(cacheWrite)}`,
+      title: `Cache Read: ${formatPriceTitle(cacheRead)} | Cache Write: ${formatPriceTitle(cacheWrite)}`,
     },
   ];
 }

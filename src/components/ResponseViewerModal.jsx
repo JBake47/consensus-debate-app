@@ -11,6 +11,7 @@ export default function ResponseViewerModal({
   subtitle = '',
   content = '',
   status = 'complete',
+  children = null,
 }) {
   useEffect(() => {
     if (!open) return undefined;
@@ -33,9 +34,40 @@ export default function ResponseViewerModal({
 
   if (!open) return null;
 
+  if (children) {
+    return (
+      <div className="response-viewer-overlay" onClick={onClose}>
+        <div
+          className="response-viewer-panel-shell"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+        >
+          <button
+            className="response-viewer-floating-close"
+            onClick={onClose}
+            aria-label="Close expanded panel"
+            type="button"
+          >
+            <X size={18} />
+          </button>
+          <div className="response-viewer-panel-content">
+            {children}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="response-viewer-overlay" onClick={onClose}>
-      <div className={`response-viewer-modal glass-panel ${status}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`response-viewer-modal glass-panel ${status}`}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
         <div className="response-viewer-header">
           <div className="response-viewer-meta">
             <div className="response-viewer-title-row">

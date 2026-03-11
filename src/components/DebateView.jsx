@@ -28,8 +28,8 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const { status, content, model, error, durationMs } = webSearchResult;
 
-  return (
-    <div className={`web-search-panel glass-panel ${status}`}>
+  const panel = (
+    <div className={`web-search-panel glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}>
       <div className="web-search-header" onClick={() => status === 'complete' && setCollapsed(!collapsed)}>
         <div className="web-search-header-left">
           <Globe size={14} className="web-search-icon" />
@@ -45,7 +45,7 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
           )}
           {status === 'complete' && (
             <>
-              {content && <ExpandButton onClick={() => setViewerOpen(true)} />}
+              {!viewerOpen && content && <ExpandButton onClick={() => { setCollapsed(false); setViewerOpen(true); }} />}
               {content && <CopyButton text={content} />}
               <span className="web-search-badge complete">Done</span>
               {durationMs != null && (
@@ -78,24 +78,21 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
         </div>
       </div>
       {status === 'complete' && !collapsed && content && (
-        <div className="web-search-content markdown-content">
+        <div className="web-search-content markdown-content scroll-preview">
           <MarkdownRenderer>{content}</MarkdownRenderer>
         </div>
       )}
       {status === 'error' && error && (
         <div className="web-search-error">{error}</div>
       )}
-
-      <ResponseViewerModal
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        title="Web Search"
-        subtitle={model ? getModelDisplayName(model) : 'Search response'}
-        content={content}
-        status={status}
-      />
     </div>
   );
+
+  return viewerOpen ? (
+    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title="Web Search">
+      {panel}
+    </ResponseViewerModal>
+  ) : panel;
 }
 
 function DebateView({ turn, isLastTurn }) {

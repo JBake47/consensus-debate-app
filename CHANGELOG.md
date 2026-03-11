@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-03-11
+
+### Added
+- Fullscreen expanded panels for model cards, debate thread messages, web-search results, and synthesis output so long responses can be read without losing their native metadata, citations, and actions
+
+### Changed
+- Reworked the composer into a taller stacked layout with footer controls, clearer hint text, and mobile-friendly action placement
+- Tightened responsive spacing and wrapping across the main header, rounds, model cards, debate controls, synthesis panels, and turn layout for smaller screens
+- Condensed model picker stats into compact inline chips for context, output, and pricing metadata
+
+### Fixed
+- Long markdown content, reasoning blocks, citations, tables, images, and status pills now wrap or scroll cleanly instead of overflowing their cards
+- Debate progress steps now remain readable on narrow screens with horizontally scrollable tracking and multi-line labels
+
 ## [0.3.20] - 2026-03-11
 
 ### Added

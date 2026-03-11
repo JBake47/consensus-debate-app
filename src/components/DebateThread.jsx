@@ -60,8 +60,11 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
     }
   }, [content, status]);
 
-  return (
-    <div className={`thread-message ${status}`} style={{ '--thread-accent': color }}>
+  const message = (
+    <div
+      className={`thread-message ${status} ${viewerOpen ? 'fullscreen-panel glass-panel' : ''}`}
+      style={{ '--thread-accent': color }}
+    >
       <div className="thread-message-avatar">
         <div className="thread-avatar-dot" />
       </div>
@@ -71,7 +74,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           <span className="thread-message-model">{displayName}</span>
           <span className="thread-message-round">R{roundNumber}</span>
           {status === 'streaming' && <Loader2 size={12} className="spinning" />}
-          {(status === 'streaming' || status === 'complete') && content && (
+          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
             <ExpandButton onClick={() => setViewerOpen(true)} />
           )}
           {status === 'complete' && content && (
@@ -151,8 +154,8 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
                 <CopyButton text={reasoning} />
               )}
             </div>
-            {reasoningOpen && (
-              <div className="thread-reasoning-text markdown-content">
+        {reasoningOpen && (
+              <div className="thread-reasoning-text markdown-content scroll-preview">
                 <MarkdownRenderer>{reasoning}</MarkdownRenderer>
               </div>
             )}
@@ -167,7 +170,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
         )}
 
         {(status === 'streaming' || status === 'complete') && content && (
-          <div className="thread-message-content markdown-content" ref={contentRef}>
+          <div className="thread-message-content markdown-content scroll-preview" ref={contentRef}>
             <MarkdownRenderer>{content}</MarkdownRenderer>
             {status === 'streaming' && <span className="cursor-blink" />}
           </div>
@@ -179,17 +182,14 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           </div>
         )}
       </div>
-
-      <ResponseViewerModal
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        title={displayName}
-        subtitle={`${provider} response · Round ${roundNumber}`}
-        content={content}
-        status={status}
-      />
     </div>
   );
+
+  return viewerOpen ? (
+    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
+      {message}
+    </ResponseViewerModal>
+  ) : message;
 }
 
 function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {

@@ -166,6 +166,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
   const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
   const synthesisCitations = extractCitations(content);
+  const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
 
   useEffect(() => {
     const el = contentRef.current;
@@ -178,8 +179,8 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
     }
   }, [content, status]);
 
-  return (
-    <div className={`synthesis-view glass-panel ${status}`}>
+  const panel = (
+    <div className={`synthesis-view glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}>
       <div className="synthesis-header">
         <div className="synthesis-icon">
           <Sparkles size={16} />
@@ -189,7 +190,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
           <span className="synthesis-model">{getModelDisplayName(model)}</span>
         </div>
         <div className="synthesis-badges">
-          {(status === 'streaming' || status === 'complete') && content && (
+          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
             <ExpandButton onClick={() => setViewerOpen(true)} />
           )}
           {status === 'complete' && content && (
@@ -255,7 +256,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
         </div>
       </div>
 
-      <div className="synthesis-content" ref={contentRef}>
+      <div className={`synthesis-content ${hasContentPreview ? 'scroll-preview' : ''}`} ref={contentRef}>
         {status === 'pending' && (
           <div className="synthesis-pending">
             Waiting for debate rounds to complete...
@@ -310,17 +311,18 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
       {status === 'complete' && rounds && (
         <DebateInternals rounds={rounds} debateMetadata={debateMetadata} />
       )}
-
-      <ResponseViewerModal
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        title={ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}
-        subtitle={getModelDisplayName(model)}
-        content={content}
-        status={status}
-      />
     </div>
   );
+
+  return viewerOpen ? (
+    <ResponseViewerModal
+      open={viewerOpen}
+      onClose={() => setViewerOpen(false)}
+      title={ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}
+    >
+      {panel}
+    </ResponseViewerModal>
+  ) : panel;
 }
 
 export default memo(SynthesisView);

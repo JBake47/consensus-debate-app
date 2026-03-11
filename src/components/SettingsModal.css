@@ -1,7 +1,7 @@
 .settings-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay-backdrop);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -22,8 +22,9 @@
   max-height: 85vh;
   display: flex;
   flex-direction: column;
-  background: rgba(20, 20, 20, 0.95) !important;
+  background: var(--surface-modal) !important;
   border: 1px solid var(--border-medium) !important;
+  box-shadow: var(--shadow-lg);
   animation: modalSlide 250ms ease;
 }
 
@@ -224,14 +225,14 @@
   text-transform: capitalize;
   padding-right: var(--space-lg);
   color: var(--text-primary);
-  background: rgba(18, 18, 18, 0.95);
+  background: var(--surface-popover);
   border-color: var(--border-medium);
   appearance: none;
 }
 
 .settings-select option {
   color: var(--text-primary);
-  background: #0f0f0f;
+  background: var(--surface-popover);
 }
 
 .model-add-btn {
@@ -481,10 +482,10 @@
   flex-direction: column;
   gap: 4px;
   padding: 6px;
-  background: rgba(18, 18, 18, 0.98);
+  background: var(--surface-popover);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-lg);
 }
 
 .preset-menu-item {
@@ -643,7 +644,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-lg);
-  background: rgba(10, 10, 10, 0.55);
+  background: var(--overlay-backdrop-strong);
   backdrop-filter: blur(6px);
   border-radius: inherit;
   z-index: 4;
@@ -654,8 +655,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  background: rgba(20, 20, 20, 0.98) !important;
+  background: var(--surface-modal) !important;
   border: 1px solid var(--border-medium) !important;
+  box-shadow: var(--shadow-lg);
 }
 
 .settings-sheet-header {

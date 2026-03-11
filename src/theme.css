@@ -115,6 +115,8 @@
   /* Layout */
   --sidebar-width: 280px;
   --header-height: 56px;
+  --response-preview-height: clamp(18rem, 36vh, 28rem);
+  --reasoning-preview-height: clamp(12rem, 24vh, 18rem);
 }
 
 :root[data-theme='light'] {
@@ -255,6 +257,7 @@ body::before {
 .markdown-content {
   line-height: 1.7;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .markdown-content p {
@@ -299,6 +302,8 @@ body::before {
   width: 100%;
   border-collapse: collapse;
   margin: 0.75em 0;
+  display: block;
+  overflow-x: auto;
 }
 
 .markdown-content th, .markdown-content td {
@@ -325,6 +330,11 @@ body::before {
   border: none;
   border-top: 1px solid var(--border-subtle);
   margin: 1em 0;
+}
+
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
 }
 
 :root[data-theme='light'] .main-header {
