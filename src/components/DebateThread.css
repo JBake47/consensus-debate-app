@@ -46,11 +46,12 @@
 }
 
 .thread-message.fullscreen-panel {
-  width: 100%;
+  width: min(100%, calc(var(--chat-viewer-content-width, 960px) + 36px));
   height: 100%;
   padding: clamp(16px, 3vw, 28px);
   overflow: auto;
   animation: none;
+  margin-inline: auto;
 }
 
 .thread-message.fullscreen-panel .thread-message-header {

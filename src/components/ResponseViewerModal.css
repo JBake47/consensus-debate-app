@@ -1,18 +1,19 @@
 .response-viewer-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 220;
+  z-index: 1;
   display: flex;
   align-items: stretch;
   justify-content: stretch;
   padding: 0;
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(6px);
+  pointer-events: auto;
 }
 
 .response-viewer-modal {
-  width: 100vw;
-  height: 100dvh;
+  width: 100%;
+  height: 100%;
   max-height: none;
   display: flex;
   flex-direction: column;
@@ -29,8 +30,8 @@
 
 .response-viewer-panel-shell {
   position: relative;
-  width: 100vw;
-  height: 100dvh;
+  width: 100%;
+  height: 100%;
 }
 
 .response-viewer-panel-content {
@@ -75,6 +76,8 @@
   position: sticky;
   top: 0;
   z-index: 1;
+  width: min(100%, var(--chat-viewer-content-width, 960px));
+  margin-inline: auto;
 }
 
 .response-viewer-meta {
@@ -152,6 +155,8 @@
   padding: clamp(16px, 3vw, 32px);
   font-size: var(--text-base);
   line-height: 1.75;
+  width: min(100%, var(--chat-viewer-content-width, 960px));
+  margin-inline: auto;
 }
 
 .response-viewer-body .markdown-content {

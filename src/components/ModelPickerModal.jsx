@@ -1,97 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, X } from 'lucide-react';
 import { searchModels } from '../lib/openrouter';
+import { getModelStatRows } from '../lib/modelStats';
 import './ModelPickerModal.css';
 
 const PAGE_SIZE = 60;
-const TOKEN_FORMATTER = new Intl.NumberFormat(undefined, {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-});
-
-function toFiniteNumber(value) {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function getContextLength(model) {
-  return (
-    toFiniteNumber(model?.context_length) ??
-    toFiniteNumber(model?.top_provider?.context_length) ??
-    toFiniteNumber(model?.architecture?.context_length) ??
-    toFiniteNumber(model?.top_provider?.max_prompt_tokens)
-  );
-}
-
-function getMaxOutput(model) {
-  return (
-    toFiniteNumber(model?.top_provider?.max_completion_tokens) ??
-    toFiniteNumber(model?.max_completion_tokens) ??
-    toFiniteNumber(model?.max_output_tokens) ??
-    toFiniteNumber(model?.architecture?.max_completion_tokens)
-  );
-}
-
-function normalizePricePerMillion(rawValue) {
-  const raw = toFiniteNumber(rawValue);
-  if (raw == null) return null;
-  return raw > 0.01 ? raw : raw * 1_000_000;
-}
-
-function formatTokens(value) {
-  if (value == null) return 'N/A';
-  return TOKEN_FORMATTER.format(value);
-}
-
-function formatTokensTitle(value) {
-  if (value == null) return 'Unavailable';
-  return `${value.toLocaleString()} tokens`;
-}
-
-function formatPrice(value) {
-  if (value == null) return 'N/A';
-  if (value === 0) return '$0/M';
-  const digits = value >= 100 ? 0 : value >= 10 ? 2 : value >= 1 ? 2 : value >= 0.01 ? 3 : 4;
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: digits })}/M`;
-}
-
-function formatPriceTitle(value) {
-  if (value == null) return 'Unavailable';
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} per million tokens`;
-}
-
-function getModelStats(model) {
-  const pricing = model?.pricing || {};
-  const contextLength = getContextLength(model);
-  const maxOutput = getMaxOutput(model);
-  const inputPrice = normalizePricePerMillion(pricing.prompt ?? pricing.input ?? pricing.input_per_token ?? pricing.prompt_per_token);
-  const outputPrice = normalizePricePerMillion(pricing.completion ?? pricing.output ?? pricing.output_per_token ?? pricing.completion_per_token);
-  const cacheRead = normalizePricePerMillion(pricing.input_cache_read ?? pricing.cache_read);
-  const cacheWrite = normalizePricePerMillion(pricing.input_cache_write ?? pricing.cache_write);
-
-  return [
-    {
-      label: 'Context',
-      value: formatTokens(contextLength),
-      title: `Total Context: ${formatTokensTitle(contextLength)}`,
-    },
-    {
-      label: 'Max',
-      value: formatTokens(maxOutput),
-      title: `Max Output: ${formatTokensTitle(maxOutput)}`,
-    },
-    {
-      label: 'In / Out',
-      value: `${formatPrice(inputPrice)} / ${formatPrice(outputPrice)}`,
-      title: `Input Price: ${formatPriceTitle(inputPrice)} | Output Price: ${formatPriceTitle(outputPrice)}`,
-    },
-    {
-      label: 'Cache R / W',
-      value: `${formatPrice(cacheRead)} / ${formatPrice(cacheWrite)}`,
-      title: `Cache Read: ${formatPriceTitle(cacheRead)} | Cache Write: ${formatPriceTitle(cacheWrite)}`,
-    },
-  ];
-}
 
 export default function ModelPickerModal({ open, onClose, onAdd, provider = 'openrouter', apiKey = '' }) {
   const [query, setQuery] = useState('');
@@ -176,7 +89,9 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
           {!loading && !error && results.length > 0 && (
             <div className="model-picker-list">
               {results.map((model) => {
-                const stats = getModelStats(model);
+                const statMap = Object.fromEntries(
+                  getModelStatRows(model).map((stat) => [stat.key, stat])
+                );
                 return (
                   <div key={model.id} className="model-picker-item">
                     <div className="model-picker-info">
@@ -185,7 +100,32 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
                         {provider === 'openrouter' ? model.name || model.id : model.id}
                       </div>
                       <div className="model-picker-stats">
-                        {stats.map((stat) => (
+                        {[
+                          {
+                            key: 'contextLength',
+                            label: 'Context',
+                            value: statMap.contextLength?.value || 'N/A',
+                            title: `Total Context: ${statMap.contextLength?.detail || 'Unavailable'}`,
+                          },
+                          {
+                            key: 'maxOutput',
+                            label: 'Max',
+                            value: statMap.maxOutput?.value || 'N/A',
+                            title: `Max Output: ${statMap.maxOutput?.detail || 'Unavailable'}`,
+                          },
+                          {
+                            key: 'pricing',
+                            label: 'In / Out',
+                            value: `${statMap.inputPrice?.value || 'N/A'} / ${statMap.outputPrice?.value || 'N/A'}`,
+                            title: `Input Price: ${statMap.inputPrice?.detail || 'Unavailable'} | Output Price: ${statMap.outputPrice?.detail || 'Unavailable'}`,
+                          },
+                          {
+                            key: 'cache',
+                            label: 'Cache R / W',
+                            value: `${statMap.cacheRead?.value || 'N/A'} / ${statMap.cacheWrite?.value || 'N/A'}`,
+                            title: `Cache Read: ${statMap.cacheRead?.detail || 'Unavailable'} | Cache Write: ${statMap.cacheWrite?.detail || 'Unavailable'}`,
+                          },
+                        ].map((stat) => (
                           <div key={stat.label} className="model-picker-stat" title={stat.title}>
                             <span className="model-picker-stat-label">{stat.label}</span>
                             <span className="model-picker-stat-value">{stat.value}</span>

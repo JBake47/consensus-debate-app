@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Maximize2, Loader2 } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
@@ -34,8 +35,12 @@ export default function ResponseViewerModal({
 
   if (!open) return null;
 
+  const portalTarget = typeof document !== 'undefined'
+    ? document.getElementById('chat-window-overlay-root')
+    : null;
+
   if (children) {
-    return (
+    const modal = (
       <div className="response-viewer-overlay" onClick={onClose}>
         <div
           className="response-viewer-panel-shell"
@@ -58,9 +63,11 @@ export default function ResponseViewerModal({
         </div>
       </div>
     );
+
+    return portalTarget ? createPortal(modal, portalTarget) : modal;
   }
 
-  return (
+  const modal = (
     <div className="response-viewer-overlay" onClick={onClose}>
       <div
         className={`response-viewer-modal glass-panel ${status}`}
@@ -108,4 +115,6 @@ export default function ResponseViewerModal({
       </div>
     </div>
   );
+
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }

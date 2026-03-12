@@ -7,9 +7,17 @@ import {
   DEFAULT_CONVERGENCE_MODEL,
   DEFAULT_MAX_DEBATE_ROUNDS,
   DEFAULT_WEB_SEARCH_MODEL,
+  getModelDisplayName,
+  getProviderName,
 } from '../lib/openrouter';
 import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
 import { rankModels } from '../lib/modelRanking';
+import {
+  buildModelStatsTitle,
+  getModelStatRows,
+  getModelStatsUnavailableMessage,
+  resolveModelCatalogEntry,
+} from '../lib/modelStats';
 import { DEFAULT_THEME_MODE } from '../lib/theme';
 import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
@@ -21,6 +29,44 @@ function formatDurationCompact(ms) {
   if (ms >= 10000) return `${Math.round(ms / 1000)}s`;
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.round(ms)}ms`;
+}
+
+function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, children }) {
+  const { catalogId, model } = resolveModelCatalogEntry(modelCatalog, modelId);
+  const statRows = getModelStatRows(model);
+  const displayName = model?.name || getModelDisplayName(modelId);
+  const providerName = getProviderName(modelId);
+  const description = String(model?.description || '').trim();
+  const missingMessage = getModelStatsUnavailableMessage(modelCatalogStatus);
+  const helperText = buildModelStatsTitle({ modelId, modelCatalog, modelCatalogStatus });
+
+  return (
+    <div className="model-hover-card">
+      <div className="model-hover-trigger" tabIndex={0} aria-label={helperText}>
+        {children}
+      </div>
+      <div className="model-hover-tooltip">
+        <div className="model-hover-header">
+          <span className="model-hover-provider">{providerName}</span>
+          <strong className="model-hover-title">{displayName || modelId}</strong>
+          <code className="model-hover-id">{catalogId && catalogId !== modelId ? `${modelId} -> ${catalogId}` : modelId}</code>
+        </div>
+        {description && <p className="model-hover-description">{description}</p>}
+        {model ? (
+          <dl className="model-hover-stats">
+            {statRows.map((stat) => (
+              <div key={stat.key} className="model-hover-stat-row">
+                <dt>{stat.label}</dt>
+                <dd title={stat.detail}>{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="model-hover-empty">{missingMessage}</p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function presetMatchesDraft(preset, draft) {
@@ -255,6 +301,11 @@ export default function SettingsModal() {
   }, [modelCatalog, modelCatalogStatus]);
 
   const providerModelOptions = getProviderModelOptions(newModelProvider);
+  const getModelStatsTitle = (modelId) => buildModelStatsTitle({
+    modelId,
+    modelCatalog,
+    modelCatalogStatus,
+  });
   const rankedModels = useMemo(
     () => rankModels({
       modelCatalog,
@@ -957,7 +1008,13 @@ export default function SettingsModal() {
             <div className="model-list">
               {models.map((model, i) => (
                 <div key={i} className="model-item">
-                  <span className="model-item-name">{model}</span>
+                  <ModelStatsHoverCard
+                    modelId={model}
+                    modelCatalog={modelCatalog}
+                    modelCatalogStatus={modelCatalogStatus}
+                  >
+                    <span className="model-item-name">{model}</span>
+                  </ModelStatsHoverCard>
                   <button
                     className="model-item-remove"
                     onClick={() => removeModel(i)}
@@ -1124,6 +1181,7 @@ export default function SettingsModal() {
                 placeholder={synthProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={synth}
                 onChange={e => setSynth(e.target.value)}
+                title={getModelStatsTitle(normalizedSynthValue)}
                 list={getProviderModelOptions(synthProvider).length > 0 ? `provider-models-synth-${synthProvider}` : undefined}
               />
               <button
@@ -1164,6 +1222,7 @@ export default function SettingsModal() {
                 placeholder={convProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={convModel}
                 onChange={e => setConvModel(e.target.value)}
+                title={getModelStatsTitle(normalizedConvergenceValue)}
                 list={getProviderModelOptions(convProvider).length > 0 ? `provider-models-conv-${convProvider}` : undefined}
               />
               <button
@@ -1207,6 +1266,7 @@ export default function SettingsModal() {
                 placeholder={searchProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={searchModel}
                 onChange={e => setSearchModel(e.target.value)}
+                title={getModelStatsTitle(normalizedSearchValue)}
                 list={getProviderModelOptions(searchProvider).length > 0 ? `provider-models-search-${searchProvider}` : undefined}
               />
               <button

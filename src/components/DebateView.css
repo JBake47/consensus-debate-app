@@ -408,6 +408,11 @@
   overflow: auto;
 }
 
+.web-search-panel.fullscreen-panel > * {
+  width: min(100%, var(--chat-viewer-content-width, 960px));
+  margin-inline: auto;
+}
+
 .web-search-panel.fullscreen-panel .web-search-header {
   padding-right: 72px;
 }

@@ -323,57 +323,63 @@ function AppContent() {
           )}
         </header>
 
-        <div className="main-content" ref={scrollRef}>
-          {turns.length === 0 ? (
-            <WelcomeScreen onQuickStart={handleQuickStart} />
-          ) : (
-            <div className="turns-container">
-              {hiddenTurnCount > 0 && !showAllTurns && (
-                <div className="turn-virtualized-banner">
-                  <span>
-                    {hiddenTurnCount} older turn{hiddenTurnCount !== 1 ? 's' : ''} compacted automatically.
-                  </span>
-                  <button
-                    className="turn-virtualized-btn"
-                    onClick={() => setShowAllTurns(true)}
-                    type="button"
-                  >
-                    Show All Turns
-                  </button>
-                </div>
-              )}
-              {turnRenderPlan.items.map(({ turn, index }) => (
-                <DebateView
-                  key={turn.id || turn.timestamp || index}
-                  turn={turn}
-                  index={index}
-                  isLastTurn={index === turns.length - 1}
-                />
-              ))}
-              {showAllTurns && hiddenTurnCount > 0 && (
-                <div className="turn-virtualized-banner">
-                  <span>All turns are visible.</span>
-                  <button
-                    className="turn-virtualized-btn"
-                    onClick={jumpToLatest}
-                    type="button"
-                  >
-                    Jump to Latest
-                  </button>
-                  <button
-                    className="turn-virtualized-btn"
-                    onClick={() => setShowAllTurns(false)}
-                    type="button"
-                  >
-                    Collapse Older Turns
-                  </button>
+        <div className="chat-window-shell">
+          <div className="chat-content-shell">
+            <div className="main-content" ref={scrollRef}>
+              {turns.length === 0 ? (
+                <WelcomeScreen onQuickStart={handleQuickStart} />
+              ) : (
+                <div className="turns-container">
+                  {hiddenTurnCount > 0 && !showAllTurns && (
+                    <div className="turn-virtualized-banner">
+                      <span>
+                        {hiddenTurnCount} older turn{hiddenTurnCount !== 1 ? 's' : ''} compacted automatically.
+                      </span>
+                      <button
+                        className="turn-virtualized-btn"
+                        onClick={() => setShowAllTurns(true)}
+                        type="button"
+                      >
+                        Show All Turns
+                      </button>
+                    </div>
+                  )}
+                  {turnRenderPlan.items.map(({ turn, index }) => (
+                    <DebateView
+                      key={turn.id || turn.timestamp || index}
+                      turn={turn}
+                      index={index}
+                      isLastTurn={index === turns.length - 1}
+                    />
+                  ))}
+                  {showAllTurns && hiddenTurnCount > 0 && (
+                    <div className="turn-virtualized-banner">
+                      <span>All turns are visible.</span>
+                      <button
+                        className="turn-virtualized-btn"
+                        onClick={jumpToLatest}
+                        type="button"
+                      >
+                        Jump to Latest
+                      </button>
+                      <button
+                        className="turn-virtualized-btn"
+                        onClick={() => setShowAllTurns(false)}
+                        type="button"
+                      >
+                        Collapse Older Turns
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
 
-        <ChatInput />
+            <div id="chat-window-overlay-root" className="chat-window-overlay-root" />
+          </div>
+
+          <ChatInput />
+        </div>
       </main>
 
       {showSettings && (

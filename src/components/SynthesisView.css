@@ -16,6 +16,11 @@
   animation: none;
 }
 
+.synthesis-view.fullscreen-panel > * {
+  width: min(100%, var(--chat-viewer-content-width, 960px));
+  margin-inline: auto;
+}
+
 .synthesis-view.fullscreen-panel .synthesis-header {
   padding-right: 72px;
 }

@@ -53,6 +53,7 @@ const RESPONSE_CACHE_MAX_ENTRIES = 250;
 const METRICS_SAMPLE_LIMIT = 120;
 const CONVERSATIONS_STORAGE_KEY = 'debate_conversations';
 const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v2';
+const WEB_SEARCH_ENABLED_STORAGE_KEY = 'web_search_enabled';
 const LEGACY_RESPONSE_CACHE_STORAGE_KEYS = ['response_cache_store_v1'];
 const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
@@ -458,7 +459,7 @@ const initialState = {
   cacheEntryCount: loadedResponseCache.size,
   chatMode: loadFromStorage('chat_mode', 'debate'),
   focusedMode: loadFromStorage('focused_mode', false),
-  webSearchEnabled: false,
+  webSearchEnabled: loadFromStorage(WEB_SEARCH_ENABLED_STORAGE_KEY, true),
   modelPresets: loadFromStorage('model_presets', []),
   modelCatalog: {},
   modelCatalogStatus: 'idle',
@@ -813,6 +814,7 @@ function reducer(state, action) {
       };
     }
     case 'SET_WEB_SEARCH_ENABLED': {
+      saveToStorage(WEB_SEARCH_ENABLED_STORAGE_KEY, action.payload);
       return { ...state, webSearchEnabled: action.payload };
     }
     case 'SET_CHAT_MODE': {

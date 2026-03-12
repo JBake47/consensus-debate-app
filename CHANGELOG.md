@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Shared model-stats helpers plus Settings hover cards/tooltips so selected debate, synthesizer, convergence, and web-search models expose catalog metadata inline
+
+### Changed
+- Response viewer overlays now render inside the chat window shell, with a shared centered content width across fullscreen response, thread, model, search, and synthesis panels
+- Model picker stat rendering now reuses the shared model-stats formatting pipeline instead of maintaining a separate copy
+
+### Fixed
+- Web search now defaults to enabled for first-time sessions and persists the user's last toggle state across reloads
+
 ## [0.3.21] - 2026-03-11
 
 ### Added
