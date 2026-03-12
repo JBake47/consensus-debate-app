@@ -287,20 +287,20 @@ export default function ChatInput() {
 
   const placeholderByMode = {
     debate: 'Ask a hard question for a deeper debate...',
-    direct: 'Ask for one best answer...',
+    direct: 'Ask for one ensemble answer...',
     parallel: 'Ask to compare model answers...',
   };
 
   const modeOptions = [
-    { id: 'debate', label: 'Deep Debate', icon: <Swords size={14} /> },
-    { id: 'direct', label: 'Best Answer', icon: <MessageSquare size={14} /> },
-    { id: 'parallel', label: 'Compare', icon: <Layers size={14} /> },
+    { id: 'debate', label: 'Debate', icon: <Swords size={14} /> },
+    { id: 'direct', label: 'Ensemble', icon: <MessageSquare size={14} /> },
+    { id: 'parallel', label: 'Parallel', icon: <Layers size={14} /> },
   ];
 
   const submitLabelByMode = {
     debate: 'Run Debate',
     direct: 'Get Answer',
-    parallel: 'Compare',
+    parallel: 'Run Parallel',
   };
 
   useEffect(() => {
