@@ -9,6 +9,7 @@ import {
   formatCostWithQuality,
   getCostQualityDescription,
 } from '../lib/formatTokens';
+import { deriveRoundStatusFromStreams, getRetryScopeDescription } from '../lib/retryState';
 import './RoundSection.css';
 
 function RoundSection({
@@ -19,35 +20,44 @@ function RoundSection({
   allowRetry = true,
   allowRoundRetry = allowRetry,
   allowStreamRetry = allowRetry,
+  turnMode = 'debate',
+  totalRounds = 1,
 }) {
   const { retryRound, branchFromRound } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const [collapsed, setCollapsed] = useState(false);
   const { label, status, streams, convergenceCheck, roundNumber } = round;
+  const roundStatus = deriveRoundStatusFromStreams(streams, status);
   const roundCostMeta = computeRoundCostMeta(round);
   const roundCostLabel = formatCostWithQuality(roundCostMeta);
 
-  const hasFailedStreams = streams.some(
-    (s) => s.status === 'error' || (s.status !== 'complete' && s.status !== 'streaming') || Boolean(s.error),
-  );
-  const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (status === 'error' || status === 'complete' || hasFailedStreams);
-  const canBranch = isLastTurn && !debateInProgress && status !== 'streaming' && status !== 'pending';
+  const hasIssueStreams = roundStatus === 'warning' || roundStatus === 'error';
+  const canRetry = allowRoundRetry && isLastTurn && !debateInProgress && (roundStatus === 'warning' || roundStatus === 'error' || roundStatus === 'complete');
+  const canBranch = isLastTurn && !debateInProgress && roundStatus !== 'streaming' && roundStatus !== 'pending';
+  const retryScopeLabel = getRetryScopeDescription({
+    scope: 'round',
+    mode: turnMode,
+    roundNumber,
+    totalRounds,
+    hasFailures: hasIssueStreams,
+  });
 
   const statusIcon = {
     pending: null,
     streaming: <Loader2 size={14} className="spinning" />,
     complete: <CheckCircle2 size={14} />,
+    warning: <AlertCircle size={14} />,
     error: <AlertCircle size={14} />,
-  }[status];
+  }[roundStatus];
 
   return (
-    <div className={`round-section ${status} ${collapsed ? 'collapsed' : ''}`}>
+    <div className={`round-section ${roundStatus} ${collapsed ? 'collapsed' : ''}`}>
       <div className="round-header" onClick={() => setCollapsed(!collapsed)}>
         <div className="round-header-left">
-          <span className={`round-status-icon ${status}`}>{statusIcon}</span>
+          <span className={`round-status-icon ${roundStatus}`}>{statusIcon}</span>
           <span className="round-label">{label}</span>
           <span className="round-number">Round {roundNumber}</span>
-          {status === 'complete' && roundCostLabel && (
+          {(roundStatus === 'complete' || roundStatus === 'warning') && roundCostLabel && (
             <span
               className={`round-cost ${roundCostMeta.quality !== 'exact' ? 'uncertain' : ''}`}
               title={getCostQualityDescription(roundCostMeta.quality)}
@@ -64,16 +74,14 @@ function RoundSection({
                 e.stopPropagation();
                 retryRound(roundIndex, {
                   forceRefresh: e.shiftKey,
-                  retryErroredCompleted: hasFailedStreams,
-                  redoRound: !hasFailedStreams,
+                  retryErroredCompleted: hasIssueStreams,
+                  redoRound: !hasIssueStreams,
                 });
               }}
-              title={hasFailedStreams
-                ? 'Retry failed models and continue debate (Shift: bypass cache)'
-                : 'Redo from this round (Shift: bypass cache)'}
+              title={`${retryScopeLabel} Shift bypasses cache.`}
             >
               <RotateCcw size={13} />
-              <span>{hasFailedStreams ? 'Retry Failed' : 'Redo Round'}</span>
+              <span>{hasIssueStreams ? 'Repair Round' : 'Redo Round'}</span>
             </button>
           )}
           {canBranch && (
@@ -96,6 +104,11 @@ function RoundSection({
 
       {!collapsed && (
         <div className="round-body">
+          {canRetry && hasIssueStreams && (
+            <div className={`round-retry-scope ${roundStatus}`}>
+              {retryScopeLabel}
+            </div>
+          )}
           <div className="round-streams">
             {streams.map((stream, i) => (
               <ModelCard
@@ -105,6 +118,10 @@ function RoundSection({
                 streamIndex={i}
                 isLastTurn={isLastTurn}
                 allowRetry={allowStreamRetry}
+                turnMode={turnMode}
+                totalRounds={totalRounds}
+                roundNumber={roundNumber}
+                roundModels={streams.map((item) => item.model)}
               />
             ))}
           </div>

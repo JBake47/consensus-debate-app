@@ -26,6 +26,11 @@
   border-color: rgba(34, 197, 94, 0.15);
 }
 
+.round-section.warning {
+  border-color: rgba(245, 158, 11, 0.28);
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.08);
+}
+
 .round-section.error {
   border-color: rgba(239, 68, 68, 0.2);
 }
@@ -139,6 +144,10 @@
   color: var(--status-success);
 }
 
+.round-status-icon.warning {
+  color: #f59e0b;
+}
+
 .round-status-icon.error {
   color: var(--status-error);
 }
@@ -169,6 +178,16 @@
 
 .round-body {
   padding: 0 var(--space-md) var(--space-md);
+}
+
+.round-retry-scope {
+  padding-top: var(--space-sm);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.round-retry-scope.warning {
+  color: #fbbf24;
 }
 
 .round-streams {

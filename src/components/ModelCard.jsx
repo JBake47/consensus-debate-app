@@ -4,9 +4,12 @@ import { useDebateActions, useDebateConversations } from '../context/DebateConte
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ExpandButton from './ExpandButton';
+import ReplaceModelButton from './ReplaceModelButton';
 import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { extractCitations } from '../lib/citationInspector';
+import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
+import { getRetryScopeDescription, getStreamDisplayState } from '../lib/retryState';
 import {
   formatTokenCount,
   formatDuration,
@@ -21,7 +24,17 @@ function isReasoningModel(modelId) {
   return /\bo[13]\b/.test(id) || id.includes('deepseek-r1') || id.includes('qwq') || id.includes('reasoner');
 }
 
-function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = true }) {
+function ModelCard({
+  stream,
+  roundIndex,
+  streamIndex,
+  isLastTurn,
+  allowRetry = true,
+  turnMode = 'debate',
+  totalRounds = 1,
+  roundNumber = null,
+  roundModels = [],
+}) {
   const { retryStream } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
@@ -33,11 +46,18 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
   const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
   const reasoningRef = useRef(null);
+  const previewPointerRef = useRef(null);
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
+  const displayState = getStreamDisplayState(stream);
+  const effectiveRoundNumber = Number.isFinite(Number(roundNumber))
+    ? Number(roundNumber)
+    : roundIndex + 1;
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);
   const provider = getProviderName(model);
+  const canReplace = canRetry
+    && (displayState.tone === 'warning' || displayState.tone === 'error' || Boolean(error));
   const searchEvidenceClass = searchEvidence?.verified
     ? 'verified'
     : searchEvidence?.strictBlocked
@@ -63,12 +83,21 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
-  const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
+  const hasContentPreview = Boolean(content) && status !== 'pending';
   const hasReasoningPreview = Boolean(reasoning);
+  const canExpandViewer = !viewerOpen && Boolean(content) && status !== 'pending';
   const citations = useMemo(
     () => extractCitations(content, searchEvidence?.urls || []),
     [content, searchEvidence?.urls]
   );
+  const retryScopeTitle = getRetryScopeDescription({
+    scope: 'stream',
+    mode: turnMode,
+    roundNumber: effectiveRoundNumber,
+    totalRounds,
+    modelName: displayName,
+  });
+  const replacePickerTitle = `Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`;
 
   // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
@@ -101,16 +130,22 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
     }
   }, [status, reasoning, content]);
 
-  const statusLabel = {
-    pending: 'Waiting...',
-    streaming: 'Thinking...',
-    complete: 'Complete',
-    error: 'Failed',
-  }[status];
+  const openViewer = () => {
+    setCollapsed(false);
+    setViewerOpen(true);
+  };
+
+  const handlePreviewClick = (event) => {
+    if (!canExpandViewer || !shouldExpandPreviewFromClick(event, previewPointerRef)) {
+      return;
+    }
+
+    openViewer();
+  };
 
   const card = (
     <div
-      className={`model-card glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}
+      className={`model-card glass-panel ${status} ${displayState.tone === 'warning' ? 'warning' : ''} ${viewerOpen ? 'fullscreen-panel' : ''}`}
       style={{ '--card-accent': color }}
     >
       <div className="model-card-header" onClick={() => setCollapsed(!collapsed)}>
@@ -122,8 +157,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
           </div>
         </div>
           <div className="model-card-status-area">
-          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
-            <ExpandButton onClick={() => { setCollapsed(false); setViewerOpen(true); }} />
+          {canExpandViewer && (
+            <ExpandButton onClick={openViewer} />
           )}
           {status === 'complete' && content && (
             <CopyButton text={content} />
@@ -135,10 +170,25 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                 e.stopPropagation();
                 retryStream(roundIndex, streamIndex, { forceRefresh: e.shiftKey });
               }}
-              title="Retry this model (Shift: bypass cache)"
+              title={`${retryScopeTitle} Shift bypasses cache.`}
             >
               <RotateCcw size={13} />
             </button>
+          )}
+          {canReplace && (
+            <ReplaceModelButton
+              className="model-card-replace"
+              currentModel={model}
+              roundModels={roundModels}
+              roundIndex={roundIndex}
+              streamIndex={streamIndex}
+              roundNumber={effectiveRoundNumber}
+              totalRounds={totalRounds}
+              turnMode={turnMode}
+              title={replacePickerTitle}
+            >
+              Replace
+            </ReplaceModelButton>
           )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="model-card-stats">
@@ -174,10 +224,10 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
               Cache hit
             </span>
           )}
-          <span className={`model-card-status ${status}`}>
+          <span className={`model-card-status ${displayState.tone}`}>
             {status === 'streaming' && <Loader2 size={12} className="spinning" />}
-            {status === 'error' && <AlertCircle size={12} />}
-            {statusLabel}
+            {(displayState.tone === 'error' || displayState.tone === 'warning') && status !== 'streaming' && <AlertCircle size={12} />}
+            {displayState.label}
           </span>
           {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </div>
@@ -199,6 +249,11 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
           {routeInfo?.reason && (
             <div className={`model-card-route-meta ${routeClass}`}>
               {routeInfo.reason}
+            </div>
+          )}
+          {(error || displayState.tone === 'warning' || displayState.tone === 'error') && (
+            <div className={`model-card-retry-scope ${displayState.tone}`}>
+              {retryScopeTitle}
             </div>
           )}
           {citations.length > 0 && (
@@ -261,6 +316,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                   <div
                     className={`model-card-reasoning-content ${hasReasoningPreview ? 'scroll-preview' : ''}`}
                     ref={reasoningRef}
+                    onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+                    onClick={handlePreviewClick}
                   >
                     <div className="model-card-reasoning-text markdown-content">
                       <MarkdownRenderer>{reasoning}</MarkdownRenderer>
@@ -271,6 +328,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
               <div
                 className={`model-card-content side-by-side ${hasContentPreview ? 'scroll-preview' : ''}`}
                 ref={contentRef}
+                onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+                onClick={handlePreviewClick}
               >
                 <div className="markdown-content">
                   <MarkdownRenderer>{content}</MarkdownRenderer>
@@ -318,6 +377,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                     <div
                       className={`model-card-reasoning-content ${hasReasoningPreview ? 'scroll-preview' : ''}`}
                       ref={reasoningRef}
+                      onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+                      onClick={handlePreviewClick}
                     >
                       <div className="model-card-reasoning-text markdown-content">
                         <MarkdownRenderer>{reasoning}</MarkdownRenderer>
@@ -330,6 +391,8 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
               <div
                 className={`model-card-content ${hasContentPreview ? 'scroll-preview' : ''}`}
                 ref={contentRef}
+                onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+                onClick={handlePreviewClick}
               >
                 {status === 'pending' && (
                   <div className="model-card-pending">
@@ -339,14 +402,14 @@ function ModelCard({ stream, roundIndex, streamIndex, isLastTurn, allowRetry = t
                   </div>
                 )}
 
-                {status === 'error' && (
-                  <div className="model-card-error">
+                {error && (
+                  <div className={`model-card-error ${displayState.tone}`}>
                     <AlertCircle size={16} />
-                    <span>{error || 'An error occurred'}</span>
+                    <span>{error}</span>
                   </div>
                 )}
 
-                {(status === 'streaming' || status === 'complete') && content && (
+                {content && status !== 'pending' && (
                   <div className="markdown-content">
                     <MarkdownRenderer>{content}</MarkdownRenderer>
                     {status === 'streaming' && <span className="cursor-blink" />}

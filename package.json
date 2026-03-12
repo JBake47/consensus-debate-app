@@ -1,7 +1,7 @@
 {
   "name": "consensus",
   "private": true,
-  "version": "0.3.21",
+  "version": "0.3.22",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/retryPolicy.test.js && node src/lib/webSearch.test.js && node src/lib/conversationPersistence.test.js && node src/lib/multimodalOrchestrator.test.js && node server/searchMetadata.test.js && node server/multimodalApi.test.js"
+    "test": "node src/lib/retryPolicy.test.js && node src/lib/synthesisState.test.js && node src/lib/retryState.test.js && node src/lib/webSearch.test.js && node src/lib/conversationPersistence.test.js && node src/lib/multimodalOrchestrator.test.js && node server/searchMetadata.test.js && node server/multimodalApi.test.js"
   },
   "dependencies": {
     "docx": "^9.6.0",

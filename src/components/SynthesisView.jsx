@@ -8,6 +8,9 @@ import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { extractCitations } from '../lib/citationInspector';
+import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
+import { getSynthesisStreamingLabel } from '../lib/synthesisState';
+import { deriveRoundStatusFromStreams, getRetryScopeDescription, getStreamDisplayState } from '../lib/retryState';
 import {
   aggregateCostMetas,
   computeRoundCostMeta,
@@ -81,8 +84,9 @@ function DebateInternals({ rounds, debateMetadata }) {
 
           <div className="internals-timeline">
             {rounds.map((round, i) => {
+              const roundStatus = deriveRoundStatusFromStreams(round.streams || [], round.status || 'pending');
               const completedModels = round.streams.filter(s => s.status === 'complete' || (s.content && s.status !== 'error'));
-              const failedModels = round.streams.filter(s => s.status === 'error');
+              const failedModels = round.streams.filter(s => getStreamDisplayState(s).tone === 'error');
               const roundCostMeta = roundCostMetas[i];
               const roundCostLabel = formatCostWithQuality(roundCostMeta);
               const cc = round.convergenceCheck;
@@ -90,7 +94,7 @@ function DebateInternals({ rounds, debateMetadata }) {
               return (
                 <div key={i} className="internals-round">
                   <div className="internals-round-header">
-                    <span className={`internals-round-dot ${round.status}`} />
+                    <span className={`internals-round-dot ${roundStatus}`} />
                     <span className="internals-round-label">{round.label}</span>
                     {roundCostLabel && (
                       <span
@@ -112,8 +116,8 @@ function DebateInternals({ rounds, debateMetadata }) {
                     const streamCostLabel = formatCostWithQuality(streamCostMeta);
                     return (
                       <div key={si} className="internals-stream-row">
-                        <span className={`internals-stream-status ${stream.status}`}>
-                          {stream.status === 'complete' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                        <span className={`internals-stream-status ${getStreamDisplayState(stream).tone}`}>
+                          {getStreamDisplayState(stream).tone === 'complete' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
                         </span>
                         <span className="internals-stream-model">{getModelDisplayName(stream.model)}</span>
                         {streamCostLabel && (
@@ -163,10 +167,14 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
   const [citationsExpanded, setCitationsExpanded] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
+  const previewPointerRef = useRef(null);
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
   const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
   const synthesisCitations = extractCitations(content);
   const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
+  const canExpandViewer = !viewerOpen && Boolean(content) && (status === 'streaming' || status === 'complete');
+  const streamingLabel = getSynthesisStreamingLabel(synthesis);
+  const synthesisRetryScope = getRetryScopeDescription({ scope: 'synthesis' });
 
   useEffect(() => {
     const el = contentRef.current;
@@ -179,6 +187,14 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
     }
   }, [content, status]);
 
+  const handlePreviewClick = (event) => {
+    if (!canExpandViewer || !shouldExpandPreviewFromClick(event, previewPointerRef)) {
+      return;
+    }
+
+    setViewerOpen(true);
+  };
+
   const panel = (
     <div className={`synthesis-view glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}>
       <div className="synthesis-header">
@@ -190,7 +206,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
           <span className="synthesis-model">{getModelDisplayName(model)}</span>
         </div>
         <div className="synthesis-badges">
-          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
+          {canExpandViewer && (
             <ExpandButton onClick={() => setViewerOpen(true)} />
           )}
           {status === 'complete' && content && (
@@ -200,7 +216,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
             <button
               className="synthesis-retry-btn"
               onClick={(e) => retrySynthesis({ forceRefresh: e.shiftKey })}
-              title="Retry synthesis (Shift: bypass cache)"
+              title={`${synthesisRetryScope} Shift bypasses cache.`}
             >
               <RotateCcw size={13} />
             </button>
@@ -229,7 +245,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
           {status === 'streaming' && (
             <div className="synthesis-streaming-badge">
               <Loader2 size={12} className="spinning" />
-              Synthesizing...
+              {streamingLabel}
             </div>
           )}
           {status === 'complete' && (synthesis.usage || synthesis.durationMs) && (
@@ -256,7 +272,18 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
         </div>
       </div>
 
-      <div className={`synthesis-content ${hasContentPreview ? 'scroll-preview' : ''}`} ref={contentRef}>
+      {canRetry && (
+        <div className="synthesis-retry-scope">
+          {synthesisRetryScope}
+        </div>
+      )}
+
+      <div
+        className={`synthesis-content ${hasContentPreview ? 'scroll-preview' : ''}`}
+        ref={contentRef}
+        onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+        onClick={handlePreviewClick}
+      >
         {status === 'pending' && (
           <div className="synthesis-pending">
             Waiting for debate rounds to complete...

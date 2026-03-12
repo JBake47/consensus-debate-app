@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -6,6 +6,7 @@ import CopyButton from './CopyButton';
 import ExpandButton from './ExpandButton';
 import { formatFileSize } from '../lib/formatFileSize';
 import ModelCard from './ModelCard';
+import ReplaceModelButton from './ReplaceModelButton';
 import RoundSection from './RoundSection';
 import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
@@ -15,6 +16,13 @@ import AttachmentViewer from './AttachmentViewer';
 import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
+import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
+import {
+  deriveRoundStatusFromStreams,
+  getRetryScopeDescription,
+  getStreamDisplayState,
+  isRoundAttentionRequired,
+} from '../lib/retryState';
 import {
   computeTurnCostMeta,
   formatCostWithQuality,
@@ -26,7 +34,22 @@ import './DebateView.css';
 function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
   const [collapsed, setCollapsed] = useState(true);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const previewPointerRef = useRef(null);
   const { status, content, model, error, durationMs } = webSearchResult;
+  const canExpandViewer = !viewerOpen && Boolean(content) && status === 'complete';
+
+  const openViewer = () => {
+    setCollapsed(false);
+    setViewerOpen(true);
+  };
+
+  const handlePreviewClick = (event) => {
+    if (!canExpandViewer || !shouldExpandPreviewFromClick(event, previewPointerRef)) {
+      return;
+    }
+
+    openViewer();
+  };
 
   const panel = (
     <div className={`web-search-panel glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}>
@@ -45,7 +68,7 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
           )}
           {status === 'complete' && (
             <>
-              {!viewerOpen && content && <ExpandButton onClick={() => { setCollapsed(false); setViewerOpen(true); }} />}
+              {canExpandViewer && <ExpandButton onClick={openViewer} />}
               {content && <CopyButton text={content} />}
               <span className="web-search-badge complete">Done</span>
               {durationMs != null && (
@@ -67,7 +90,7 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
                     e.stopPropagation();
                     onRetry?.({ forceRefresh: e.shiftKey });
                   }}
-                  title="Retry web search and redo from round 1 (Shift: bypass cache)"
+                  title={`${getRetryScopeDescription({ scope: 'web_search' })} Shift bypasses cache.`}
                 >
                   <RotateCcw size={12} />
                   <span>Retry</span>
@@ -78,7 +101,11 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
         </div>
       </div>
       {status === 'complete' && !collapsed && content && (
-        <div className="web-search-content markdown-content scroll-preview">
+        <div
+          className="web-search-content markdown-content scroll-preview"
+          onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+          onClick={handlePreviewClick}
+        >
           <MarkdownRenderer>{content}</MarkdownRenderer>
         </div>
       )}
@@ -122,6 +149,11 @@ function DebateView({ turn, isLastTurn }) {
   const turnCostMeta = computeTurnCostMeta(turn);
   const turnCostLabel = formatCostWithQuality(turnCostMeta);
   const keepLatestRounds = Math.max(2, Number(streamVirtualizationKeepLatest) || 4);
+  const attentionRoundIndices = Array.isArray(turn.rounds)
+    ? turn.rounds
+      .map((round, index) => (isRoundAttentionRequired(round) ? index : null))
+      .filter((value) => value != null)
+    : [];
 
   const roundRenderPlan = (() => {
     const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
@@ -133,39 +165,58 @@ function DebateView({ turn, isLastTurn }) {
     ) {
       return {
         hiddenCount: 0,
+        attentionHiddenCount: 0,
         items: rounds.map((round, roundIndex) => ({ round, roundIndex })),
       };
     }
-    const first = { round: rounds[0], roundIndex: 0 };
-    const tail = rounds
-      .slice(-keepLatestRounds)
-      .map((round, offset) => ({
-        round,
-        roundIndex: rounds.length - keepLatestRounds + offset,
-      }));
+    const visibleIndices = new Set([0]);
+    const tailStart = Math.max(0, rounds.length - keepLatestRounds);
+    for (let index = tailStart; index < rounds.length; index += 1) {
+      visibleIndices.add(index);
+    }
+    for (const index of attentionRoundIndices) {
+      visibleIndices.add(index);
+    }
+    const sortedIndices = Array.from(visibleIndices).sort((a, b) => a - b);
     return {
-      hiddenCount: Math.max(0, rounds.length - (1 + tail.length)),
-      items: [first, ...tail],
+      hiddenCount: Math.max(0, rounds.length - sortedIndices.length),
+      attentionHiddenCount: attentionRoundIndices.filter((index) => !visibleIndices.has(index)).length,
+      items: sortedIndices.map((roundIndex) => ({ round: rounds[roundIndex], roundIndex })),
     };
   })();
 
   const hiddenRoundCount = roundRenderPlan.hiddenCount;
+  const pinnedAttentionCount = attentionRoundIndices.filter((index) =>
+    !showAllRounds
+    && roundRenderPlan.items.some((item) => item.roundIndex === index)
+    && index !== 0
+    && index < Math.max(0, turn.rounds.length - keepLatestRounds)
+  ).length;
 
   useEffect(() => {
     setShowAllRounds(false);
   }, [turn.id, turn.timestamp, turn.rounds?.length]);
 
-  const failedStreams = hasRounds
+  const attentionStreams = hasRounds
     ? turn.rounds.flatMap((round, roundIndex) =>
       (round.streams || [])
-        .filter(stream => stream.status === 'error' || stream.error)
-        .map((stream, streamIndex) => ({
-          roundIndex,
-          streamIndex,
-          model: stream.model,
-          error: stream.error || 'Unknown error',
-          routeInfo: stream.routeInfo || null,
-        }))
+        .map((stream, streamIndex) => {
+          const displayState = getStreamDisplayState(stream);
+          if (displayState.tone !== 'warning' && displayState.tone !== 'error') {
+            return null;
+          }
+          return {
+            roundIndex,
+            streamIndex,
+            model: stream.model,
+            error: stream.error || displayState.label,
+            routeInfo: stream.routeInfo || null,
+            displayState,
+            roundNumber: round.roundNumber || roundIndex + 1,
+            roundModels: (round.streams || []).map((item) => item.model),
+          };
+        })
+        .filter(Boolean)
     )
     : [];
 
@@ -177,6 +228,18 @@ function DebateView({ turn, isLastTurn }) {
       return {
         summary,
         action: 'Check provider routing, model IDs, or API keys, then retry.',
+      };
+    }
+    if (lowered.includes('strict web-search mode blocked')) {
+      return {
+        summary,
+        action: 'Either retry with stronger evidence or disable strict web-search for this turn.',
+      };
+    }
+    if (lowered.includes('cancelled') || lowered.includes('canceled')) {
+      return {
+        summary,
+        action: 'The run was cancelled. Retry to resume from this round.',
       };
     }
     if (lowered.includes('401') || lowered.includes('unauthorized') || lowered.includes('invalid key')) {
@@ -291,18 +354,18 @@ function DebateView({ turn, isLastTurn }) {
         />
       )}
 
-      {failedStreams.length > 0 && (
+      {attentionStreams.length > 0 && (
         <div className="turn-error-panel glass-panel">
           <div className="turn-error-header">
-            <div className="turn-error-title">Some models failed</div>
+            <div className="turn-error-title">Attention needed</div>
             {canRetryFailures && (
               <button
                 className="turn-error-retry-all-btn"
                 onClick={(e) => retryAllFailed({ forceRefresh: e.shiftKey })}
-                title="Retry all failed responses from the earliest failed round (Shift: bypass cache)"
+                title="Repair the earliest warning or failed round and rebuild forward. Shift bypasses cache."
               >
                 <RotateCcw size={12} />
-                <span>Retry All Failed</span>
+                <span>Repair Earliest Round</span>
               </button>
             )}
           </div>
@@ -310,31 +373,57 @@ function DebateView({ turn, isLastTurn }) {
             <div className="turn-error-hint">Tip: hold Shift while retrying to bypass cache.</div>
           )}
           <div className="turn-error-list">
-            {failedStreams.map((failure, idx) => {
+            {attentionStreams.map((failure, idx) => {
               const diagnostics = getErrorDiagnostics(failure.error);
+              const retryScope = getRetryScopeDescription({
+                scope: 'stream',
+                mode: turn.mode || 'debate',
+                roundNumber: failure.roundNumber,
+                totalRounds: turn.rounds.length,
+                modelName: getModelDisplayName(failure.model),
+              });
               return (
                 <div key={`${failure.model}-${idx}`} className="turn-error-item">
                   <div className="turn-error-row">
                     <span className="turn-error-model">{getModelDisplayName(failure.model)}</span>
-                    {canRetryFailures && (
-                      <button
-                        className="turn-error-retry-btn"
-                        onClick={(e) => retryStream(
-                          failure.roundIndex,
-                          failure.streamIndex,
-                          { forceRefresh: e.shiftKey },
-                        )}
-                        title="Retry this model and rerun from this round (Shift: bypass cache)"
-                      >
-                        <RotateCcw size={12} />
-                        <span>Retry</span>
-                      </button>
-                    )}
+                    <div className="turn-error-actions">
+                      {canRetryFailures && (
+                        <button
+                          className="turn-error-retry-btn"
+                          onClick={(e) => retryStream(
+                            failure.roundIndex,
+                            failure.streamIndex,
+                            { forceRefresh: e.shiftKey },
+                          )}
+                          title={`${retryScope} Shift bypasses cache.`}
+                        >
+                          <RotateCcw size={12} />
+                          <span>Retry</span>
+                        </button>
+                      )}
+                      {canRetryFailures && (
+                        <ReplaceModelButton
+                          className="turn-error-retry-btn secondary"
+                          currentModel={failure.model}
+                          roundModels={failure.roundModels}
+                          roundIndex={failure.roundIndex}
+                          streamIndex={failure.streamIndex}
+                          roundNumber={failure.roundNumber}
+                          totalRounds={turn.rounds.length}
+                          turnMode={turn.mode || 'debate'}
+                          title={`Choose a replacement model for ${getModelDisplayName(failure.model)}. Shift starts with cache bypass enabled.`}
+                        >
+                          <span>Replace</span>
+                        </ReplaceModelButton>
+                      )}
+                    </div>
                   </div>
+                  <span className={`turn-error-state ${failure.displayState.tone}`}>{failure.displayState.label}</span>
                   <span className="turn-error-message">{diagnostics.summary}</span>
                   {diagnostics.action && (
                     <span className="turn-error-action">{diagnostics.action}</span>
                   )}
+                  <span className="turn-error-scope">{retryScope}</span>
                   {failure.routeInfo?.routed && (
                     <span className="turn-error-route">
                       Routed to {getModelDisplayName(failure.routeInfo.fallbackModel || failure.model)}.
@@ -359,6 +448,8 @@ function DebateView({ turn, isLastTurn }) {
             isLatest
             roundIndex={0}
             isLastTurn={isLastTurn}
+            turnMode={turn.mode || 'direct'}
+            totalRounds={turn.rounds.length}
           />
 
           {turn.synthesis && turn.synthesis.status !== 'pending' && (
@@ -395,6 +486,10 @@ function DebateView({ turn, isLastTurn }) {
                 streamIndex={0}
                 isLastTurn={isLastTurn}
                 allowRetry
+                turnMode={turn.mode || 'direct'}
+                totalRounds={turn.rounds.length}
+                roundNumber={1}
+                roundModels={(turn.rounds[0].streams || []).map((item) => item.model)}
               />
             )}
           </div>
@@ -444,6 +539,7 @@ function DebateView({ turn, isLastTurn }) {
                 <div className="debate-virtualized-banner">
                   <span>
                     {hiddenRoundCount} older round{hiddenRoundCount !== 1 ? 's' : ''} compacted automatically.
+                    {pinnedAttentionCount > 0 && ` ${pinnedAttentionCount} kept visible because they need attention.`}
                   </span>
                   <button
                     className="debate-virtualized-btn"
@@ -464,6 +560,8 @@ function DebateView({ turn, isLastTurn }) {
                   allowRetry
                   allowRoundRetry={!isParallelMode}
                   allowStreamRetry
+                  turnMode={turn.mode || 'debate'}
+                  totalRounds={turn.rounds.length}
                 />
               ))}
               {showAllRounds && hiddenRoundCount > 0 && (
@@ -480,7 +578,13 @@ function DebateView({ turn, isLastTurn }) {
               )}
             </div>
           ) : (
-            <DebateThread rounds={turn.rounds} isLastTurn={isLastTurn} allowRetry />
+            <DebateThread
+              rounds={turn.rounds}
+              isLastTurn={isLastTurn}
+              allowRetry
+              turnMode={turn.mode || 'debate'}
+              totalRounds={turn.rounds.length}
+            />
           )}
         </>
       )}

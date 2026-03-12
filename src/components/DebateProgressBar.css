@@ -79,6 +79,12 @@
   color: var(--status-error);
 }
 
+.progress-step.warning {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
 .progress-step-label {
   display: block;
   font-size: 10px;

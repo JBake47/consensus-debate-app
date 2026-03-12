@@ -136,8 +136,13 @@
   opacity: 0;
 }
 
+.thread-message-header .thread-message-replace {
+  opacity: 0;
+}
+
 .thread-message:hover .thread-message-header .copy-btn,
-.thread-message:hover .thread-message-header .thread-message-retry {
+.thread-message:hover .thread-message-header .thread-message-retry,
+.thread-message:hover .thread-message-header .thread-message-replace {
   opacity: 1;
 }
 
@@ -160,10 +165,61 @@
   background: rgba(255, 255, 255, 0.08);
 }
 
+.thread-message-replace {
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.thread-message-replace:hover {
+  background: rgba(245, 158, 11, 0.18);
+}
+
 .thread-message-stats {
   font-size: 11px;
   color: var(--text-muted);
   margin-left: auto;
+}
+
+.thread-message-status {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.thread-message-status.warning {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.thread-message-retry-scope {
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.thread-message-retry-scope.warning {
+  color: #f59e0b;
+}
+
+.thread-message-retry-scope.error {
+  color: var(--status-error);
+}
+
+.thread-message-status.error {
+  color: var(--status-error);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.thread-message-status.complete {
+  color: var(--status-success);
 }
 
 .thread-search-pill {
@@ -289,6 +345,10 @@
   font-size: var(--text-sm);
   color: var(--status-error);
   padding: var(--space-xs) 0;
+}
+
+.thread-message-error.warning {
+  color: #fbbf24;
 }
 
 .thread-message-pending {

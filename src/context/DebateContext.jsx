@@ -34,6 +34,7 @@ import {
   isTransientRetryableError,
   getRetryDelayMs,
 } from '../lib/retryPolicy';
+import { buildResetSynthesisState } from '../lib/synthesisState';
 import {
   buildSearchEvidence,
   canUseNativeWebSearch,
@@ -42,6 +43,11 @@ import {
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
+import {
+  createRunId,
+  deriveRoundStatusFromStreams,
+  selectReplacementModel,
+} from '../lib/retryState';
 
 const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
@@ -276,6 +282,7 @@ function recoverInterruptedTurnState(turn) {
       ...turn.synthesis,
       status: 'error',
       error: turn.synthesis.error || STALE_RUN_ERROR_MESSAGE,
+      retryProgress: null,
     };
     changed = true;
   }
@@ -297,10 +304,14 @@ function recoverInterruptedTurnState(turn) {
           if (!stream || typeof stream !== 'object') return stream;
           if (!isLiveStatus(stream.status)) return stream;
           streamChanged = true;
+          const hasContent = typeof stream.content === 'string' && stream.content.trim().length > 0;
           return {
             ...stream,
-            status: 'error',
+            status: hasContent ? 'complete' : 'error',
             error: stream.error || STALE_RUN_ERROR_MESSAGE,
+            errorKind: stream.errorKind || 'failed',
+            outcome: hasContent ? 'using_previous_response' : (stream.outcome || null),
+            retryProgress: null,
           };
         });
         if (streamChanged) {
@@ -476,15 +487,93 @@ const initialState = {
   editingTurn: null,
 };
 
-function updateLastTurn(conversations, conversationId, updater) {
-  return conversations.map(c => {
+function updateLastTurn(conversations, conversationId, updater, options = {}) {
+  const { turnId = null, runId = null } = options || {};
+  let changed = false;
+
+  const nextConversations = conversations.map(c => {
     if (c.id !== conversationId) return c;
-    const turns = [...c.turns];
+    const turns = Array.isArray(c.turns) ? [...c.turns] : [];
+    if (turns.length === 0) return c;
+
     const lastTurn = { ...turns[turns.length - 1] };
+    if (turnId && lastTurn.id !== turnId) return c;
+    if (runId && lastTurn.activeRunId !== runId) return c;
+
     updater(lastTurn);
     turns[turns.length - 1] = lastTurn;
-    return { ...c, turns };
+    changed = true;
+    return { ...c, turns, updatedAt: Date.now() };
   });
+
+  return changed ? nextConversations : conversations;
+}
+
+function buildScopedTurnPayload({ conversationId, turnId, runId, ...payload }) {
+  return {
+    conversationId,
+    turnId,
+    runId,
+    ...payload,
+  };
+}
+
+function getFailureCount(stream) {
+  const parsed = Number(stream?.failureCount);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+}
+
+function buildStreamRefreshState(previousStream, model, options = {}) {
+  const previous = previousStream && typeof previousStream === 'object'
+    ? previousStream
+    : null;
+  const preserveContent = Boolean(options.preserveContent);
+  const previousContent = typeof previous?.content === 'string' ? previous.content : '';
+  const keepPreviousContent = preserveContent && previousContent.trim().length > 0;
+
+  return {
+    model: model || previous?.model || '',
+    content: keepPreviousContent ? previousContent : '',
+    status: 'streaming',
+    error: null,
+    errorKind: null,
+    outcome: keepPreviousContent ? (previous?.outcome || 'success') : null,
+    usage: keepPreviousContent ? (previous?.usage ?? null) : null,
+    durationMs: keepPreviousContent ? (previous?.durationMs ?? null) : null,
+    reasoning: keepPreviousContent ? (previous?.reasoning ?? null) : null,
+    searchEvidence: keepPreviousContent ? (previous?.searchEvidence ?? null) : null,
+    routeInfo: options.routeInfo ?? previous?.routeInfo ?? null,
+    cacheHit: false,
+    completedAt: keepPreviousContent ? (previous?.completedAt ?? null) : null,
+    retryProgress: null,
+  };
+}
+
+function buildPreviousResponseFallback(previousStream, options = {}) {
+  const previous = previousStream && typeof previousStream === 'object'
+    ? previousStream
+    : null;
+  const previousContent = typeof previous?.content === 'string' ? previous.content : '';
+  if (previousContent.trim().length === 0) {
+    return null;
+  }
+
+  return {
+    model: options.model || previous?.model || '',
+    content: previousContent,
+    status: 'complete',
+    error: options.error || 'Retry failed - showing previous response.',
+    errorKind: options.errorKind || 'failed',
+    outcome: 'using_previous_response',
+    usage: previous?.usage ?? options.usage ?? null,
+    durationMs: previous?.durationMs ?? options.durationMs ?? null,
+    reasoning: previous?.reasoning ?? options.reasoning ?? null,
+    searchEvidence: previous?.searchEvidence ?? options.searchEvidence ?? null,
+    routeInfo: options.routeInfo ?? previous?.routeInfo ?? null,
+    cacheHit: Boolean(previous?.cacheHit),
+    completedAt: previous?.completedAt ?? null,
+    retryProgress: null,
+  };
 }
 
 function toSynthesisStream(stream) {
@@ -826,11 +915,11 @@ function reducer(state, action) {
       return { ...state, focusedMode: action.payload };
     }
     case 'SET_WEB_SEARCH_RESULT': {
-      const { conversationId, result } = action.payload;
+      const { conversationId, turnId, runId, result } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.webSearchResult = result;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_MODEL_CATALOG': {
       return { ...state, modelCatalog: action.payload };
@@ -885,78 +974,115 @@ function reducer(state, action) {
       );
       return { ...state, conversations };
     }
+    case 'SET_TURN_RUN_STATE': {
+      const { conversationId, turnId, runId } = action.payload || {};
+      if (!conversationId || !turnId || !runId) {
+        return state;
+      }
+      const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
+        lastTurn.activeRunId = runId;
+      }, { turnId });
+      return conversations === state.conversations ? state : { ...state, conversations };
+    }
     case 'ADD_ROUND': {
-      const { conversationId, round } = action.payload;
+      const { conversationId, turnId, runId, round } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = [...(lastTurn.rounds || []), round];
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'UPDATE_ROUND_STREAM': {
       const {
         conversationId,
+        turnId,
+        runId,
         roundIndex,
         streamIndex,
+        model,
         content,
         status,
         error,
+        errorKind,
+        outcome,
         usage,
         durationMs,
+        completedAt,
         reasoning,
         searchEvidence,
         routeInfo,
+        retryProgress,
+        failureCount,
         cacheHit,
       } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         const rounds = [...lastTurn.rounds];
         const round = { ...rounds[roundIndex] };
         const streams = [...round.streams];
-        const updates = { ...streams[streamIndex], status, error };
+        const previousStream = streams[streamIndex] || {};
+        const updates = { ...previousStream, status, error };
+        if (model !== undefined) updates.model = model;
         if (content !== undefined) updates.content = content;
+        if (errorKind !== undefined) updates.errorKind = errorKind;
+        if (outcome !== undefined) updates.outcome = outcome;
         if (usage !== undefined) updates.usage = usage;
         if (durationMs !== undefined) updates.durationMs = durationMs;
+        if (completedAt !== undefined) updates.completedAt = completedAt;
         if (reasoning !== undefined) updates.reasoning = reasoning;
         if (searchEvidence !== undefined) updates.searchEvidence = searchEvidence;
         if (routeInfo !== undefined) updates.routeInfo = routeInfo;
+        if (retryProgress !== undefined) updates.retryProgress = retryProgress;
         if (cacheHit !== undefined) updates.cacheHit = cacheHit;
+        if (failureCount !== undefined) {
+          updates.failureCount = failureCount;
+        } else if (status !== 'streaming' && status !== 'pending' && error) {
+          updates.failureCount = getFailureCount(previousStream) + 1;
+        }
+        if (status === 'complete' && completedAt === undefined && !error) {
+          updates.completedAt = Date.now();
+        }
         streams[streamIndex] = updates;
         round.streams = streams;
+        round.status = deriveRoundStatusFromStreams(streams, round.status);
         rounds[roundIndex] = round;
         lastTurn.rounds = rounds;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'UPDATE_ROUND_STATUS': {
-      const { conversationId, roundIndex, status } = action.payload;
+      const { conversationId, turnId, runId, roundIndex, status } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         const rounds = [...lastTurn.rounds];
-        rounds[roundIndex] = { ...rounds[roundIndex], status };
+        const round = { ...rounds[roundIndex] };
+        round.status = status === 'complete' || status === 'error'
+          ? deriveRoundStatusFromStreams(round.streams || [], status)
+          : status;
+        rounds[roundIndex] = round;
         lastTurn.rounds = rounds;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_CONVERGENCE': {
-      const { conversationId, roundIndex, convergenceCheck } = action.payload;
+      const { conversationId, turnId, runId, roundIndex, convergenceCheck } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         const rounds = [...lastTurn.rounds];
         rounds[roundIndex] = { ...rounds[roundIndex], convergenceCheck };
         lastTurn.rounds = rounds;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_DEBATE_METADATA': {
-      const { conversationId, metadata } = action.payload;
+      const { conversationId, turnId, runId, metadata } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.debateMetadata = metadata;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_ENSEMBLE_RESULT': {
-      const { conversationId, ensembleResult } = action.payload;
+      const { conversationId, turnId, runId, ensembleResult } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.ensembleResult = ensembleResult;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_RUNNING_SUMMARY': {
       const { conversationId, summary } = action.payload;
@@ -966,15 +1092,31 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'UPDATE_SYNTHESIS': {
-      const { conversationId, content, status, error, model, usage, durationMs } = action.payload;
+      const {
+        conversationId,
+        turnId,
+        runId,
+        content,
+        status,
+        error,
+        model,
+        usage,
+        durationMs,
+        retryProgress,
+      } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
-        const completedAt = status === 'complete' ? Date.now() : (lastTurn.synthesis?.completedAt || null);
+        const completedAt = status === 'complete'
+          ? Date.now()
+          : (action.payload.completedAt !== undefined
+            ? action.payload.completedAt
+            : (lastTurn.synthesis?.completedAt || null));
         const synth = { model, content, status, error, completedAt };
         if (usage !== undefined) synth.usage = usage;
         if (durationMs !== undefined) synth.durationMs = durationMs;
+        if (retryProgress !== undefined) synth.retryProgress = retryProgress;
         lastTurn.synthesis = synth;
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_CONVERSATION_TITLE': {
       const { conversationId, title, source, requestedAt } = action.payload || {};
@@ -1156,18 +1298,18 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'TRUNCATE_ROUNDS': {
-      const { conversationId, keepCount } = action.payload;
+      const { conversationId, turnId, runId, keepCount } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = lastTurn.rounds.slice(0, keepCount);
-      });
-      return { ...state, conversations };
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'RESET_SYNTHESIS': {
-      const { conversationId, model } = action.payload;
+      const { conversationId, turnId, runId, model, preserveContent = false } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
-        lastTurn.synthesis = { model, content: '', status: 'pending', error: null };
-      });
-      return { ...state, conversations };
+        lastTurn.synthesis = buildResetSynthesisState(lastTurn.synthesis, model, { preserveContent });
+      }, { turnId, runId });
+      return conversations === state.conversations ? state : { ...state, conversations };
     }
     default:
       return state;
@@ -1185,6 +1327,15 @@ export function DebateProvider({ children }) {
     cacheHitCount: state.cacheHitCount,
     cacheEntryCount: state.cacheEntryCount,
   });
+  const dispatchTurnScoped = useCallback((scope, type, payload = {}) => {
+    dispatch({
+      type,
+      payload: buildScopedTurnPayload({
+        ...(scope || {}),
+        ...(payload || {}),
+      }),
+    });
+  }, [dispatch]);
 
   useEffect(() => {
     applyThemeMode(state.themeMode);
@@ -1773,9 +1924,17 @@ export function DebateProvider({ children }) {
     };
   }, [supportsNativeWebSearchForModel]);
 
-  const enforceStrictSearchEvidence = ({ results, convId, roundIndex, strictMode = false }) => {
+  const enforceStrictSearchEvidence = ({
+    results,
+    convId,
+    turnId,
+    runId,
+    roundIndex,
+    strictMode = false,
+  }) => {
     if (!strictMode || !Array.isArray(results)) return results;
 
+    const turnScope = { conversationId: convId, turnId, runId };
     return results.map((result) => {
       if (!result || result.error || !result.content) return result;
       if (result.searchEvidence?.verified) return result;
@@ -1791,23 +1950,23 @@ export function DebateProvider({ children }) {
         strictError: message,
       };
 
-      dispatch({
-        type: 'UPDATE_ROUND_STREAM',
-        payload: {
-          conversationId: convId,
-          roundIndex,
-          streamIndex: result.index,
-          content: '',
-          status: 'error',
-          error: message,
-          searchEvidence: blockedEvidence,
-        },
+      dispatchTurnScoped(turnScope, 'UPDATE_ROUND_STREAM', {
+        roundIndex,
+        streamIndex: result.index,
+        content: '',
+        status: 'error',
+        error: message,
+        errorKind: 'strict_blocked',
+        outcome: null,
+        retryProgress: null,
+        searchEvidence: blockedEvidence,
       });
 
       return {
         ...result,
         content: '',
         error: message,
+        errorKind: 'strict_blocked',
         searchEvidence: blockedEvidence,
       };
     });
@@ -1932,6 +2091,8 @@ export function DebateProvider({ children }) {
 
   const runLegacyWebSearch = async ({
     convId,
+    turnId,
+    runId,
     userPrompt,
     attachments,
     videoUrls = [],
@@ -1939,12 +2100,9 @@ export function DebateProvider({ children }) {
     apiKey,
     signal,
   }) => {
-    dispatch({
-      type: 'SET_WEB_SEARCH_RESULT',
-      payload: {
-        conversationId: convId,
-        result: { status: 'searching', content: '', model: webSearchModel, error: null, usage: null, durationMs: null },
-      },
+    const turnScope = { conversationId: convId, turnId, runId };
+    dispatchTurnScoped(turnScope, 'SET_WEB_SEARCH_RESULT', {
+      result: { status: 'searching', content: '', model: webSearchModel, error: null, usage: null, durationMs: null },
     });
 
     try {
@@ -1962,22 +2120,14 @@ export function DebateProvider({ children }) {
         signal,
       });
 
-      dispatch({
-        type: 'SET_WEB_SEARCH_RESULT',
-        payload: {
-          conversationId: convId,
-          result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, usage: searchUsage, durationMs: searchDurationMs },
-        },
+      dispatchTurnScoped(turnScope, 'SET_WEB_SEARCH_RESULT', {
+        result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, usage: searchUsage, durationMs: searchDurationMs },
       });
       return searchContent;
     } catch (err) {
       if (signal?.aborted) throw err;
-      dispatch({
-        type: 'SET_WEB_SEARCH_RESULT',
-        payload: {
-          conversationId: convId,
-          result: { status: 'error', content: '', model: webSearchModel, error: err.message, usage: null, durationMs: null },
-        },
+      dispatchTurnScoped(turnScope, 'SET_WEB_SEARCH_RESULT', {
+        result: { status: 'error', content: '', model: webSearchModel, error: err.message, usage: null, durationMs: null },
       });
       return '';
     }
@@ -1990,6 +2140,7 @@ export function DebateProvider({ children }) {
     signal,
     onChunk,
     onReasoning,
+    onRetryProgress,
     nativeWebSearch = false,
     forceRefresh = false,
     cacheable = true,
@@ -2035,6 +2186,7 @@ export function DebateProvider({ children }) {
       }
 
       if (result) {
+        onRetryProgress?.(null);
         markProviderSuccess(providerId);
         const usedTokens = Number(result?.usage?.totalTokens);
         updateMetrics((prev) => ({
@@ -2054,16 +2206,25 @@ export function DebateProvider({ children }) {
       markProviderFailure(providerId, err);
       const shouldRetry = attempt < retryPolicy.maxAttempts && isTransientRetryableError(err, isAbortLikeError);
       if (!shouldRetry) {
+        onRetryProgress?.(null);
         addFailureByProvider(providerId);
         updateMetrics((prev) => ({ ...prev, failureCount: prev.failureCount + 1 }));
         throw err;
       }
       updateMetrics((prev) => ({ ...prev, retryAttempts: prev.retryAttempts + 1 }));
       const delayMs = getRetryDelayMs(attempt, retryPolicy);
+      onRetryProgress?.({
+        active: true,
+        attempt: attempt + 1,
+        maxAttempts: retryPolicy.maxAttempts,
+        delayMs,
+        error: err.message || 'Request failed',
+      });
       await waitForRetryDelay(delayMs, signal);
     }
 
     const terminalError = lastError || new Error('Request failed');
+    onRetryProgress?.(null);
     addFailureByProvider(providerId);
     updateMetrics((prev) => ({ ...prev, failureCount: prev.failureCount + 1 }));
     throw terminalError;
@@ -2074,6 +2235,8 @@ export function DebateProvider({ children }) {
     messages,
     messagesPerModel,
     convId,
+    turnId,
+    runId,
     roundIndex,
     apiKey,
     signal,
@@ -2082,6 +2245,8 @@ export function DebateProvider({ children }) {
     forceRefresh = false,
     onModelSuccess = null,
   }) => {
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
     const streamResults = await Promise.allSettled(
       models.map(async (model, index) => {
         const route = resolveModelRoute(model, models);
@@ -2104,19 +2269,19 @@ export function DebateProvider({ children }) {
           })
           : null;
 
-        dispatch({
-          type: 'UPDATE_ROUND_STREAM',
-          payload: {
-            conversationId: convId,
-            roundIndex,
-            streamIndex: index,
-            content: '',
-            status: 'streaming',
-            error: null,
-            cacheHit: false,
-            searchEvidence: searchVerification?.enabled ? null : undefined,
-            routeInfo,
-          },
+        dispatchTurnAction('UPDATE_ROUND_STREAM', {
+          roundIndex,
+          streamIndex: index,
+          content: '',
+          status: 'streaming',
+          error: null,
+          errorKind: null,
+          outcome: null,
+          completedAt: null,
+          retryProgress: null,
+          cacheHit: false,
+          searchEvidence: searchVerification?.enabled ? null : undefined,
+          routeInfo,
         });
 
         const modelMessages = messagesPerModel ? messagesPerModel[index] : messages;
@@ -2130,32 +2295,37 @@ export function DebateProvider({ children }) {
             nativeWebSearch: useNativeSearchForModel,
             forceRefresh,
             cachePolicy,
+            onRetryProgress: (retryProgress) => {
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: index,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                retryProgress,
+                routeInfo,
+              });
+            },
             onChunk: (_delta, accumulated) => {
-              dispatch({
-                type: 'UPDATE_ROUND_STREAM',
-                payload: {
-                  conversationId: convId,
-                  roundIndex,
-                  streamIndex: index,
-                  content: accumulated,
-                  status: 'streaming',
-                  error: null,
-                  routeInfo,
-                },
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: index,
+                content: accumulated,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                routeInfo,
               });
             },
             onReasoning: (accumulatedReasoning) => {
-              dispatch({
-                type: 'UPDATE_ROUND_STREAM',
-                payload: {
-                  conversationId: convId,
-                  roundIndex,
-                  streamIndex: index,
-                  status: 'streaming',
-                  error: null,
-                  reasoning: accumulatedReasoning,
-                  routeInfo,
-                },
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: index,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                reasoning: accumulatedReasoning,
+                routeInfo,
               });
             },
           });
@@ -2172,22 +2342,22 @@ export function DebateProvider({ children }) {
             })
             : undefined;
 
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              streamIndex: index,
-              content,
-              status: 'complete',
-              error: null,
-              usage,
-              durationMs,
-              reasoning: reasoning || null,
-              cacheHit: Boolean(fromCache),
-              searchEvidence,
-              routeInfo,
-            },
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex: index,
+            content,
+            status: 'complete',
+            error: null,
+            errorKind: null,
+            outcome: 'success',
+            usage,
+            durationMs,
+            completedAt: Date.now(),
+            reasoning: reasoning || null,
+            retryProgress: null,
+            cacheHit: Boolean(fromCache),
+            searchEvidence,
+            routeInfo,
           });
 
           onModelSuccess?.({
@@ -2212,39 +2382,37 @@ export function DebateProvider({ children }) {
           };
         } catch (err) {
           if (err.name === 'AbortError') {
-            dispatch({
-              type: 'UPDATE_ROUND_STREAM',
-              payload: {
-                conversationId: convId,
-                roundIndex,
-                streamIndex: index,
-                content: '',
-                status: 'error',
-                error: 'Cancelled',
-                searchEvidence: searchVerification?.enabled ? null : undefined,
-                routeInfo,
-              },
+            dispatchTurnAction('UPDATE_ROUND_STREAM', {
+              roundIndex,
+              streamIndex: index,
+              content: '',
+              status: 'error',
+              error: 'Cancelled',
+              errorKind: 'cancelled',
+              outcome: null,
+              retryProgress: null,
+              searchEvidence: searchVerification?.enabled ? null : undefined,
+              routeInfo,
             });
-            return { model, content: '', index, error: 'Cancelled' };
+            return { model, content: '', index, error: 'Cancelled', errorKind: 'cancelled' };
           }
           const errorMsg = err.message || 'An error occurred';
           const diagnostic = routeInfo?.reason && !routeInfo?.routed
             ? `${errorMsg} (${routeInfo.reason})`
             : errorMsg;
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              streamIndex: index,
-              content: '',
-              status: 'error',
-              error: diagnostic,
-              searchEvidence: searchVerification?.enabled ? null : undefined,
-              routeInfo,
-            },
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex: index,
+            content: '',
+            status: 'error',
+            error: diagnostic,
+            errorKind: 'failed',
+            outcome: null,
+            retryProgress: null,
+            searchEvidence: searchVerification?.enabled ? null : undefined,
+            routeInfo,
           });
-          return { model, content: '', index, error: diagnostic, routeInfo, effectiveModel };
+          return { model, content: '', index, error: diagnostic, errorKind: 'failed', routeInfo, effectiveModel };
         }
       })
     );
@@ -2289,8 +2457,11 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
     // Build new turn with rounds structure
+    const turnId = Date.now().toString();
+    const runId = createRunId();
     const turn = {
-      id: Date.now().toString(),
+      id: turnId,
+      activeRunId: runId,
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -2314,6 +2485,8 @@ export function DebateProvider({ children }) {
     };
 
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -2362,6 +2535,8 @@ export function DebateProvider({ children }) {
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
@@ -2428,23 +2603,17 @@ export function DebateProvider({ children }) {
           roundLabel,
         });
         if (!provisionalContent) return;
-        dispatch({
-          type: 'UPDATE_SYNTHESIS',
-          payload: {
-            conversationId: convId,
-            model: synthModel,
-            content: provisionalContent,
-            status: 'streaming',
-            error: null,
-          },
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: provisionalContent,
+          status: 'streaming',
+          error: null,
+          retryProgress: null,
         });
       };
 
-      dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-      dispatch({
-        type: 'UPDATE_ROUND_STATUS',
-        payload: { conversationId: convId, roundIndex, status: 'streaming' },
-      });
+      dispatchTurnAction('ADD_ROUND', { round });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'streaming' });
 
       let roundMessages;
       let messagesPerModel = null;
@@ -2490,6 +2659,8 @@ export function DebateProvider({ children }) {
         messages: roundMessages,
         messagesPerModel,
         convId,
+        turnId,
+        runId,
         roundIndex,
         apiKey,
         signal: abortController.signal,
@@ -2520,6 +2691,8 @@ export function DebateProvider({ children }) {
           : 'Native response lacked verifiable source evidence.';
         webSearchContext = await runLegacyWebSearch({
           convId,
+          turnId,
+          runId,
           userPrompt,
           attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
@@ -2546,6 +2719,8 @@ export function DebateProvider({ children }) {
             messages: roundMessages,
             messagesPerModel: null,
             convId,
+            turnId,
+            runId,
             roundIndex,
             apiKey,
             signal: abortController.signal,
@@ -2568,6 +2743,8 @@ export function DebateProvider({ children }) {
         results = enforceStrictSearchEvidence({
           results,
           convId,
+          turnId,
+          runId,
           roundIndex,
           strictMode: true,
         });
@@ -2583,10 +2760,7 @@ export function DebateProvider({ children }) {
 
       // If ALL models failed, stop the debate
       if (completedStreams.length === 0) {
-        dispatch({
-          type: 'UPDATE_ROUND_STATUS',
-          payload: { conversationId: convId, roundIndex, status: 'error' },
-        });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'error' });
         terminationReason = 'all_models_failed';
         totalRounds = roundNum;
         break;
@@ -2600,16 +2774,15 @@ export function DebateProvider({ children }) {
             if (prev) {
               result.content = prev.content;
               // Update the stream in state to show carried-forward content
-              dispatch({
-                type: 'UPDATE_ROUND_STREAM',
-                payload: {
-                  conversationId: convId,
-                  roundIndex,
-                  streamIndex: result.index,
-                  content: prev.content,
-                  status: 'complete',
-                  error: 'Failed this round - showing previous response',
-                },
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: result.index,
+                content: prev.content,
+                status: 'complete',
+                error: 'Failed this round - showing previous response',
+                errorKind: result.errorKind || 'failed',
+                outcome: 'using_previous_response',
+                retryProgress: null,
               });
             }
           }
@@ -2624,10 +2797,7 @@ export function DebateProvider({ children }) {
         .filter(r => r.content)
         .map(r => ({ model: r.model, content: r.content, status: 'complete' }));
 
-      dispatch({
-        type: 'UPDATE_ROUND_STATUS',
-        payload: { conversationId: convId, roundIndex, status: 'complete' },
-      });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'complete' });
 
       totalRounds = roundNum;
 
@@ -2635,13 +2805,9 @@ export function DebateProvider({ children }) {
       if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
         if (abortController.signal.aborted) break;
 
-        dispatch({
-          type: 'SET_CONVERGENCE',
-          payload: {
-            conversationId: convId,
-            roundIndex,
-            convergenceCheck: { converged: null, reason: 'Checking...' },
-          },
+        dispatchTurnAction('SET_CONVERGENCE', {
+          roundIndex,
+          convergenceCheck: { converged: null, reason: 'Checking...' },
         });
 
         try {
@@ -2663,13 +2829,9 @@ export function DebateProvider({ children }) {
           parsed.usage = convergenceUsage || null;
           roundConvergence = parsed;
 
-          dispatch({
-            type: 'SET_CONVERGENCE',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              convergenceCheck: parsed,
-            },
+          dispatchTurnAction('SET_CONVERGENCE', {
+            roundIndex,
+            convergenceCheck: parsed,
           });
 
           if (parsed.converged) {
@@ -2680,13 +2842,9 @@ export function DebateProvider({ children }) {
           if (abortController.signal.aborted) break;
           // Convergence check failed — continue debating
           roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-          dispatch({
-            type: 'SET_CONVERGENCE',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              convergenceCheck: roundConvergence,
-            },
+          dispatchTurnAction('SET_CONVERGENCE', {
+            roundIndex,
+            convergenceCheck: roundConvergence,
           });
         }
       }
@@ -2706,13 +2864,9 @@ export function DebateProvider({ children }) {
           converged: true,
           reason: adaptiveReason,
         };
-        dispatch({
-          type: 'SET_CONVERGENCE',
-          payload: {
-            conversationId: convId,
-            roundIndex,
-            convergenceCheck: roundConvergence,
-          },
+        dispatchTurnAction('SET_CONVERGENCE', {
+          roundIndex,
+          convergenceCheck: roundConvergence,
         });
         converged = true;
         terminationReason = 'adaptive_convergence';
@@ -2732,6 +2886,8 @@ export function DebateProvider({ children }) {
         hasLaterRoundSearchRefresh = true;
         const refreshedContext = await runLegacyWebSearch({
           convId,
+          turnId,
+          runId,
           userPrompt,
           attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
@@ -2767,55 +2923,41 @@ export function DebateProvider({ children }) {
     }
 
     if (abortController.signal.aborted) {
-      dispatch({
-        type: 'SET_DEBATE_METADATA',
-        payload: {
-          conversationId: convId,
-          metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
-        },
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
     // Update debate metadata
-    dispatch({
-      type: 'SET_DEBATE_METADATA',
-      payload: {
-        conversationId: convId,
-        metadata: {
-          totalRounds,
-          converged,
-          terminationReason: terminationReason || 'max_rounds_reached',
-        },
+    dispatchTurnAction('SET_DEBATE_METADATA', {
+      metadata: {
+        totalRounds,
+        converged,
+        terminationReason: terminationReason || 'max_rounds_reached',
       },
     });
 
     // ===== SYNTHESIS =====
     if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
-      dispatch({
-        type: 'UPDATE_SYNTHESIS',
-        payload: {
-          conversationId: convId,
-          model: synthModel,
-          content: '',
-          status: 'error',
-          error: 'All models failed. Cannot synthesize.',
-        },
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({
-      type: 'UPDATE_SYNTHESIS',
-      payload: {
-        conversationId: convId,
-        model: synthModel,
-        content: '',
-        status: 'streaming',
-        error: null,
-      },
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
     });
 
     // Build synthesis from all completed rounds in this debate
@@ -2839,31 +2981,33 @@ export function DebateProvider({ children }) {
         apiKey,
         signal: abortController.signal,
         forceRefresh,
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: '',
+            status: 'streaming',
+            error: null,
+            retryProgress,
+          });
+        },
         onChunk: (_delta, accumulated) => {
-          dispatch({
-            type: 'UPDATE_SYNTHESIS',
-            payload: {
-              conversationId: convId,
-              model: synthModel,
-              content: accumulated,
-              status: 'streaming',
-              error: null,
-            },
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
           });
         },
       });
 
-      dispatch({
-        type: 'UPDATE_SYNTHESIS',
-        payload: {
-          conversationId: convId,
-          model: synthModel,
-          content: synthesisContent,
-          status: 'complete',
-          error: null,
-          usage: synthesisUsage,
-          durationMs: synthesisDurationMs,
-        },
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: synthesisContent,
+        status: 'complete',
+        error: null,
+        usage: synthesisUsage,
+        durationMs: synthesisDurationMs,
+        retryProgress: null,
       });
       if (isFirstTurn) {
         requestAutoConversationTitle({
@@ -2875,15 +3019,12 @@ export function DebateProvider({ children }) {
       }
     } catch (err) {
       if (!abortController.signal.aborted) {
-        dispatch({
-          type: 'UPDATE_SYNTHESIS',
-          payload: {
-            conversationId: convId,
-            model: synthModel,
-            content: '',
-            status: 'error',
-            error: err.message,
-          },
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: '',
+          status: 'error',
+          error: err.message,
+          retryProgress: null,
         });
       }
     }
@@ -2896,16 +3037,14 @@ export function DebateProvider({ children }) {
    * Extracted as a helper for reuse by startDirect and retry functions.
    */
   const runEnsembleAnalysisAndSynthesis = async ({
-    convId, userPrompt, completedStreams, conversationHistory,
+    convId, turnId, runId, userPrompt, completedStreams, conversationHistory,
     synthModel, convergenceModel, apiKey, abortController, focused = false, forceRefresh = false,
   }) => {
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
     // ===== PHASE 2: Vote Analysis =====
-    dispatch({
-      type: 'SET_ENSEMBLE_RESULT',
-      payload: {
-        conversationId: convId,
-        ensembleResult: { status: 'analyzing', confidence: null, outliers: [], agreementAreas: [], disagreementAreas: [], modelWeights: {}, rawAnalysis: '', usage: null, durationMs: null },
-      },
+    dispatchTurnAction('SET_ENSEMBLE_RESULT', {
+      ensembleResult: { status: 'analyzing', confidence: null, outliers: [], agreementAreas: [], disagreementAreas: [], modelWeights: {}, rawAnalysis: '', usage: null, durationMs: null },
     });
 
     let voteAnalysis = null;
@@ -2920,38 +3059,33 @@ export function DebateProvider({ children }) {
 
       voteAnalysis = parseEnsembleVoteResponse(voteContent);
 
-      dispatch({
-        type: 'SET_ENSEMBLE_RESULT',
-        payload: {
-          conversationId: convId,
-          ensembleResult: {
-            status: 'complete',
-            ...voteAnalysis,
-            rawAnalysis: voteContent,
-            usage: voteUsage,
-            durationMs: voteDurationMs,
-          },
+      dispatchTurnAction('SET_ENSEMBLE_RESULT', {
+        ensembleResult: {
+          status: 'complete',
+          ...voteAnalysis,
+          rawAnalysis: voteContent,
+          usage: voteUsage,
+          durationMs: voteDurationMs,
         },
       });
     } catch (err) {
       if (abortController.signal.aborted) return false;
       // Vote analysis failed — continue with default weights
       voteAnalysis = { confidence: 50, outliers: [], agreementAreas: [], disagreementAreas: [], modelWeights: {} };
-      dispatch({
-        type: 'SET_ENSEMBLE_RESULT',
-        payload: {
-          conversationId: convId,
-          ensembleResult: { status: 'error', ...voteAnalysis, rawAnalysis: '', usage: null, durationMs: null, error: err.message },
-        },
+      dispatchTurnAction('SET_ENSEMBLE_RESULT', {
+        ensembleResult: { status: 'error', ...voteAnalysis, rawAnalysis: '', usage: null, durationMs: null, error: err.message },
       });
     }
 
     if (abortController.signal.aborted) return false;
 
     // ===== PHASE 3: Streaming Synthesis =====
-    dispatch({
-      type: 'UPDATE_SYNTHESIS',
-      payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null },
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
     });
 
     const synthesisMessages = buildEnsembleSynthesisMessages({
@@ -2969,25 +3103,44 @@ export function DebateProvider({ children }) {
         apiKey,
         signal: abortController.signal,
         forceRefresh,
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: '',
+            status: 'streaming',
+            error: null,
+            retryProgress,
+          });
+        },
         onChunk: (_delta, accumulated) => {
-          dispatch({
-            type: 'UPDATE_SYNTHESIS',
-            payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null },
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
           });
         },
       });
 
-      dispatch({
-        type: 'UPDATE_SYNTHESIS',
-        payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs },
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: synthesisContent,
+        status: 'complete',
+        error: null,
+        usage: synthesisUsage,
+        durationMs: synthesisDurationMs,
+        retryProgress: null,
       });
 
       return synthesisContent;
     } catch (err) {
       if (!abortController.signal.aborted) {
-        dispatch({
-          type: 'UPDATE_SYNTHESIS',
-          payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message },
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: '',
+          status: 'error',
+          error: err.message,
+          retryProgress: null,
         });
       }
       return false;
@@ -3028,8 +3181,11 @@ export function DebateProvider({ children }) {
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
+    const turnId = Date.now().toString();
+    const runId = createRunId();
     const turn = {
-      id: Date.now().toString(),
+      id: turnId,
+      activeRunId: runId,
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -3049,6 +3205,8 @@ export function DebateProvider({ children }) {
     };
 
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -3094,6 +3252,8 @@ export function DebateProvider({ children }) {
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
@@ -3123,16 +3283,15 @@ export function DebateProvider({ children }) {
     const roundLabel = focused ? 'Focused Responses' : 'Parallel Responses';
     const round = createRound({ roundNumber: 1, label: roundLabel, models });
 
-    dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-    dispatch({
-      type: 'UPDATE_ROUND_STATUS',
-      payload: { conversationId: convId, roundIndex: 0, status: 'streaming' },
-    });
+    dispatchTurnAction('ADD_ROUND', { round });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'streaming' });
 
     let results = await runRound({
       models,
       messages: initialMessages,
       convId,
+      turnId,
+      runId,
       roundIndex: 0,
       apiKey,
       signal: abortController.signal,
@@ -3178,6 +3337,8 @@ export function DebateProvider({ children }) {
         : 'Native response lacked verifiable source evidence.';
       webSearchContext = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
@@ -3202,6 +3363,8 @@ export function DebateProvider({ children }) {
           models,
           messages: fallbackInitialMessages,
           convId,
+          turnId,
+          runId,
           roundIndex: 0,
           apiKey,
           signal: abortController.signal,
@@ -3228,6 +3391,8 @@ export function DebateProvider({ children }) {
       results = enforceStrictSearchEvidence({
         results,
         convId,
+        turnId,
+        runId,
         roundIndex: 0,
         strictMode: true,
       });
@@ -3243,25 +3408,17 @@ export function DebateProvider({ children }) {
       .map(r => ({ model: r.model, content: r.content, status: 'complete' }));
 
     if (completedStreams.length === 0) {
-      dispatch({
-        type: 'UPDATE_ROUND_STATUS',
-        payload: { conversationId: convId, roundIndex: 0, status: 'error' },
-      });
-      dispatch({
-        type: 'SET_DEBATE_METADATA',
-        payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'all_models_failed' } },
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'error' });
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds: 1, converged: false, terminationReason: 'all_models_failed' },
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({
-      type: 'UPDATE_ROUND_STATUS',
-      payload: { conversationId: convId, roundIndex: 0, status: 'complete' },
-    });
-    dispatch({
-      type: 'SET_DEBATE_METADATA',
-      payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' } },
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'complete' });
+    dispatchTurnAction('SET_DEBATE_METADATA', {
+      metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
     });
 
     if (isFirstTurn) {
@@ -3315,8 +3472,11 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
     // Build ensemble vote turn
+    const turnId = Date.now().toString();
+    const runId = createRunId();
     const turn = {
-      id: Date.now().toString(),
+      id: turnId,
+      activeRunId: runId,
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -3341,6 +3501,8 @@ export function DebateProvider({ children }) {
     };
 
     dispatch({ type: 'ADD_TURN', payload: { conversationId: convId, turn } });
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -3386,6 +3548,8 @@ export function DebateProvider({ children }) {
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
@@ -3415,16 +3579,15 @@ export function DebateProvider({ children }) {
     const roundLabel = focused ? 'Focused Analyses' : 'Independent Analyses';
     const round = createRound({ roundNumber: 1, label: roundLabel, models });
 
-    dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-    dispatch({
-      type: 'UPDATE_ROUND_STATUS',
-      payload: { conversationId: convId, roundIndex: 0, status: 'streaming' },
-    });
+    dispatchTurnAction('ADD_ROUND', { round });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'streaming' });
 
     let results = await runRound({
       models,
       messages: initialMessages,
       convId,
+      turnId,
+      runId,
       roundIndex: 0,
       apiKey,
       signal: abortController.signal,
@@ -3470,6 +3633,8 @@ export function DebateProvider({ children }) {
         : 'Native response lacked verifiable source evidence.';
       webSearchContext = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
@@ -3494,6 +3659,8 @@ export function DebateProvider({ children }) {
           models,
           messages: fallbackInitialMessages,
           convId,
+          turnId,
+          runId,
           roundIndex: 0,
           apiKey,
           signal: abortController.signal,
@@ -3520,6 +3687,8 @@ export function DebateProvider({ children }) {
       results = enforceStrictSearchEvidence({
         results,
         convId,
+        turnId,
+        runId,
         roundIndex: 0,
         strictMode: true,
       });
@@ -3535,26 +3704,19 @@ export function DebateProvider({ children }) {
       .map(r => ({ model: r.model, content: r.content, status: 'complete' }));
 
     if (completedStreams.length === 0) {
-      dispatch({
-        type: 'UPDATE_ROUND_STATUS',
-        payload: { conversationId: convId, roundIndex: 0, status: 'error' },
-      });
-      dispatch({
-        type: 'SET_DEBATE_METADATA',
-        payload: { conversationId: convId, metadata: { totalRounds: 1, converged: false, terminationReason: 'all_models_failed' } },
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'error' });
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds: 1, converged: false, terminationReason: 'all_models_failed' },
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({
-      type: 'UPDATE_ROUND_STATUS',
-      payload: { conversationId: convId, roundIndex: 0, status: 'complete' },
-    });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: 0, status: 'complete' });
 
     // ===== PHASE 2 + 3: Vote Analysis & Synthesis =====
     const synthesisContent = await runEnsembleAnalysisAndSynthesis({
-      convId, userPrompt, completedStreams, conversationHistory,
+      convId, turnId, runId, userPrompt, completedStreams, conversationHistory,
       synthModel, convergenceModel, apiKey, abortController, focused, forceRefresh,
     });
     if (synthesisContent && isFirstTurn) {
@@ -3614,6 +3776,8 @@ export function DebateProvider({ children }) {
               content: stream.content || '',
               status: 'error',
               error: 'Cancelled',
+              errorKind: 'cancelled',
+              retryProgress: null,
               reasoning: stream.reasoning,
             },
           });
@@ -3628,6 +3792,7 @@ export function DebateProvider({ children }) {
             content: lastTurn.synthesis.content || '',
             status: 'error',
             error: 'Cancelled',
+            retryProgress: null,
             usage: lastTurn.synthesis.usage,
             durationMs: lastTurn.synthesis.durationMs,
           },
@@ -3729,6 +3894,11 @@ export function DebateProvider({ children }) {
     if (lastCompletedStreams.length === 0) return;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
+    const turnId = lastTurn.id;
+    const runId = createRunId();
+    dispatch({ type: 'SET_TURN_RUN_STATE', payload: { conversationId: convId, turnId, runId } });
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -3744,7 +3914,7 @@ export function DebateProvider({ children }) {
     // Ensemble mode (direct turns): re-run vote analysis + synthesis
     if (lastTurn.mode === 'direct') {
       await runEnsembleAnalysisAndSynthesis({
-        convId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
+        convId, turnId, runId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
         synthModel, convergenceModel: convergModel, apiKey, abortController, focused: turnFocused, forceRefresh,
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
@@ -3756,7 +3926,13 @@ export function DebateProvider({ children }) {
     const totalRounds = lastTurn.debateMetadata?.totalRounds || lastTurn.rounds.length;
     const roundsForSynthesis = toSynthesisRounds(lastTurn.rounds, totalRounds);
 
-    dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: lastTurn.synthesis?.content || '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
+    });
 
     const synthesisMessages = buildMultiRoundSynthesisMessages({
       userPrompt,
@@ -3777,14 +3953,42 @@ export function DebateProvider({ children }) {
         apiKey,
         signal: abortController.signal,
         forceRefresh,
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: lastTurn.synthesis?.content || '',
+            status: 'streaming',
+            error: null,
+            retryProgress,
+          });
+        },
         onChunk: (_delta, accumulated) => {
-          dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } });
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
+          });
         },
       });
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: synthesisContent,
+        status: 'complete',
+        error: null,
+        usage: synthesisUsage,
+        durationMs: synthesisDurationMs,
+        retryProgress: null,
+      });
     } catch (err) {
       if (!abortController.signal.aborted) {
-        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } });
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: lastTurn.synthesis?.content || '',
+          status: 'error',
+          error: err.message,
+          retryProgress: null,
+        });
       }
     }
 
@@ -3825,10 +4029,15 @@ export function DebateProvider({ children }) {
     const turnFocused = typeof lastTurn.focusedMode === 'boolean'
       ? lastTurn.focusedMode
       : state.focusedMode;
+    const turnId = lastTurn.id;
+    const runId = createRunId();
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
-    dispatch({ type: 'TRUNCATE_ROUNDS', payload: { conversationId: convId, keepCount: roundIndex + 1 } });
-    dispatch({ type: 'RESET_SYNTHESIS', payload: { conversationId: convId, model: synthModel } });
+    dispatch({ type: 'SET_TURN_RUN_STATE', payload: { conversationId: convId, turnId, runId } });
+    dispatchTurnAction('TRUNCATE_ROUNDS', { keepCount: roundIndex + 1 });
+    dispatchTurnAction('RESET_SYNTHESIS', { model: synthModel, preserveContent: true });
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -3863,6 +4072,8 @@ export function DebateProvider({ children }) {
       legacySearchPreflightAttempted = true;
       webSearchCtx = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -3911,12 +4122,14 @@ export function DebateProvider({ children }) {
 
     // === ENSEMBLE (direct mode) retry: re-run all streams then vote + synthesis ===
     if (lastTurn.mode === 'direct') {
-      dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'streaming' } });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'streaming' });
 
       let results = await runRound({
         models,
         messages: initialMessages,
         convId,
+        turnId,
+        runId,
         roundIndex,
         apiKey,
         signal: abortController.signal,
@@ -3955,6 +4168,8 @@ export function DebateProvider({ children }) {
           : 'Native response lacked verifiable source evidence.';
         webSearchCtx = await runLegacyWebSearch({
           convId,
+          turnId,
+          runId,
           userPrompt,
           attachments,
           videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -3976,6 +4191,8 @@ export function DebateProvider({ children }) {
             models,
             messages: initialMessages,
             convId,
+            turnId,
+            runId,
             roundIndex,
             apiKey,
             signal: abortController.signal,
@@ -3997,6 +4214,8 @@ export function DebateProvider({ children }) {
         results = enforceStrictSearchEvidence({
           results,
           convId,
+          turnId,
+          runId,
           roundIndex,
           strictMode: true,
         });
@@ -4009,15 +4228,15 @@ export function DebateProvider({ children }) {
         .map(r => ({ model: r.model, content: r.content, status: 'complete' }));
 
       if (completedStreams.length === 0) {
-        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'error' } });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'error' });
         dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
         return;
       }
 
-      dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'complete' } });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'complete' });
 
       await runEnsembleAnalysisAndSynthesis({
-        convId, userPrompt, completedStreams, conversationHistory,
+        convId, turnId, runId, userPrompt, completedStreams, conversationHistory,
         synthModel, convergenceModel, apiKey, abortController, focused: turnFocused, forceRefresh,
       });
 
@@ -4033,6 +4252,11 @@ export function DebateProvider({ children }) {
         .filter(s => s.content && s.status === 'complete')
         .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
 
+      dispatchTurnAction('UPDATE_ROUND_STATUS', {
+        roundIndex,
+        status: lastCompletedStreams.length > 0 ? 'complete' : 'error',
+      });
+
       // Skip ahead to convergence + continuation
       let converged = false;
       let terminationReason = null;
@@ -4043,7 +4267,10 @@ export function DebateProvider({ children }) {
 
       // Convergence check on current round
       if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
-        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+        dispatchTurnAction('SET_CONVERGENCE', {
+          roundIndex: currentRoundIndex,
+          convergenceCheck: { converged: null, reason: 'Checking...' },
+        });
         try {
           const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
           const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
@@ -4051,12 +4278,12 @@ export function DebateProvider({ children }) {
           parsed.rawResponse = cResponse;
           parsed.usage = cUsage || null;
           currentRoundConvergence = parsed;
-          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+          dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
           if (parsed.converged) { converged = true; terminationReason = 'converged'; }
         } catch (err) {
           if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
           currentRoundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence } });
+          dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence });
         }
       }
 
@@ -4078,8 +4305,8 @@ export function DebateProvider({ children }) {
           const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
           currentRoundIndex = roundNum - 1;
           let roundConvergence = null;
-          dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
+          dispatchTurnAction('ADD_ROUND', { round });
+          dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'streaming' });
           const messagesPerModel = models.map(() =>
             buildRebuttalMessages({
               userPrompt,
@@ -4103,6 +4330,8 @@ export function DebateProvider({ children }) {
             models,
             messagesPerModel,
             convId,
+            turnId,
+            runId,
             roundIndex: currentRoundIndex,
             apiKey,
             signal: abortController.signal,
@@ -4112,23 +4341,38 @@ export function DebateProvider({ children }) {
           if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
           const completedStreams = results.filter(r => r.content && !r.error);
           if (completedStreams.length === 0) {
-            dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'error' } });
+            dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'error' });
             terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
           }
           if (completedStreams.length < models.length) {
             for (const result of results) {
               if (result.error && !result.content) {
                 const prev = lastCompletedStreams.find(s => s.model === result.model);
-                if (prev) { result.content = prev.content; dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex: currentRoundIndex, streamIndex: result.index, content: prev.content, status: 'complete', error: 'Failed this round - showing previous response' } }); }
+                if (prev) {
+                  result.content = prev.content;
+                  dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                    roundIndex: currentRoundIndex,
+                    streamIndex: result.index,
+                    content: prev.content,
+                    status: 'complete',
+                    error: 'Failed this round - showing previous response',
+                    errorKind: result.errorKind || 'failed',
+                    outcome: 'using_previous_response',
+                    retryProgress: null,
+                  });
+                }
               }
             }
           }
           lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
-          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
+          dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'complete' });
           totalRounds = roundNum;
           if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
             if (abortController.signal.aborted) break;
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+            dispatchTurnAction('SET_CONVERGENCE', {
+              roundIndex: currentRoundIndex,
+              convergenceCheck: { converged: null, reason: 'Checking...' },
+            });
             try {
               const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
               const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
@@ -4136,7 +4380,7 @@ export function DebateProvider({ children }) {
               parsed.rawResponse = cResponse;
               parsed.usage = cUsage || null;
               roundConvergence = parsed;
-              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+              dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
               if (parsed.converged) {
                 converged = true;
                 terminationReason = 'converged';
@@ -4154,7 +4398,7 @@ export function DebateProvider({ children }) {
             } catch (err) {
               if (abortController.signal.aborted) break;
               roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-              dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+              dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: roundConvergence });
             }
           }
           const refreshDecision = getLaterRoundSearchRefreshDecision({
@@ -4171,6 +4415,8 @@ export function DebateProvider({ children }) {
             hasLaterRoundSearchRefresh = true;
             const refreshedContext = await runLegacyWebSearch({
               convId,
+              turnId,
+              runId,
               userPrompt,
               attachments,
               videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -4198,21 +4444,37 @@ export function DebateProvider({ children }) {
         terminationReason = terminationReason || 'max_rounds_reached';
       }
 
-      if (abortController.signal.aborted) {
-        dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged: false, terminationReason: 'cancelled' } } });
-        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-        return;
-      }
+    if (abortController.signal.aborted) {
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
+      });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
 
-      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' } } });
+    dispatchTurnAction('SET_DEBATE_METADATA', {
+      metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' },
+    });
 
-      // Synthesis
-      if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
-        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
-        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-        return;
-      }
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    // Synthesis
+    if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
+      });
+      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
+      return;
+    }
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: lastTurn.synthesis?.content || '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
+    });
       const finalRoundSummary = {
         label: `Final positions after ${totalRounds} round(s)`,
         streams: lastCompletedStreams,
@@ -4230,22 +4492,55 @@ export function DebateProvider({ children }) {
         const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
           model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
           forceRefresh,
-          onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
+          onRetryProgress: (retryProgress) => {
+            dispatchTurnAction('UPDATE_SYNTHESIS', {
+              model: synthModel,
+              content: lastTurn.synthesis?.content || '',
+              status: 'streaming',
+              error: null,
+              retryProgress,
+            });
+          },
+          onChunk: (_delta, accumulated) => {
+            dispatchTurnAction('UPDATE_SYNTHESIS', {
+              model: synthModel,
+              content: accumulated,
+              status: 'streaming',
+              error: null,
+            });
+          },
         });
-        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: synthesisContent,
+          status: 'complete',
+          error: null,
+          usage: synthesisUsage,
+          durationMs: synthesisDurationMs,
+          retryProgress: null,
+        });
       } catch (err) {
-        if (!abortController.signal.aborted) { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } }); }
+        if (!abortController.signal.aborted) {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: lastTurn.synthesis?.content || '',
+            status: 'error',
+            error: err.message,
+            retryProgress: null,
+          });
+        }
       }
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
     // === Re-run only failed/stuck streams in parallel ===
-    dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'streaming' } });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'streaming' });
 
     const retryResults = await Promise.allSettled(
       failedIndices.map(async (si) => {
         const model = models[si];
+        const previousStream = targetRound.streams[si];
         const route = resolveModelRoute(model, models);
         const effectiveModel = route.effectiveModel || model;
         const routeInfo = route.routeInfo || null;
@@ -4276,18 +4571,13 @@ export function DebateProvider({ children }) {
           });
         }
 
-        dispatch({
-          type: 'UPDATE_ROUND_STREAM',
-          payload: {
-            conversationId: convId,
-            roundIndex,
-            streamIndex: si,
-            content: '',
-            status: 'streaming',
-            error: null,
-            cacheHit: false,
+        dispatchTurnAction('UPDATE_ROUND_STREAM', {
+          roundIndex,
+          streamIndex: si,
+          ...buildStreamRefreshState(previousStream, model, {
+            preserveContent: true,
             routeInfo,
-          },
+          }),
         });
 
         try {
@@ -4299,32 +4589,37 @@ export function DebateProvider({ children }) {
             nativeWebSearch: useNativeSearchForModel,
             forceRefresh,
             cachePolicy,
+            onRetryProgress: (retryProgress) => {
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: si,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                retryProgress,
+                routeInfo,
+              });
+            },
             onChunk: (_delta, accumulated) => {
-              dispatch({
-                type: 'UPDATE_ROUND_STREAM',
-                payload: {
-                  conversationId: convId,
-                  roundIndex,
-                  streamIndex: si,
-                  content: accumulated,
-                  status: 'streaming',
-                  error: null,
-                  routeInfo,
-                },
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: si,
+                content: accumulated,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                routeInfo,
               });
             },
             onReasoning: (accumulatedReasoning) => {
-              dispatch({
-                type: 'UPDATE_ROUND_STREAM',
-                payload: {
-                  conversationId: convId,
-                  roundIndex,
-                  streamIndex: si,
-                  status: 'streaming',
-                  error: null,
-                  reasoning: accumulatedReasoning,
-                  routeInfo,
-                },
+              dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                roundIndex,
+                streamIndex: si,
+                status: 'streaming',
+                error: null,
+                errorKind: null,
+                reasoning: accumulatedReasoning,
+                routeInfo,
               });
             },
           });
@@ -4348,50 +4643,64 @@ export function DebateProvider({ children }) {
               strictBlocked: true,
               strictError: message,
             };
-            dispatch({
-              type: 'UPDATE_ROUND_STREAM',
-              payload: {
-                conversationId: convId,
+            const fallbackState = buildPreviousResponseFallback(previousStream, {
+              model,
+              error: message,
+              errorKind: 'strict_blocked',
+              searchEvidence: blockedEvidence,
+              routeInfo,
+            });
+            dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
+              ? {
+                roundIndex,
+                streamIndex: si,
+                ...fallbackState,
+              }
+              : {
                 roundIndex,
                 streamIndex: si,
                 content: '',
                 status: 'error',
                 error: message,
+                errorKind: 'strict_blocked',
+                outcome: null,
                 usage,
                 durationMs,
                 reasoning: reasoning || null,
                 searchEvidence: blockedEvidence,
+                retryProgress: null,
                 cacheHit: Boolean(fromCache),
                 routeInfo,
-              },
-            });
+              });
             return {
               model,
-              content: '',
+              content: fallbackState?.content || '',
               index: si,
-              error: message,
+              error: fallbackState ? null : message,
+              errorKind: fallbackState ? null : 'strict_blocked',
+              outcome: fallbackState?.outcome || null,
               searchEvidence: blockedEvidence,
               routeInfo,
               effectiveModel,
               fromCache: Boolean(fromCache),
             };
           }
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              streamIndex: si,
-              content,
-              status: 'complete',
-              error: null,
-              usage,
-              durationMs,
-              reasoning: reasoning || null,
-              searchEvidence,
-              cacheHit: Boolean(fromCache),
-              routeInfo,
-            },
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex: si,
+            content,
+            status: 'complete',
+            error: null,
+            errorKind: null,
+            outcome: 'success',
+            usage,
+            durationMs,
+            completedAt: Date.now(),
+            reasoning: reasoning || null,
+            searchEvidence,
+            retryProgress: null,
+            cacheHit: Boolean(fromCache),
+            routeInfo,
           });
           return {
             model,
@@ -4408,19 +4717,39 @@ export function DebateProvider({ children }) {
           const diagnostic = routeInfo?.reason && !routeInfo?.routed
             ? `${errorMsg} (${routeInfo.reason})`
             : errorMsg;
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
+          const fallbackState = buildPreviousResponseFallback(previousStream, {
+            model,
+            error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
+            errorKind: 'failed',
+            routeInfo,
+          });
+          dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
+            ? {
+              roundIndex,
+              streamIndex: si,
+              ...fallbackState,
+            }
+            : {
               roundIndex,
               streamIndex: si,
               content: '',
               status: 'error',
               error: diagnostic,
+              errorKind: 'failed',
+              outcome: null,
+              retryProgress: null,
               routeInfo,
-            },
-          });
-          return { model, content: '', index: si, error: diagnostic, routeInfo, effectiveModel };
+            });
+          return {
+            model,
+            content: fallbackState?.content || '',
+            index: si,
+            error: fallbackState ? null : diagnostic,
+            errorKind: fallbackState ? null : 'failed',
+            outcome: fallbackState?.outcome || null,
+            routeInfo,
+            effectiveModel,
+          };
         }
       })
     );
@@ -4450,14 +4779,22 @@ export function DebateProvider({ children }) {
     }
 
     if (lastCompletedStreams.length === 0) {
-      dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'error' } });
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
-      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds: roundIndex + 1, converged: false, terminationReason: 'all_models_failed' } } });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'error' });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: lastTurn.synthesis?.content || '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
+      });
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds: roundIndex + 1, converged: false, terminationReason: 'all_models_failed' },
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex, status: 'complete' } });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'complete' });
 
     // Continue debate from this round: convergence check + more rounds + synthesis
     let converged = false;
@@ -4469,7 +4806,10 @@ export function DebateProvider({ children }) {
 
     // Convergence check on current round
     if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
-      dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+      dispatchTurnAction('SET_CONVERGENCE', {
+        roundIndex: currentRoundIndex,
+        convergenceCheck: { converged: null, reason: 'Checking...' },
+      });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
         const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
@@ -4477,12 +4817,12 @@ export function DebateProvider({ children }) {
         parsed.rawResponse = cResponse;
         parsed.usage = cUsage || null;
         currentRoundConvergence = parsed;
-        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
         if (parsed.converged) { converged = true; terminationReason = 'converged'; }
       } catch (err) {
         if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
         currentRoundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence } });
+        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence });
       }
     }
 
@@ -4504,8 +4844,8 @@ export function DebateProvider({ children }) {
         const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
         currentRoundIndex = roundNum - 1;
         let roundConvergence = null;
-        dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
+        dispatchTurnAction('ADD_ROUND', { round });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'streaming' });
         const messagesPerModel = models.map(() =>
           buildRebuttalMessages({
             userPrompt,
@@ -4529,6 +4869,8 @@ export function DebateProvider({ children }) {
           models,
           messagesPerModel,
           convId,
+          turnId,
+          runId,
           roundIndex: currentRoundIndex,
           apiKey,
           signal: abortController.signal,
@@ -4538,23 +4880,38 @@ export function DebateProvider({ children }) {
         if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
         const completedStreams = results.filter(r => r.content && !r.error);
         if (completedStreams.length === 0) {
-          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'error' } });
+          dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'error' });
           terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
         }
         if (completedStreams.length < models.length) {
           for (const result of results) {
             if (result.error && !result.content) {
               const prev = lastCompletedStreams.find(s => s.model === result.model);
-              if (prev) { result.content = prev.content; dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex: currentRoundIndex, streamIndex: result.index, content: prev.content, status: 'complete', error: 'Failed this round - showing previous response' } }); }
+              if (prev) {
+                result.content = prev.content;
+                dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                  roundIndex: currentRoundIndex,
+                  streamIndex: result.index,
+                  content: prev.content,
+                  status: 'complete',
+                  error: 'Failed this round - showing previous response',
+                  errorKind: result.errorKind || 'failed',
+                  outcome: 'using_previous_response',
+                  retryProgress: null,
+                });
+              }
             }
           }
         }
         lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
-        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'complete' });
         totalRounds = roundNum;
         if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
           if (abortController.signal.aborted) break;
-          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+          dispatchTurnAction('SET_CONVERGENCE', {
+            roundIndex: currentRoundIndex,
+            convergenceCheck: { converged: null, reason: 'Checking...' },
+          });
           try {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
             const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
@@ -4562,7 +4919,7 @@ export function DebateProvider({ children }) {
             parsed.rawResponse = cResponse;
             parsed.usage = cUsage || null;
             roundConvergence = parsed;
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
             if (parsed.converged) {
               converged = true;
               terminationReason = 'converged';
@@ -4580,7 +4937,7 @@ export function DebateProvider({ children }) {
           } catch (err) {
             if (abortController.signal.aborted) break;
             roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: roundConvergence });
           }
         }
         const refreshDecision = getLaterRoundSearchRefreshDecision({
@@ -4597,6 +4954,8 @@ export function DebateProvider({ children }) {
           hasLaterRoundSearchRefresh = true;
           const refreshedContext = await runLegacyWebSearch({
             convId,
+            turnId,
+            runId,
             userPrompt,
             attachments,
             videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -4625,21 +4984,37 @@ export function DebateProvider({ children }) {
     }
 
     if (abortController.signal.aborted) {
-      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged: false, terminationReason: 'cancelled' } } });
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' } } });
+    dispatchTurnAction('SET_DEBATE_METADATA', {
+      metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' },
+    });
 
     // Synthesis
     if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: lastTurn.synthesis?.content || '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: lastTurn.synthesis?.content || '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
+    });
     const finalRoundSummary = {
       label: `Final positions after ${totalRounds} round(s)`,
       streams: lastCompletedStreams,
@@ -4659,11 +5034,43 @@ export function DebateProvider({ children }) {
       const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
         forceRefresh,
-        onChunk: (_delta, accumulated) => { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } }); },
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: lastTurn.synthesis?.content || '',
+            status: 'streaming',
+            error: null,
+            retryProgress,
+          });
+        },
+        onChunk: (_delta, accumulated) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
+          });
+        },
       });
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: synthesisContent,
+        status: 'complete',
+        error: null,
+        usage: synthesisUsage,
+        durationMs: synthesisDurationMs,
+        retryProgress: null,
+      });
     } catch (err) {
-      if (!abortController.signal.aborted) { dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } }); }
+      if (!abortController.signal.aborted) {
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: lastTurn.synthesis?.content || '',
+          status: 'error',
+          error: err.message,
+          retryProgress: null,
+        });
+      }
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
@@ -4676,9 +5083,8 @@ export function DebateProvider({ children }) {
     if (rounds.length === 0) return;
 
     const firstFailedRoundIndex = rounds.findIndex((round) =>
-      Array.isArray(round.streams) && round.streams.some((stream) =>
-        stream?.status === 'error' || !stream?.content || Boolean(stream?.error)
-      )
+      deriveRoundStatusFromStreams(round?.streams || [], round?.status || 'pending') === 'warning'
+      || deriveRoundStatusFromStreams(round?.streams || [], round?.status || 'pending') === 'error'
     );
 
     if (firstFailedRoundIndex < 0) return;
@@ -4709,6 +5115,9 @@ export function DebateProvider({ children }) {
   const retryStream = useCallback(async (roundIndex, streamIndex, options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
+    const replacementModel = typeof options.replacementModel === 'string' && options.replacementModel
+      ? options.replacementModel
+      : null;
     const convId = activeConversation.id;
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
@@ -4718,23 +5127,31 @@ export function DebateProvider({ children }) {
     const targetRound = lastTurn.rounds[roundIndex];
     const targetModel = targetRound.streams[streamIndex]?.model;
     if (!targetModel) return;
+    const retryModel = replacementModel || targetModel;
 
     const apiKey = state.apiKey;
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
     const strictWebSearch = state.strictWebSearch;
-    const models = targetRound.streams.map(s => s.model);
-    const route = resolveModelRoute(targetModel, models);
-    const effectiveModel = route.effectiveModel || targetModel;
+    const models = targetRound.streams.map((s, index) => (index === streamIndex ? retryModel : s.model));
+    const route = resolveModelRoute(retryModel, models);
+    const effectiveModel = route.effectiveModel || retryModel;
     const routeInfo = route.routeInfo || null;
     const turnFocused = typeof lastTurn.focusedMode === 'boolean'
       ? lastTurn.focusedMode
       : state.focusedMode;
+    const turnId = lastTurn.id;
+    const runId = createRunId();
+    const turnScope = { conversationId: convId, turnId, runId };
+    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
+    const previousStream = targetRound.streams[streamIndex];
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
-    dispatch({ type: 'TRUNCATE_ROUNDS', payload: { conversationId: convId, keepCount: roundIndex + 1 } });
-    dispatch({ type: 'RESET_SYNTHESIS', payload: { conversationId: convId, model: synthModel } });
+    dispatch({ type: 'SET_TURN_RUN_STATE', payload: { conversationId: convId, turnId, runId } });
+    dispatchTurnAction('TRUNCATE_ROUNDS', { keepCount: roundIndex + 1 });
+    dispatchTurnAction('RESET_SYNTHESIS', { model: synthModel, preserveContent: true });
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'streaming' });
 
     const abortController = new AbortController();
     setAbortController(convId, abortController);
@@ -4766,6 +5183,8 @@ export function DebateProvider({ children }) {
     if (roundIndex === 0 && nativeSearchStrategy.needsLegacyPreflight) {
       webSearchCtx = await runLegacyWebSearch({
         convId,
+        turnId,
+        runId,
         userPrompt,
         attachments,
         videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -4780,7 +5199,7 @@ export function DebateProvider({ children }) {
     }
     const useNativeWebSearch = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && !webSearchCtx
       ? (typeof nativeSearchStrategy.nativeWebSearch === 'function'
-        ? Boolean(nativeSearchStrategy.nativeWebSearch(targetModel))
+        ? Boolean(nativeSearchStrategy.nativeWebSearch(retryModel))
         : Boolean(nativeSearchStrategy.nativeWebSearch))
       : false;
     const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
@@ -4816,18 +5235,13 @@ export function DebateProvider({ children }) {
     }
 
     // Reset and re-stream the target model
-    dispatch({
-      type: 'UPDATE_ROUND_STREAM',
-      payload: {
-        conversationId: convId,
-        roundIndex,
-        streamIndex,
-        content: '',
-        status: 'streaming',
-        error: null,
-        cacheHit: false,
+    dispatchTurnAction('UPDATE_ROUND_STREAM', {
+      roundIndex,
+      streamIndex,
+      ...buildStreamRefreshState(previousStream, retryModel, {
+        preserveContent: !replacementModel,
         routeInfo,
-      },
+      }),
     });
 
     // Track the retry result in a local variable so we can use it after the try/catch
@@ -4848,32 +5262,40 @@ export function DebateProvider({ children }) {
             defaultTtlMs: RESPONSE_CACHE_TTL_MS,
           })
           : null,
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex,
+            model: retryModel,
+            status: 'streaming',
+            error: null,
+            errorKind: null,
+            retryProgress,
+            routeInfo,
+          });
+        },
         onChunk: (_delta, accumulated) => {
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              streamIndex,
-              content: accumulated,
-              status: 'streaming',
-              error: null,
-              routeInfo,
-            },
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex,
+            model: retryModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
+            errorKind: null,
+            routeInfo,
           });
         },
         onReasoning: (accumulatedReasoning) => {
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: convId,
-              roundIndex,
-              streamIndex,
-              status: 'streaming',
-              error: null,
-              reasoning: accumulatedReasoning,
-              routeInfo,
-            },
+          dispatchTurnAction('UPDATE_ROUND_STREAM', {
+            roundIndex,
+            streamIndex,
+            model: retryModel,
+            status: 'streaming',
+            error: null,
+            errorKind: null,
+            reasoning: accumulatedReasoning,
+            routeInfo,
           });
         },
       });
@@ -4898,63 +5320,105 @@ export function DebateProvider({ children }) {
           strictBlocked: true,
           strictError: message,
         };
-        dispatch({
-          type: 'UPDATE_ROUND_STREAM',
-          payload: {
-            conversationId: convId,
+        const fallbackState = !replacementModel
+          ? buildPreviousResponseFallback(previousStream, {
+            model: retryModel,
+            error: message,
+            errorKind: 'strict_blocked',
+            searchEvidence: blockedEvidence,
+            routeInfo,
+          })
+          : null;
+        dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
+          ? {
             roundIndex,
             streamIndex,
+            ...fallbackState,
+            model: retryModel,
+          }
+          : {
+            roundIndex,
+            streamIndex,
+            model: retryModel,
             content: '',
             status: 'error',
             error: message,
+            errorKind: 'strict_blocked',
+            outcome: null,
             usage,
             durationMs,
             reasoning: reasoning || null,
             cacheHit: Boolean(fromCache),
             searchEvidence: blockedEvidence,
+            retryProgress: null,
             routeInfo,
-          },
-        });
-        retryResult = { content: '', succeeded: false };
+          });
+        retryResult = {
+          content: fallbackState?.content || '',
+          succeeded: Boolean(fallbackState),
+          model: retryModel,
+        };
       } else {
-        dispatch({
-          type: 'UPDATE_ROUND_STREAM',
-          payload: {
-            conversationId: convId,
-            roundIndex,
-            streamIndex,
-            content,
-            status: 'complete',
-            error: null,
-            usage,
-            durationMs,
-            reasoning: reasoning || null,
-            cacheHit: Boolean(fromCache),
-            searchEvidence,
-            routeInfo,
-          },
+        dispatchTurnAction('UPDATE_ROUND_STREAM', {
+          roundIndex,
+          streamIndex,
+          model: retryModel,
+          content,
+          status: 'complete',
+          error: null,
+          errorKind: null,
+          outcome: 'success',
+          usage,
+          durationMs,
+          completedAt: Date.now(),
+          reasoning: reasoning || null,
+          cacheHit: Boolean(fromCache),
+          searchEvidence,
+          retryProgress: null,
+          routeInfo,
         });
-        retryResult = { content, succeeded: true };
+        retryResult = { content, succeeded: true, model: retryModel };
       }
     } catch (err) {
       if (abortController.signal.aborted) {
         dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
         return;
       }
-      dispatch({
-        type: 'UPDATE_ROUND_STREAM',
-        payload: {
-          conversationId: convId,
+      const diagnostic = routeInfo?.reason && !routeInfo?.routed
+        ? `${err.message || 'An error occurred'} (${routeInfo.reason})`
+        : (err.message || 'An error occurred');
+      const fallbackState = !replacementModel
+        ? buildPreviousResponseFallback(previousStream, {
+          model: retryModel,
+          error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
+          errorKind: 'failed',
+          routeInfo,
+        })
+        : null;
+      dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
+        ? {
           roundIndex,
           streamIndex,
+          ...fallbackState,
+          model: retryModel,
+        }
+        : {
+          roundIndex,
+          streamIndex,
+          model: retryModel,
           content: '',
           status: 'error',
-          error: routeInfo?.reason && !routeInfo?.routed
-            ? `${err.message || 'An error occurred'} (${routeInfo.reason})`
-            : (err.message || 'An error occurred'),
+          error: diagnostic,
+          errorKind: 'failed',
+          outcome: null,
+          retryProgress: null,
           routeInfo,
-        },
-      });
+        });
+      retryResult = {
+        content: fallbackState?.content || '',
+        succeeded: Boolean(fallbackState),
+        model: retryModel,
+      };
     }
 
     if (abortController.signal.aborted) {
@@ -4967,40 +5431,41 @@ export function DebateProvider({ children }) {
       .filter((s, i) => i !== streamIndex && s.content && s.status === 'complete')
       .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
     if (retryResult.succeeded) {
-      lastCompletedStreams.push({ model: targetModel, content: retryResult.content, status: 'complete' });
+      lastCompletedStreams.push({ model: retryResult.model || retryModel, content: retryResult.content, status: 'complete' });
     }
 
     // Parallel mode keeps a single response round with no synthesis/debate continuation.
     if (lastTurn.mode === 'parallel') {
-      dispatch({
-        type: 'UPDATE_ROUND_STATUS',
-        payload: {
-          conversationId: convId,
-          roundIndex,
-          status: lastCompletedStreams.length > 0 ? 'complete' : 'error',
-        },
+      dispatchTurnAction('UPDATE_ROUND_STATUS', {
+        roundIndex,
+        status: lastCompletedStreams.length > 0 ? 'complete' : 'error',
       });
-      dispatch({
-        type: 'SET_DEBATE_METADATA',
-        payload: {
-          conversationId: convId,
-          metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
-        },
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
     if (lastCompletedStreams.length === 0) {
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'error' });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: lastTurn.synthesis?.content || '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
+    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'complete' });
+
     // === ENSEMBLE (direct mode) stream retry: re-run vote + synthesis ===
     if (lastTurn.mode === 'direct') {
       await runEnsembleAnalysisAndSynthesis({
-        convId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
+        convId, turnId, runId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
         synthModel, convergenceModel, apiKey, abortController, focused: turnFocused, forceRefresh,
       });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
@@ -5016,9 +5481,9 @@ export function DebateProvider({ children }) {
 
     // Convergence check on the current round (if applicable)
     if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
-      dispatch({
-        type: 'SET_CONVERGENCE',
-        payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } },
+      dispatchTurnAction('SET_CONVERGENCE', {
+        roundIndex: currentRoundIndex,
+        convergenceCheck: { converged: null, reason: 'Checking...' },
       });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
@@ -5027,12 +5492,12 @@ export function DebateProvider({ children }) {
         parsed.rawResponse = cResponse;
         parsed.usage = cUsage || null;
         currentRoundConvergence = parsed;
-        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
         if (parsed.converged) { converged = true; terminationReason = 'converged'; }
       } catch (err) {
         if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
         currentRoundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-        dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence } });
+        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence });
       }
     }
 
@@ -5056,8 +5521,8 @@ export function DebateProvider({ children }) {
         currentRoundIndex = roundNum - 1;
         let roundConvergence = null;
 
-        dispatch({ type: 'ADD_ROUND', payload: { conversationId: convId, round } });
-        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'streaming' } });
+        dispatchTurnAction('ADD_ROUND', { round });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'streaming' });
 
         const messagesPerModel = models.map(() =>
           buildRebuttalMessages({
@@ -5083,6 +5548,8 @@ export function DebateProvider({ children }) {
           models,
           messagesPerModel,
           convId,
+          turnId,
+          runId,
           roundIndex: currentRoundIndex,
           apiKey,
           signal: abortController.signal,
@@ -5094,7 +5561,7 @@ export function DebateProvider({ children }) {
 
         const completedStreams = results.filter(r => r.content && !r.error);
         if (completedStreams.length === 0) {
-          dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'error' } });
+          dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'error' });
           terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
         }
 
@@ -5104,19 +5571,31 @@ export function DebateProvider({ children }) {
               const prev = lastCompletedStreams.find(s => s.model === result.model);
               if (prev) {
                 result.content = prev.content;
-                dispatch({ type: 'UPDATE_ROUND_STREAM', payload: { conversationId: convId, roundIndex: currentRoundIndex, streamIndex: result.index, content: prev.content, status: 'complete', error: 'Failed this round - showing previous response' } });
+                dispatchTurnAction('UPDATE_ROUND_STREAM', {
+                  roundIndex: currentRoundIndex,
+                  streamIndex: result.index,
+                  content: prev.content,
+                  status: 'complete',
+                  error: 'Failed this round - showing previous response',
+                  errorKind: result.errorKind || 'failed',
+                  outcome: 'using_previous_response',
+                  retryProgress: null,
+                });
               }
             }
           }
         }
 
         lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
-        dispatch({ type: 'UPDATE_ROUND_STATUS', payload: { conversationId: convId, roundIndex: currentRoundIndex, status: 'complete' } });
+        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'complete' });
         totalRounds = roundNum;
 
         if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
           if (abortController.signal.aborted) break;
-          dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: { converged: null, reason: 'Checking...' } } });
+          dispatchTurnAction('SET_CONVERGENCE', {
+            roundIndex: currentRoundIndex,
+            convergenceCheck: { converged: null, reason: 'Checking...' },
+          });
           try {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
             const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
@@ -5124,7 +5603,7 @@ export function DebateProvider({ children }) {
             parsed.rawResponse = cResponse;
             parsed.usage = cUsage || null;
             roundConvergence = parsed;
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: parsed } });
+            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
             if (parsed.converged) {
               converged = true;
               terminationReason = 'converged';
@@ -5142,7 +5621,7 @@ export function DebateProvider({ children }) {
           } catch (err) {
             if (abortController.signal.aborted) break;
             roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-            dispatch({ type: 'SET_CONVERGENCE', payload: { conversationId: convId, roundIndex: currentRoundIndex, convergenceCheck: roundConvergence } });
+            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: roundConvergence });
           }
         }
         const refreshDecision = getLaterRoundSearchRefreshDecision({
@@ -5159,6 +5638,8 @@ export function DebateProvider({ children }) {
           hasLaterRoundSearchRefresh = true;
           const refreshedContext = await runLegacyWebSearch({
             convId,
+            turnId,
+            runId,
             userPrompt,
             attachments,
             videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
@@ -5185,21 +5666,37 @@ export function DebateProvider({ children }) {
     }
 
     if (abortController.signal.aborted) {
-      dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged: false, terminationReason: 'cancelled' } } });
+      dispatchTurnAction('SET_DEBATE_METADATA', {
+        metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({ type: 'SET_DEBATE_METADATA', payload: { conversationId: convId, metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' } } });
+    dispatchTurnAction('SET_DEBATE_METADATA', {
+      metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' },
+    });
 
     // Synthesis
     if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: 'All models failed. Cannot synthesize.' } });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: lastTurn.synthesis?.content || '',
+        status: 'error',
+        error: 'All models failed. Cannot synthesize.',
+        retryProgress: null,
+      });
       dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
       return;
     }
 
-    dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'streaming', error: null } });
+    dispatchTurnAction('UPDATE_SYNTHESIS', {
+      model: synthModel,
+      content: lastTurn.synthesis?.content || '',
+      status: 'streaming',
+      error: null,
+      retryProgress: null,
+    });
     const finalRoundSummary = {
       label: `Final positions after ${totalRounds} round(s)`,
       streams: lastCompletedStreams,
@@ -5219,19 +5716,85 @@ export function DebateProvider({ children }) {
       const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
         model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
         forceRefresh,
+        onRetryProgress: (retryProgress) => {
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: lastTurn.synthesis?.content || '',
+            status: 'streaming',
+            error: null,
+            retryProgress,
+          });
+        },
         onChunk: (_delta, accumulated) => {
-          dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: accumulated, status: 'streaming', error: null } });
+          dispatchTurnAction('UPDATE_SYNTHESIS', {
+            model: synthModel,
+            content: accumulated,
+            status: 'streaming',
+            error: null,
+          });
         },
       });
-      dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: synthesisContent, status: 'complete', error: null, usage: synthesisUsage, durationMs: synthesisDurationMs } });
+      dispatchTurnAction('UPDATE_SYNTHESIS', {
+        model: synthModel,
+        content: synthesisContent,
+        status: 'complete',
+        error: null,
+        usage: synthesisUsage,
+        durationMs: synthesisDurationMs,
+        retryProgress: null,
+      });
     } catch (err) {
       if (!abortController.signal.aborted) {
-        dispatch({ type: 'UPDATE_SYNTHESIS', payload: { conversationId: convId, model: synthModel, content: '', status: 'error', error: err.message } });
+        dispatchTurnAction('UPDATE_SYNTHESIS', {
+          model: synthModel,
+          content: lastTurn.synthesis?.content || '',
+          status: 'error',
+          error: err.message,
+          retryProgress: null,
+        });
       }
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
   }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, buildNativeWebSearchStrategy, setAbortController]);
+
+  const suggestReplacementModel = useCallback((roundIndex, streamIndex) => {
+    if (!activeConversation || activeConversation.turns.length === 0) return null;
+    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    const round = Array.isArray(lastTurn.rounds) ? lastTurn.rounds[roundIndex] : null;
+    const stream = round?.streams?.[streamIndex];
+    if (!stream?.model) return null;
+
+    return selectReplacementModel({
+      currentModel: stream.model,
+      roundModels: (round.streams || []).map((item) => item.model),
+      modelCatalog: state.modelCatalog,
+      metrics: state.metrics,
+      rankingMode: state.smartRankingMode,
+      rankingPreferences: {
+        preferFlagship: state.smartRankingPreferFlagship,
+        preferNew: state.smartRankingPreferNew,
+        allowPreview: state.smartRankingAllowPreview,
+      },
+    });
+  }, [
+    activeConversation,
+    state.modelCatalog,
+    state.metrics,
+    state.smartRankingMode,
+    state.smartRankingPreferFlagship,
+    state.smartRankingPreferNew,
+    state.smartRankingAllowPreview,
+  ]);
+
+  const replaceStreamModel = useCallback((roundIndex, streamIndex, options = {}) => {
+    const replacementModel = options.replacementModel || suggestReplacementModel(roundIndex, streamIndex);
+    if (!replacementModel) return;
+    retryStream(roundIndex, streamIndex, {
+      ...options,
+      replacementModel,
+    });
+  }, [retryStream, suggestReplacementModel]);
 
   const settingsValue = useMemo(() => ({
     apiKey: state.apiKey,
@@ -5341,6 +5904,8 @@ export function DebateProvider({ children }) {
     retryAllFailed,
     retryWebSearch,
     retryStream,
+    replaceStreamModel,
+    suggestReplacementModel,
     retryRound,
     retrySynthesis,
     branchFromRound,
@@ -5357,6 +5922,8 @@ export function DebateProvider({ children }) {
     retryAllFailed,
     retryWebSearch,
     retryStream,
+    replaceStreamModel,
+    suggestReplacementModel,
     retryRound,
     retrySynthesis,
     branchFromRound,

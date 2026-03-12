@@ -5,8 +5,11 @@ import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ConvergencePanel from './ConvergencePanel';
 import ExpandButton from './ExpandButton';
+import ReplaceModelButton from './ReplaceModelButton';
 import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
+import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
+import { getRetryScopeDescription, getStreamDisplayState } from '../lib/retryState';
 import {
   formatTokenCount,
   formatDuration,
@@ -16,18 +19,23 @@ import {
 } from '../lib/formatTokens';
 import './DebateThread.css';
 
-function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry }) {
+function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry, turnMode, totalRounds, roundModels = [] }) {
   const { retryStream } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
+  const previewPointerRef = useRef(null);
   const { model, content, status, error, usage, durationMs, reasoning, searchEvidence, routeInfo, cacheHit } = stream;
   const canRetry = allowRetry && isLastTurn && !debateInProgress && status !== 'streaming';
+  const displayState = getStreamDisplayState(stream);
+  const canExpandViewer = !viewerOpen && Boolean(content) && status !== 'pending';
 
   const color = getModelColor(model);
   const displayName = getModelDisplayName(model);
   const provider = getProviderName(model);
+  const canReplace = canRetry
+    && (displayState.tone === 'warning' || displayState.tone === 'error' || Boolean(error));
   const searchEvidenceClass = searchEvidence?.verified
     ? 'verified'
     : searchEvidence?.strictBlocked
@@ -53,12 +61,28 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
+  const retryScopeTitle = getRetryScopeDescription({
+    scope: 'stream',
+    mode: turnMode,
+    roundNumber,
+    totalRounds,
+    modelName: displayName,
+  });
+  const showRetryScope = canRetry && (displayState.tone === 'warning' || displayState.tone === 'error');
 
   useEffect(() => {
     if (status === 'streaming' && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
   }, [content, status]);
+
+  const handlePreviewClick = (event) => {
+    if (!canExpandViewer || !shouldExpandPreviewFromClick(event, previewPointerRef)) {
+      return;
+    }
+
+    setViewerOpen(true);
+  };
 
   const message = (
     <div
@@ -74,7 +98,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           <span className="thread-message-model">{displayName}</span>
           <span className="thread-message-round">R{roundNumber}</span>
           {status === 'streaming' && <Loader2 size={12} className="spinning" />}
-          {!viewerOpen && (status === 'streaming' || status === 'complete') && content && (
+          {canExpandViewer && (
             <ExpandButton onClick={() => setViewerOpen(true)} />
           )}
           {status === 'complete' && content && (
@@ -84,10 +108,25 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
             <button
               className="thread-message-retry"
               onClick={(e) => retryStream(roundIndex, streamIndex, { forceRefresh: e.shiftKey })}
-              title="Retry this model (Shift: bypass cache)"
+              title={`${retryScopeTitle} Shift bypasses cache.`}
             >
               <RotateCcw size={12} />
             </button>
+          )}
+          {canReplace && (
+            <ReplaceModelButton
+              className="thread-message-replace"
+              currentModel={model}
+              roundModels={roundModels}
+              roundIndex={roundIndex}
+              streamIndex={streamIndex}
+              roundNumber={roundNumber}
+              totalRounds={totalRounds}
+              turnMode={turnMode}
+              title={`Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`}
+            >
+              Replace
+            </ReplaceModelButton>
           )}
           {status === 'complete' && (usage || durationMs) && (
             <span className="thread-message-stats">
@@ -122,6 +161,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
               Cache hit
             </span>
           )}
+          <span className={`thread-message-status ${displayState.tone}`}>{displayState.label}</span>
         </div>
 
         {searchEvidence?.fallbackApplied && searchEvidence.fallbackReason && (
@@ -133,6 +173,12 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
         {routeInfo?.reason && (
           <div className={`thread-route-meta ${routeClass}`}>
             {routeInfo.reason}
+          </div>
+        )}
+
+        {showRetryScope && (
+          <div className={`thread-message-retry-scope ${displayState.tone}`}>
+            {retryScopeTitle}
           </div>
         )}
 
@@ -155,22 +201,31 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
               )}
             </div>
         {reasoningOpen && (
-              <div className="thread-reasoning-text markdown-content scroll-preview">
+              <div
+                className="thread-reasoning-text markdown-content scroll-preview"
+                onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+                onClick={handlePreviewClick}
+              >
                 <MarkdownRenderer>{reasoning}</MarkdownRenderer>
               </div>
             )}
           </div>
         )}
 
-        {status === 'error' && (
-          <div className="thread-message-error">
+        {error && (
+          <div className={`thread-message-error ${displayState.tone}`}>
             <AlertCircle size={14} />
-            <span>{error || 'An error occurred'}</span>
+            <span>{error}</span>
           </div>
         )}
 
-        {(status === 'streaming' || status === 'complete') && content && (
-          <div className="thread-message-content markdown-content scroll-preview" ref={contentRef}>
+        {content && status !== 'pending' && (
+          <div
+            className="thread-message-content markdown-content scroll-preview"
+            ref={contentRef}
+            onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
+            onClick={handlePreviewClick}
+          >
             <MarkdownRenderer>{content}</MarkdownRenderer>
             {status === 'streaming' && <span className="cursor-blink" />}
           </div>
@@ -192,7 +247,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   ) : message;
 }
 
-function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
+function DebateThread({ rounds, isLastTurn = false, allowRetry = true, turnMode = 'debate', totalRounds = 1 }) {
   if (!rounds || rounds.length === 0) return null;
 
   return (
@@ -212,6 +267,9 @@ function DebateThread({ rounds, isLastTurn = false, allowRetry = true }) {
                 streamIndex={streamIndex}
                 isLastTurn={isLastTurn}
                 allowRetry={allowRetry}
+                turnMode={turnMode}
+                totalRounds={totalRounds}
+                roundModels={(round.streams || []).map((item) => item.model)}
               />
             ))}
           </div>

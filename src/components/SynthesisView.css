@@ -147,6 +147,13 @@
   background: rgba(168, 85, 247, 0.1);
 }
 
+.synthesis-retry-scope {
+  padding: 0 var(--space-lg) var(--space-sm);
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(168, 85, 247, 0.08);
+}
+
 .synthesis-timestamp {
   font-size: 11px;
   color: var(--text-muted);
@@ -340,6 +347,10 @@
   background: var(--status-error, #ef4444);
 }
 
+.internals-round-dot.warning {
+  background: #f59e0b;
+}
+
 .internals-round-dot.streaming {
   background: var(--accent-blue, #4f8ff7);
 }
@@ -381,6 +392,10 @@
 
 .internals-stream-status.error {
   color: var(--status-error, #ef4444);
+}
+
+.internals-stream-status.warning {
+  color: #f59e0b;
 }
 
 .internals-stream-model {
@@ -460,6 +475,7 @@
 
 @media (max-width: 720px) {
   .synthesis-header,
+  .synthesis-retry-scope,
   .synthesis-content,
   .synthesis-citations,
   .debate-internals-header,

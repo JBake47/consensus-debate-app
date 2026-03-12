@@ -7,15 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-03-12
+
 ### Added
 - Shared model-stats helpers plus Settings hover cards/tooltips so selected debate, synthesizer, convergence, and web-search models expose catalog metadata inline
+- Manual replacement-model chooser for failed or warning responses, with ranked candidates, search, duplicate-in-round warnings, and a cache-bypass toggle
+- Retry-state test coverage for warning/refresh states, retry progress labels, and replacement candidate ordering
 
 ### Changed
 - Response viewer overlays now render inside the chat window shell, with a shared centered content width across fullscreen response, thread, model, search, and synthesis panels
 - Model picker stat rendering now reuses the shared model-stats formatting pipeline instead of maintaining a separate copy
+- Recovery actions now use explicit replacement selection instead of auto-picking a backup model, while still surfacing recommended candidates first
 
 ### Fixed
 - Web search now defaults to enabled for first-time sessions and persists the user's last toggle state across reloads
+- Retry, repair-round, and synthesis refresh flows now preserve visible content, derive correct warning/error states, and keep downstream rebuild scope clear in the UI
+- Older rounds that still need attention remain visible under virtualization instead of being compacted away
 
 ## [0.3.21] - 2026-03-11
 

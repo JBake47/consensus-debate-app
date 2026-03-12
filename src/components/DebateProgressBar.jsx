@@ -1,4 +1,5 @@
-import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { deriveRoundStatusFromStreams } from '../lib/retryState';
 import './DebateProgressBar.css';
 
 function getConfidenceColor(score) {
@@ -20,23 +21,26 @@ export default function DebateProgressBar({ rounds, debateMetadata }) {
       <div className="progress-track-scroll">
         <div className="progress-track">
           {rounds.map((round, i) => {
-            const isComplete = round.status === 'complete';
-            const isActive = round.status === 'streaming';
-            const isError = round.status === 'error';
+            const roundStatus = deriveRoundStatusFromStreams(round.streams || [], round.status || 'pending');
+            const isComplete = roundStatus === 'complete';
+            const isActive = roundStatus === 'streaming';
+            const isWarning = roundStatus === 'warning';
+            const isError = roundStatus === 'error';
             const confidence = round.convergenceCheck?.confidence;
 
             return (
               <div key={i} className="progress-step-wrapper">
                 {i > 0 && (
-                  <div className={`progress-connector ${isComplete || isActive ? 'active' : ''}`} />
+                  <div className={`progress-connector ${isComplete || isActive || isWarning ? 'active' : ''}`} />
                 )}
                 <div
-                  className={`progress-step ${isComplete ? 'complete' : ''} ${isActive ? 'active' : ''} ${isError ? 'error' : ''}`}
+                  className={`progress-step ${isComplete ? 'complete' : ''} ${isActive ? 'active' : ''} ${isWarning ? 'warning' : ''} ${isError ? 'error' : ''}`}
                   title={`${round.label}${confidence != null ? ` - ${confidence}% confidence` : ''}`}
                 >
                   {isComplete && <CheckCircle2 size={14} />}
                   {isActive && <Loader2 size={14} className="spinning" />}
-                  {!isComplete && !isActive && <Circle size={14} />}
+                  {isWarning && <AlertCircle size={14} />}
+                  {!isComplete && !isActive && !isWarning && <Circle size={14} />}
                 </div>
                 <span className="progress-step-label">{round.label}</span>
                 {confidence != null && (

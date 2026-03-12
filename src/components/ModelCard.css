@@ -35,6 +35,11 @@
   box-shadow: 0 0 16px color-mix(in srgb, var(--card-accent) 15%, transparent);
 }
 
+.model-card.warning {
+  border-left-color: #f59e0b;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.08);
+}
+
 .model-card-header {
   display: flex;
   align-items: center;
@@ -124,6 +129,23 @@
   opacity: 0;
 }
 
+.model-card-replace {
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.model-card-replace:hover {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
 .model-card:hover .model-card-retry,
 .model-card:hover .copy-btn {
   opacity: 1;
@@ -189,6 +211,11 @@
 .model-card-status.error {
   color: var(--status-error);
   background: rgba(239, 68, 68, 0.1);
+}
+
+.model-card-status.warning {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
 }
 
 .model-card-search-pill {
@@ -287,6 +314,22 @@
 
 .model-card-route-meta.routed {
   color: var(--accent-blue);
+}
+
+.model-card-retry-scope {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.model-card-retry-scope.warning {
+  color: #fbbf24;
+}
+
+.model-card-error.warning {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.18);
 }
 
 .model-card-route-meta.blocked {
