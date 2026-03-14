@@ -50,6 +50,7 @@ import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_K
 import {
   createRunId,
   deriveRoundStatusFromStreams,
+  getRoundRepairStreamIndices,
   selectReplacementModel,
 } from '../lib/retryState';
 
@@ -525,6 +526,12 @@ function buildScopedTurnPayload({ conversationId, turnId, runId, ...payload }) {
 function getFailureCount(stream) {
   const parsed = Number(stream?.failureCount);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+}
+
+function getReplacementModelForStream(replacementModels, streamIndex) {
+  if (!replacementModels || typeof replacementModels !== 'object') return null;
+  const candidate = replacementModels[streamIndex];
+  return typeof candidate === 'string' && candidate ? candidate : null;
 }
 
 function buildStreamRefreshState(previousStream, model, options = {}) {
@@ -2301,6 +2308,7 @@ export function DebateProvider({ children }) {
         dispatchTurnAction('UPDATE_ROUND_STREAM', {
           roundIndex,
           streamIndex: index,
+          model,
           content: '',
           status: 'streaming',
           error: null,
@@ -2374,6 +2382,7 @@ export function DebateProvider({ children }) {
           dispatchTurnAction('UPDATE_ROUND_STREAM', {
             roundIndex,
             streamIndex: index,
+            model,
             content,
             status: 'complete',
             error: null,
@@ -2414,6 +2423,7 @@ export function DebateProvider({ children }) {
             dispatchTurnAction('UPDATE_ROUND_STREAM', {
               roundIndex,
               streamIndex: index,
+              model,
               content: '',
               status: 'error',
               error: 'Cancelled',
@@ -2432,6 +2442,7 @@ export function DebateProvider({ children }) {
           dispatchTurnAction('UPDATE_ROUND_STREAM', {
             roundIndex,
             streamIndex: index,
+            model,
             content: '',
             status: 'error',
             error: diagnostic,
@@ -4059,6 +4070,10 @@ export function DebateProvider({ children }) {
     const retryErroredCompleted = Boolean(options.retryErroredCompleted);
     const redoRound = Boolean(options.redoRound);
     const forceLegacyWebSearch = Boolean(options.forceLegacyWebSearch);
+    const preferredStreamIndices = Array.isArray(options.streamIndices) ? options.streamIndices : [];
+    const replacementModels = options.replacementModels && typeof options.replacementModels === 'object'
+      ? options.replacementModels
+      : null;
     const convId = activeConversation.id;
     const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
     if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
@@ -4066,7 +4081,9 @@ export function DebateProvider({ children }) {
     const userPrompt = lastTurn.userPrompt;
     const attachments = lastTurn.attachments;
     const targetRound = lastTurn.rounds[roundIndex];
-    const models = targetRound.streams.map(s => s.model);
+    const models = targetRound.streams.map((stream, index) => (
+      getReplacementModelForStream(replacementModels, index) || stream.model
+    ));
 
     const apiKey = state.apiKey;
     const synthModel = state.synthesizerModel;
@@ -4159,16 +4176,11 @@ export function DebateProvider({ children }) {
     }
 
     // Identify which streams need re-running (failed, stuck, or pending)
-    const failedIndices = [];
-    targetRound.streams.forEach((s, i) => {
-      if (redoRound) {
-        failedIndices.push(i);
-        return;
-      }
-      const shouldRetryCompletedError = retryErroredCompleted && Boolean(s.error);
-      if (s.status !== 'complete' || !s.content || shouldRetryCompletedError) {
-        failedIndices.push(i);
-      }
+    const failedIndices = getRoundRepairStreamIndices({
+      streams: targetRound.streams,
+      redoRound,
+      retryErroredCompleted,
+      preferredStreamIndices,
     });
 
     // === ENSEMBLE (direct mode) retry: re-run all streams then vote + synthesis ===
@@ -4595,6 +4607,7 @@ export function DebateProvider({ children }) {
     const retryResults = await Promise.allSettled(
       failedIndices.map(async (si) => {
         const model = models[si];
+        const replacementModel = getReplacementModelForStream(replacementModels, si);
         const previousStream = targetRound.streams[si];
         const route = resolveModelRoute(model, models);
         const effectiveModel = route.effectiveModel || model;
@@ -4630,7 +4643,7 @@ export function DebateProvider({ children }) {
           roundIndex,
           streamIndex: si,
           ...buildStreamRefreshState(previousStream, model, {
-            preserveContent: true,
+            preserveContent: !replacementModel,
             routeInfo,
           }),
         });
@@ -4698,22 +4711,26 @@ export function DebateProvider({ children }) {
               strictBlocked: true,
               strictError: message,
             };
-            const fallbackState = buildPreviousResponseFallback(previousStream, {
-              model,
-              error: message,
-              errorKind: 'strict_blocked',
-              searchEvidence: blockedEvidence,
-              routeInfo,
-            });
+            const fallbackState = replacementModel
+              ? null
+              : buildPreviousResponseFallback(previousStream, {
+                model,
+                error: message,
+                errorKind: 'strict_blocked',
+                searchEvidence: blockedEvidence,
+                routeInfo,
+              });
             dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
               ? {
                 roundIndex,
                 streamIndex: si,
                 ...fallbackState,
+                model,
               }
               : {
                 roundIndex,
                 streamIndex: si,
+                model,
                 content: '',
                 status: 'error',
                 error: message,
@@ -4743,6 +4760,7 @@ export function DebateProvider({ children }) {
           dispatchTurnAction('UPDATE_ROUND_STREAM', {
             roundIndex,
             streamIndex: si,
+            model,
             content,
             status: 'complete',
             error: null,
@@ -4772,21 +4790,25 @@ export function DebateProvider({ children }) {
           const diagnostic = routeInfo?.reason && !routeInfo?.routed
             ? `${errorMsg} (${routeInfo.reason})`
             : errorMsg;
-          const fallbackState = buildPreviousResponseFallback(previousStream, {
-            model,
-            error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
-            errorKind: 'failed',
-            routeInfo,
-          });
+          const fallbackState = replacementModel
+            ? null
+            : buildPreviousResponseFallback(previousStream, {
+              model,
+              error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
+              errorKind: 'failed',
+              routeInfo,
+            });
           dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
             ? {
               roundIndex,
               streamIndex: si,
               ...fallbackState,
+              model,
             }
             : {
               roundIndex,
               streamIndex: si,
+              model,
               content: '',
               status: 'error',
               error: diagnostic,
@@ -5167,655 +5189,18 @@ export function DebateProvider({ children }) {
     });
   }, [activeConversation, retryLastTurn, retryRound]);
 
-  const retryStream = useCallback(async (roundIndex, streamIndex, options = {}) => {
-    if (!activeConversation || activeConversation.turns.length === 0) return;
-    const forceRefresh = Boolean(options.forceRefresh);
+  const retryStream = useCallback((roundIndex, streamIndex, options = {}) => {
     const replacementModel = typeof options.replacementModel === 'string' && options.replacementModel
       ? options.replacementModel
       : null;
-    const convId = activeConversation.id;
-    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
-    if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
-
-    const userPrompt = lastTurn.userPrompt;
-    const attachments = lastTurn.attachments;
-    const targetRound = lastTurn.rounds[roundIndex];
-    const targetModel = targetRound.streams[streamIndex]?.model;
-    if (!targetModel) return;
-    const retryModel = replacementModel || targetModel;
-
-    const apiKey = state.apiKey;
-    const synthModel = state.synthesizerModel;
-    const convergenceModel = state.convergenceModel;
-    const maxRounds = state.maxDebateRounds;
-    const strictWebSearch = state.strictWebSearch;
-    const models = targetRound.streams.map((s, index) => (index === streamIndex ? retryModel : s.model));
-    const route = resolveModelRoute(retryModel, models);
-    const effectiveModel = route.effectiveModel || retryModel;
-    const routeInfo = route.routeInfo || null;
-    const turnFocused = typeof lastTurn.focusedMode === 'boolean'
-      ? lastTurn.focusedMode
-      : state.focusedMode;
-    const turnId = lastTurn.id;
-    const runId = createRunId();
-    const turnScope = { conversationId: convId, turnId, runId };
-    const dispatchTurnAction = (type, payload = {}) => dispatchTurnScoped(turnScope, type, payload);
-    const previousStream = targetRound.streams[streamIndex];
-
-    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
-    dispatch({ type: 'SET_TURN_RUN_STATE', payload: { conversationId: convId, turnId, runId } });
-    dispatchTurnAction('TRUNCATE_ROUNDS', { keepCount: roundIndex + 1 });
-    dispatchTurnAction('RESET_SYNTHESIS', { model: synthModel, preserveContent: true });
-    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'streaming' });
-
-    const abortController = new AbortController();
-    setAbortController(convId, abortController);
-
-    // Build conversation context (excluding current turn)
-    const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
-    const { messages: contextMessages } = buildConversationContext({
-      conversation: convForContext,
-      runningSummary: activeConversation.runningSummary || null,
+    retryRound(roundIndex, {
+      ...options,
+      forceRefresh: Boolean(options.forceRefresh),
+      retryErroredCompleted: true,
+      streamIndices: [streamIndex],
+      replacementModels: replacementModel ? { [streamIndex]: replacementModel } : undefined,
     });
-    const conversationHistory = contextMessages;
-
-    // Build web search context if present
-    const webSearchResult = lastTurn.webSearchResult;
-    let webSearchCtx = webSearchResult?.status === 'complete' ? webSearchResult.content : '';
-    const wsModel = webSearchResult?.model || '';
-    const fallbackSearchModel = wsModel || state.webSearchModel;
-    const nativeSearchStrategy = buildNativeWebSearchStrategy({
-      models,
-      webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
-      fallbackSearchModel,
-    });
-    const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
-    const hasExistingLaterRoundRefresh = didUseLaterRoundSearchRefresh(lastTurn.rounds);
-    let laterRoundSearchRefreshesUsed = hasExistingLaterRoundRefresh
-      ? MAX_LATER_ROUND_SEARCH_REFRESHES
-      : 0;
-    let hasLaterRoundSearchRefresh = hasExistingLaterRoundRefresh;
-    if (roundIndex === 0 && nativeSearchStrategy.needsLegacyPreflight) {
-      webSearchCtx = await runLegacyWebSearch({
-        convId,
-        turnId,
-        runId,
-        userPrompt,
-        attachments,
-        videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
-        webSearchModel: fallbackSearchModel,
-        apiKey,
-        signal: abortController.signal,
-      });
-      if (abortController.signal.aborted) {
-        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-        return;
-      }
-    }
-    const useNativeWebSearch = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && !webSearchCtx
-      ? (typeof nativeSearchStrategy.nativeWebSearch === 'function'
-        ? Boolean(nativeSearchStrategy.nativeWebSearch(retryModel))
-        : Boolean(nativeSearchStrategy.nativeWebSearch))
-      : false;
-    const userMessageContent = formatWebSearchPrompt(userPrompt, webSearchCtx, wsModel, {
-      requireEvidence: Boolean(lastTurn.webSearchEnabled),
-      strictMode: strictWebSearch,
-    });
-    const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
-      ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
-      : [];
-    const initialMessages = buildInitialMessagesForModels({
-      models: [retryModel],
-      systemMessages: focusedSystemMsg,
-      conversationHistory,
-      userMessageContent,
-      attachments,
-      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
-    })[0];
-
-    // Build messages for this specific model in this round
-    let modelMessages;
-    if (roundIndex === 0) {
-      modelMessages = initialMessages;
-    } else {
-      const prevRound = lastTurn.rounds[roundIndex - 1];
-      const previousRoundStreams = prevRound.streams
-        .filter(s => s.content && s.status === 'complete')
-        .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
-      modelMessages = buildRebuttalMessages({
-        userPrompt,
-        previousRoundStreams,
-        roundNumber: roundIndex + 1,
-        conversationHistory,
-        focused: turnFocused,
-        webSearchContext: webSearchCtx,
-        webSearchModel: fallbackSearchModel,
-      });
-    }
-
-    // Reset and re-stream the target model
-    dispatchTurnAction('UPDATE_ROUND_STREAM', {
-      roundIndex,
-      streamIndex,
-      ...buildStreamRefreshState(previousStream, retryModel, {
-        preserveContent: !replacementModel,
-        routeInfo,
-      }),
-    });
-
-    // Track the retry result in a local variable so we can use it after the try/catch
-    let retryResult = { content: '', succeeded: false };
-
-    try {
-      const { content, reasoning, usage, durationMs, fromCache, searchMetadata } = await runStreamWithFallback({
-        model: effectiveModel,
-        messages: modelMessages,
-        apiKey,
-        signal: abortController.signal,
-        nativeWebSearch: roundIndex === 0 && useNativeWebSearch,
-        forceRefresh,
-        cachePolicy: roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
-          ? getSearchResponseCachePolicy({
-            prompt: userPrompt,
-            searchEnabled: true,
-            defaultTtlMs: RESPONSE_CACHE_TTL_MS,
-          })
-          : null,
-        onRetryProgress: (retryProgress) => {
-          dispatchTurnAction('UPDATE_ROUND_STREAM', {
-            roundIndex,
-            streamIndex,
-            model: retryModel,
-            status: 'streaming',
-            error: null,
-            errorKind: null,
-            retryProgress,
-            routeInfo,
-          });
-        },
-        onChunk: (_delta, accumulated) => {
-          dispatchTurnAction('UPDATE_ROUND_STREAM', {
-            roundIndex,
-            streamIndex,
-            model: retryModel,
-            content: accumulated,
-            status: 'streaming',
-            error: null,
-            errorKind: null,
-            routeInfo,
-          });
-        },
-        onReasoning: (accumulatedReasoning) => {
-          dispatchTurnAction('UPDATE_ROUND_STREAM', {
-            roundIndex,
-            streamIndex,
-            model: retryModel,
-            status: 'streaming',
-            error: null,
-            errorKind: null,
-            reasoning: accumulatedReasoning,
-            routeInfo,
-          });
-        },
-      });
-      const searchEvidence = roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
-        ? buildSearchEvidence({
-          prompt: userPrompt,
-          content,
-          searchMetadata,
-          strictMode: strictWebSearch,
-          mode: webSearchCtx ? 'legacy_context' : (useNativeWebSearch ? 'native' : 'native_skipped'),
-          fallbackApplied: Boolean(webSearchCtx && nativeSearchStrategy.fallbackReason),
-          fallbackReason: webSearchCtx ? nativeSearchStrategy.fallbackReason : null,
-        })
-        : undefined;
-
-      if (roundIndex === 0 && Boolean(lastTurn.webSearchEnabled) && strictWebSearch && searchEvidence && !searchEvidence.verified) {
-        const message = searchEvidence.primaryIssue
-          ? `Strict web-search mode blocked this response: ${searchEvidence.primaryIssue}`
-          : 'Strict web-search mode blocked this response: unable to verify web evidence.';
-        const blockedEvidence = {
-          ...searchEvidence,
-          strictBlocked: true,
-          strictError: message,
-        };
-        const fallbackState = !replacementModel
-          ? buildPreviousResponseFallback(previousStream, {
-            model: retryModel,
-            error: message,
-            errorKind: 'strict_blocked',
-            searchEvidence: blockedEvidence,
-            routeInfo,
-          })
-          : null;
-        dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
-          ? {
-            roundIndex,
-            streamIndex,
-            ...fallbackState,
-            model: retryModel,
-          }
-          : {
-            roundIndex,
-            streamIndex,
-            model: retryModel,
-            content: '',
-            status: 'error',
-            error: message,
-            errorKind: 'strict_blocked',
-            outcome: null,
-            usage,
-            durationMs,
-            reasoning: reasoning || null,
-            cacheHit: Boolean(fromCache),
-            searchEvidence: blockedEvidence,
-            retryProgress: null,
-            routeInfo,
-          });
-        retryResult = {
-          content: fallbackState?.content || '',
-          succeeded: Boolean(fallbackState),
-          model: retryModel,
-        };
-      } else {
-        dispatchTurnAction('UPDATE_ROUND_STREAM', {
-          roundIndex,
-          streamIndex,
-          model: retryModel,
-          content,
-          status: 'complete',
-          error: null,
-          errorKind: null,
-          outcome: 'success',
-          usage,
-          durationMs,
-          completedAt: Date.now(),
-          reasoning: reasoning || null,
-          cacheHit: Boolean(fromCache),
-          searchEvidence,
-          retryProgress: null,
-          routeInfo,
-        });
-        retryResult = { content, succeeded: true, model: retryModel };
-      }
-    } catch (err) {
-      if (abortController.signal.aborted) {
-        dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-        return;
-      }
-      const diagnostic = routeInfo?.reason && !routeInfo?.routed
-        ? `${err.message || 'An error occurred'} (${routeInfo.reason})`
-        : (err.message || 'An error occurred');
-      const fallbackState = !replacementModel
-        ? buildPreviousResponseFallback(previousStream, {
-          model: retryModel,
-          error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
-          errorKind: 'failed',
-          routeInfo,
-        })
-        : null;
-      dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
-        ? {
-          roundIndex,
-          streamIndex,
-          ...fallbackState,
-          model: retryModel,
-        }
-        : {
-          roundIndex,
-          streamIndex,
-          model: retryModel,
-          content: '',
-          status: 'error',
-          error: diagnostic,
-          errorKind: 'failed',
-          outcome: null,
-          retryProgress: null,
-          routeInfo,
-        });
-      retryResult = {
-        content: fallbackState?.content || '',
-        succeeded: Boolean(fallbackState),
-        model: retryModel,
-      };
-    }
-
-    if (abortController.signal.aborted) {
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    // Build lastCompletedStreams: other streams from this round + our retry result
-    let lastCompletedStreams = targetRound.streams
-      .filter((s, i) => i !== streamIndex && s.content && s.status === 'complete')
-      .map(s => ({ model: s.model, content: s.content, status: 'complete' }));
-    if (retryResult.succeeded) {
-      lastCompletedStreams.push({ model: retryResult.model || retryModel, content: retryResult.content, status: 'complete' });
-    }
-
-    // Parallel mode keeps a single response round with no synthesis/debate continuation.
-    if (lastTurn.mode === 'parallel') {
-      dispatchTurnAction('UPDATE_ROUND_STATUS', {
-        roundIndex,
-        status: lastCompletedStreams.length > 0 ? 'complete' : 'error',
-      });
-      dispatchTurnAction('SET_DEBATE_METADATA', {
-        metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
-      });
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    if (lastCompletedStreams.length === 0) {
-      dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'error' });
-      dispatchTurnAction('UPDATE_SYNTHESIS', {
-        model: synthModel,
-        content: lastTurn.synthesis?.content || '',
-        status: 'error',
-        error: 'All models failed. Cannot synthesize.',
-        retryProgress: null,
-      });
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex, status: 'complete' });
-
-    // === ENSEMBLE (direct mode) stream retry: re-run vote + synthesis ===
-    if (lastTurn.mode === 'direct') {
-      await runEnsembleAnalysisAndSynthesis({
-        convId, turnId, runId, userPrompt, completedStreams: lastCompletedStreams, conversationHistory,
-        synthModel, convergenceModel, apiKey, abortController, focused: turnFocused, forceRefresh,
-      });
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    let currentRoundIndex = roundIndex;
-    let converged = false;
-    let terminationReason = null;
-    let totalRounds = roundIndex + 1;
-    const synthesisRounds = toSynthesisRounds(lastTurn.rounds, roundIndex);
-    let currentRoundConvergence = targetRound.convergenceCheck || null;
-
-    // Convergence check on the current round (if applicable)
-    if (shouldRunConvergenceCheck(totalRounds, maxRounds, runConvergenceOnFinalRound) && !abortController.signal.aborted) {
-      dispatchTurnAction('SET_CONVERGENCE', {
-        roundIndex: currentRoundIndex,
-        convergenceCheck: { converged: null, reason: 'Checking...' },
-      });
-      try {
-        const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-        const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
-        const parsed = parseConvergenceResponse(cResponse);
-        parsed.rawResponse = cResponse;
-        parsed.usage = cUsage || null;
-        currentRoundConvergence = parsed;
-        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
-        if (parsed.converged) { converged = true; terminationReason = 'converged'; }
-      } catch (err) {
-        if (abortController.signal.aborted) { dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false }); return; }
-        currentRoundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-        dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: currentRoundConvergence });
-      }
-    }
-
-    const currentRoundSummary = buildSynthesisRoundSummary({
-      label: targetRound.label || getRoundLabel(roundIndex + 1),
-      roundNumber: roundIndex + 1,
-      streams: lastCompletedStreams,
-      convergenceCheck: currentRoundConvergence,
-    });
-    if (currentRoundSummary) {
-      synthesisRounds.push(currentRoundSummary);
-    }
-
-    // Continue with additional rounds if not converged
-    if (!converged && !abortController.signal.aborted) {
-      for (let roundNum = totalRounds + 1; roundNum <= maxRounds; roundNum++) {
-        if (abortController.signal.aborted) break;
-
-        const roundLabel = getRoundLabel(roundNum);
-        const round = createRound({ roundNumber: roundNum, label: roundLabel, models });
-        currentRoundIndex = roundNum - 1;
-        let roundConvergence = null;
-
-        dispatchTurnAction('ADD_ROUND', { round });
-        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'streaming' });
-
-        const messagesPerModel = models.map(() =>
-          buildRebuttalMessages({
-            userPrompt,
-            previousRoundStreams: lastCompletedStreams,
-            roundNumber: roundNum,
-            conversationHistory,
-            focused: turnFocused,
-            webSearchContext: webSearchCtx,
-            webSearchModel: fallbackSearchModel,
-          })
-        );
-
-        const roundSearchVerification = Boolean(lastTurn.webSearchEnabled)
-          ? {
-            enabled: true,
-            prompt: userPrompt,
-            strictMode: false,
-            mode: hasLaterRoundSearchRefresh ? 'refresh_context' : (webSearchCtx ? 'legacy_context' : 'debate_rebuttal'),
-          }
-          : null;
-        const results = await runRound({
-          models,
-          messagesPerModel,
-          convId,
-          turnId,
-          runId,
-          roundIndex: currentRoundIndex,
-          apiKey,
-          signal: abortController.signal,
-          searchVerification: roundSearchVerification,
-          forceRefresh,
-        });
-
-        if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
-
-        const completedStreams = results.filter(r => r.content && !r.error);
-        if (completedStreams.length === 0) {
-          dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'error' });
-          terminationReason = 'all_models_failed'; totalRounds = roundNum; break;
-        }
-
-        if (completedStreams.length < models.length) {
-          for (const result of results) {
-            if (result.error && !result.content) {
-              const prev = lastCompletedStreams.find(s => s.model === result.model);
-              if (prev) {
-                result.content = prev.content;
-                dispatchTurnAction('UPDATE_ROUND_STREAM', {
-                  roundIndex: currentRoundIndex,
-                  streamIndex: result.index,
-                  content: prev.content,
-                  status: 'complete',
-                  error: 'Failed this round - showing previous response',
-                  errorKind: result.errorKind || 'failed',
-                  outcome: 'using_previous_response',
-                  retryProgress: null,
-                });
-              }
-            }
-          }
-        }
-
-        lastCompletedStreams = results.filter(r => r.content).map(r => ({ model: r.model, content: r.content, status: 'complete' }));
-        dispatchTurnAction('UPDATE_ROUND_STATUS', { roundIndex: currentRoundIndex, status: 'complete' });
-        totalRounds = roundNum;
-
-        if (shouldRunConvergenceCheck(roundNum, maxRounds, runConvergenceOnFinalRound)) {
-          if (abortController.signal.aborted) break;
-          dispatchTurnAction('SET_CONVERGENCE', {
-            roundIndex: currentRoundIndex,
-            convergenceCheck: { converged: null, reason: 'Checking...' },
-          });
-          try {
-            const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-            const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
-            const parsed = parseConvergenceResponse(cResponse);
-            parsed.rawResponse = cResponse;
-            parsed.usage = cUsage || null;
-            roundConvergence = parsed;
-            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: parsed });
-            if (parsed.converged) {
-              converged = true;
-              terminationReason = 'converged';
-              const convergedRoundSummary = buildSynthesisRoundSummary({
-                label: roundLabel,
-                roundNumber: roundNum,
-                streams: lastCompletedStreams,
-                convergenceCheck: roundConvergence,
-              });
-              if (convergedRoundSummary) {
-                synthesisRounds.push(convergedRoundSummary);
-              }
-              break;
-            }
-          } catch (err) {
-            if (abortController.signal.aborted) break;
-            roundConvergence = { converged: false, reason: 'Convergence check failed: ' + err.message };
-            dispatchTurnAction('SET_CONVERGENCE', { roundIndex: currentRoundIndex, convergenceCheck: roundConvergence });
-          }
-        }
-        const refreshDecision = getLaterRoundSearchRefreshDecision({
-          roundNum,
-          maxRounds,
-          webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
-          canUseLegacySearchFallback: canUseLaterRoundSearchFallback,
-          refreshesUsed: laterRoundSearchRefreshesUsed,
-          results,
-          convergenceCheck: roundConvergence,
-        });
-        if (refreshDecision.shouldRefresh) {
-          laterRoundSearchRefreshesUsed += 1;
-          hasLaterRoundSearchRefresh = true;
-          const refreshedContext = await runLegacyWebSearch({
-            convId,
-            turnId,
-            runId,
-            userPrompt,
-            attachments,
-            videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
-            webSearchModel: fallbackSearchModel,
-            apiKey,
-            signal: abortController.signal,
-          });
-          if (abortController.signal.aborted) { terminationReason = 'cancelled'; break; }
-          if (refreshedContext) {
-            webSearchCtx = refreshedContext;
-          }
-        }
-        const roundSummary = buildSynthesisRoundSummary({
-          label: roundLabel,
-          roundNumber: roundNum,
-          streams: lastCompletedStreams,
-          convergenceCheck: roundConvergence,
-        });
-        if (roundSummary) {
-          synthesisRounds.push(roundSummary);
-        }
-        if (roundNum === maxRounds && !converged) terminationReason = 'max_rounds_reached';
-      }
-    }
-
-    if (abortController.signal.aborted) {
-      dispatchTurnAction('SET_DEBATE_METADATA', {
-        metadata: { totalRounds, converged: false, terminationReason: 'cancelled' },
-      });
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    dispatchTurnAction('SET_DEBATE_METADATA', {
-      metadata: { totalRounds, converged, terminationReason: terminationReason || 'max_rounds_reached' },
-    });
-
-    // Synthesis
-    if (!lastCompletedStreams || lastCompletedStreams.length === 0) {
-      dispatchTurnAction('UPDATE_SYNTHESIS', {
-        model: synthModel,
-        content: lastTurn.synthesis?.content || '',
-        status: 'error',
-        error: 'All models failed. Cannot synthesize.',
-        retryProgress: null,
-      });
-      dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-      return;
-    }
-
-    dispatchTurnAction('UPDATE_SYNTHESIS', {
-      model: synthModel,
-      content: lastTurn.synthesis?.content || '',
-      status: 'streaming',
-      error: null,
-      retryProgress: null,
-    });
-    const finalRoundSummary = {
-      label: `Final positions after ${totalRounds} round(s)`,
-      streams: lastCompletedStreams,
-      convergenceCheck: converged ? { converged: true, reason: 'Models converged' } : null,
-    };
-    const roundsForSynthesis = synthesisRounds.length > 0
-      ? [...synthesisRounds, finalRoundSummary]
-      : [finalRoundSummary];
-
-    const synthesisMessages = buildMultiRoundSynthesisMessages({
-      userPrompt,
-      rounds: roundsForSynthesis,
-      conversationHistory,
-    });
-
-    try {
-      const { content: synthesisContent, usage: synthesisUsage, durationMs: synthesisDurationMs } = await runStreamWithFallback({
-        model: synthModel, messages: synthesisMessages, apiKey, signal: abortController.signal,
-        forceRefresh,
-        onRetryProgress: (retryProgress) => {
-          dispatchTurnAction('UPDATE_SYNTHESIS', {
-            model: synthModel,
-            content: lastTurn.synthesis?.content || '',
-            status: 'streaming',
-            error: null,
-            retryProgress,
-          });
-        },
-        onChunk: (_delta, accumulated) => {
-          dispatchTurnAction('UPDATE_SYNTHESIS', {
-            model: synthModel,
-            content: accumulated,
-            status: 'streaming',
-            error: null,
-          });
-        },
-      });
-      dispatchTurnAction('UPDATE_SYNTHESIS', {
-        model: synthModel,
-        content: synthesisContent,
-        status: 'complete',
-        error: null,
-        usage: synthesisUsage,
-        durationMs: synthesisDurationMs,
-        retryProgress: null,
-      });
-    } catch (err) {
-      if (!abortController.signal.aborted) {
-        dispatchTurnAction('UPDATE_SYNTHESIS', {
-          model: synthModel,
-          content: lastTurn.synthesis?.content || '',
-          status: 'error',
-          error: err.message,
-          retryProgress: null,
-        });
-      }
-    }
-
-    dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, setAbortController]);
+  }, [retryRound]);
 
   const suggestReplacementModel = useCallback((roundIndex, streamIndex) => {
     if (!activeConversation || activeConversation.turns.length === 0) return null;

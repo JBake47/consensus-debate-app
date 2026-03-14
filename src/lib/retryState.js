@@ -112,6 +112,51 @@ export function isRoundAttentionRequired(round) {
   return (round?.streams || []).some((stream) => Boolean(stream?.retryProgress?.active));
 }
 
+function hasUsableStreamContent(stream) {
+  return typeof stream?.content === 'string' && stream.content.trim().length > 0;
+}
+
+export function streamNeedsRepair(stream, { retryErroredCompleted = false } = {}) {
+  if (!stream) return false;
+  if (stream.status !== 'complete') return true;
+  if (!hasUsableStreamContent(stream)) return true;
+  if (retryErroredCompleted && (Boolean(stream.error) || stream.outcome === 'using_previous_response')) {
+    return true;
+  }
+  return false;
+}
+
+export function getRoundRepairStreamIndices({
+  streams = [],
+  redoRound = false,
+  retryErroredCompleted = false,
+  preferredStreamIndices = [],
+} = {}) {
+  const items = Array.isArray(streams) ? streams : [];
+  if (redoRound) {
+    return items.map((_, index) => index);
+  }
+
+  const indices = new Set();
+  const maxIndex = items.length - 1;
+  const requested = Array.isArray(preferredStreamIndices) ? preferredStreamIndices : [];
+
+  for (const value of requested) {
+    const index = Number(value);
+    if (Number.isInteger(index) && index >= 0 && index <= maxIndex) {
+      indices.add(index);
+    }
+  }
+
+  items.forEach((stream, index) => {
+    if (streamNeedsRepair(stream, { retryErroredCompleted })) {
+      indices.add(index);
+    }
+  });
+
+  return Array.from(indices).sort((left, right) => left - right);
+}
+
 export function getRetryScopeDescription({
   scope = 'stream',
   mode = 'debate',

@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import {
   deriveRoundStatusFromStreams,
   formatRetryProgressLabel,
+  getRoundRepairStreamIndices,
   getReplacementModelChoices,
   getRetryScopeDescription,
   getStreamDisplayState,
   selectReplacementModel,
+  streamNeedsRepair,
 } from './retryState.js';
 
 function runTest(name, fn) {
@@ -43,6 +45,56 @@ runTest('deriveRoundStatusFromStreams marks mixed fresh and stale responses as w
       { status: 'complete', content: 'Older answer', outcome: 'using_previous_response' },
     ]),
     'warning',
+  );
+});
+
+runTest('streamNeedsRepair treats interrupted and errored carried-forward responses as repairable', () => {
+  assert.equal(
+    streamNeedsRepair({
+      status: 'complete',
+      content: 'Partial answer',
+      error: 'Run interrupted before completion.',
+      outcome: 'using_previous_response',
+    }, { retryErroredCompleted: true }),
+    true,
+  );
+  assert.equal(
+    streamNeedsRepair({
+      status: 'error',
+      content: '',
+      error: 'Cancelled',
+      errorKind: 'cancelled',
+    }),
+    true,
+  );
+});
+
+runTest('getRoundRepairStreamIndices includes the requested stream and any repairable peers', () => {
+  assert.deepEqual(
+    getRoundRepairStreamIndices({
+      streams: [
+        { status: 'complete', content: 'Stable answer', outcome: 'success' },
+        { status: 'complete', content: 'Interrupted answer', error: 'Run interrupted before completion.', outcome: 'using_previous_response' },
+        { status: 'error', content: '', error: 'Cancelled', errorKind: 'cancelled' },
+      ],
+      retryErroredCompleted: true,
+      preferredStreamIndices: [0],
+    }),
+    [0, 1, 2],
+  );
+});
+
+runTest('getRoundRepairStreamIndices redoes every stream when explicitly redoing the round', () => {
+  assert.deepEqual(
+    getRoundRepairStreamIndices({
+      streams: [
+        { status: 'complete', content: 'A' },
+        { status: 'complete', content: 'B' },
+        { status: 'error', content: '', error: 'Failed' },
+      ],
+      redoRound: true,
+    }),
+    [0, 1, 2],
   );
 });
 
