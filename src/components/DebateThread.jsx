@@ -1,4 +1,5 @@
-import { memo, useState, useRef, useEffect } from 'react';
+import { memo, useState, useRef, useEffect, useMemo } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { ChevronDown, ChevronUp, Loader2, AlertCircle, Brain, Globe, RotateCcw } from 'lucide-react';
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -18,6 +19,8 @@ import {
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './DebateThread.css';
+
+const THREAD_VIRTUALIZATION_THRESHOLD = 18;
 
 function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry, turnMode, totalRounds, roundModels = [] }) {
   const { retryStream } = useDebateActions();
@@ -107,7 +110,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
           {canRetry && (
             <button
               className="thread-message-retry"
-              onClick={(e) => retryStream(roundIndex, streamIndex, { forceRefresh: e.shiftKey })}
+              onClick={(event) => retryStream(roundIndex, streamIndex, { forceRefresh: event.shiftKey })}
               title={`${retryScopeTitle} Shift bypasses cache.`}
             >
               <RotateCcw size={12} />
@@ -200,7 +203,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
                 <CopyButton text={reasoning} />
               )}
             </div>
-        {reasoningOpen && (
+            {reasoningOpen && (
               <div
                 className="thread-reasoning-text markdown-content scroll-preview"
                 onPointerDown={(event) => recordPreviewPointerDown(previewPointerRef, event)}
@@ -247,39 +250,121 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
   ) : message;
 }
 
-function DebateThread({ rounds, isLastTurn = false, allowRetry = true, turnMode = 'debate', totalRounds = 1 }) {
-  if (!rounds || rounds.length === 0) return null;
+function RoundDivider({ label }) {
+  return (
+    <div className="thread-round-divider">
+      <span className="thread-round-label">{label}</span>
+    </div>
+  );
+}
+
+function ThreadConvergencePanel({ convergenceCheck, roundNumber }) {
+  return (
+    <div className="thread-convergence-panel">
+      <ConvergencePanel convergenceCheck={convergenceCheck} roundNumber={roundNumber} />
+    </div>
+  );
+}
+
+function renderThreadItem(item, sharedProps) {
+  if (item.type === 'divider') {
+    return <RoundDivider label={item.label} />;
+  }
+  if (item.type === 'convergence') {
+    return (
+      <ThreadConvergencePanel
+        convergenceCheck={item.convergenceCheck}
+        roundNumber={item.roundNumber}
+      />
+    );
+  }
 
   return (
-    <div className="debate-thread">
-      {rounds.map((round, roundIndex) => (
-        <div key={roundIndex} className="thread-round">
-          <div className="thread-round-divider">
-            <span className="thread-round-label">{round.label}</span>
+    <ThreadMessage
+      stream={item.stream}
+      roundNumber={item.roundNumber}
+      roundIndex={item.roundIndex}
+      streamIndex={item.streamIndex}
+      roundModels={item.roundModels}
+      {...sharedProps}
+    />
+  );
+}
+
+function DebateThread({ rounds, isLastTurn = false, allowRetry = true, turnMode = 'debate', totalRounds = 1 }) {
+  const threadItems = useMemo(() => {
+    if (!Array.isArray(rounds) || rounds.length === 0) return [];
+
+    return rounds.flatMap((round, roundIndex) => {
+      const items = [{
+        type: 'divider',
+        key: `divider-${round.roundNumber}-${roundIndex}`,
+        label: round.label,
+      }];
+
+      (round.streams || []).forEach((stream, streamIndex) => {
+        items.push({
+          type: 'message',
+          key: `${round.roundNumber}-${stream.model}-${streamIndex}`,
+          stream,
+          roundNumber: round.roundNumber,
+          roundIndex,
+          streamIndex,
+          roundModels: (round.streams || []).map((item) => item.model),
+        });
+      });
+
+      if (round.convergenceCheck) {
+        items.push({
+          type: 'convergence',
+          key: `convergence-${round.roundNumber}-${roundIndex}`,
+          convergenceCheck: round.convergenceCheck,
+          roundNumber: round.roundNumber,
+        });
+      }
+
+      return items;
+    });
+  }, [rounds]);
+
+  if (threadItems.length === 0) return null;
+
+  const sharedProps = {
+    isLastTurn,
+    allowRetry,
+    turnMode,
+    totalRounds,
+  };
+
+  if (threadItems.length <= THREAD_VIRTUALIZATION_THRESHOLD) {
+    return (
+      <div className="debate-thread">
+        {threadItems.map((item) => (
+          <div key={item.key} className="thread-virtuoso-item">
+            {renderThreadItem(item, sharedProps)}
           </div>
-          <div className="thread-messages">
-            {round.streams.map((stream, streamIndex) => (
-              <ThreadMessage
-                key={`${stream.model}-${streamIndex}`}
-                stream={stream}
-                roundNumber={round.roundNumber}
-                roundIndex={roundIndex}
-                streamIndex={streamIndex}
-                isLastTurn={isLastTurn}
-                allowRetry={allowRetry}
-                turnMode={turnMode}
-                totalRounds={totalRounds}
-                roundModels={(round.streams || []).map((item) => item.model)}
-              />
-            ))}
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="debate-thread debate-thread-virtualized">
+      <div className="thread-virtualized-note">
+        Large debate thread virtualized for smoother scrolling.
+      </div>
+      <Virtuoso
+        className="debate-thread-virtuoso"
+        style={{ height: 'min(70vh, 900px)' }}
+        data={threadItems}
+        increaseViewportBy={{ top: 400, bottom: 700 }}
+        computeItemKey={(index, item) => item.key || index}
+        itemContent={(index, item) => (
+          <div className="thread-virtuoso-item">
+            {renderThreadItem(item, sharedProps)}
           </div>
-          {round.convergenceCheck && (
-            <div className="thread-convergence-panel">
-              <ConvergencePanel convergenceCheck={round.convergenceCheck} roundNumber={round.roundNumber} />
-            </div>
-          )}
-        </div>
-      ))}
+        )}
+      />
     </div>
   );
 }

@@ -191,6 +191,22 @@
   gap: var(--space-md);
 }
 
+.debate-rounds-virtuoso {
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.debate-rounds-item {
+  padding-bottom: var(--space-md);
+}
+
+.debate-rounds-item:last-child {
+  padding-bottom: 0;
+}
+
 .debate-virtualized-banner {
   display: flex;
   align-items: center;

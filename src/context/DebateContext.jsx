@@ -31,6 +31,14 @@ import {
   buildConversationContext,
   buildSummaryPrompt,
 } from '../lib/contextManager';
+import {
+  buildConversationListItem,
+  enrichConversationDerivedData,
+  markConversationSummaryPending,
+  markConversationSummaryProgress,
+  updateConversationLastTurnDerivedData,
+  updateConversationSidebarHeader,
+} from '../lib/conversationIndex';
 import { createSeedTitle, generateTitle } from '../lib/titleGenerator';
 import {
   DEFAULT_RETRY_POLICY,
@@ -58,6 +66,7 @@ const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
 const DebateUiContext = createContext(null);
 const DebateConversationContext = createContext(null);
+const DebateConversationListContext = createContext(null);
 
 const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
@@ -408,14 +417,23 @@ function migrateConversations(conversations) {
     if (conv.titleEditedAt !== titleEditedAt) {
       migrated = true;
     }
-    return {
+    const derivedConversation = enrichConversationDerivedData({
       ...conv,
       turns,
       updatedAt,
       titleSource,
       titleLocked,
       titleEditedAt,
-    };
+    });
+    if (
+      conv.summarizedTurnCount !== derivedConversation.summarizedTurnCount
+      || conv.pendingSummaryUntilTurnCount !== derivedConversation.pendingSummaryUntilTurnCount
+      || conv.sidebarData == null
+      || turns.some((turn, index) => turn !== derivedConversation.turns[index])
+    ) {
+      migrated = true;
+    }
+    return derivedConversation;
   });
   return { conversations: result, migrated };
 }
@@ -508,7 +526,7 @@ function updateLastTurn(conversations, conversationId, updater, options = {}) {
     updater(lastTurn);
     turns[turns.length - 1] = lastTurn;
     changed = true;
-    return { ...c, turns, updatedAt: Date.now() };
+    return updateConversationLastTurnDerivedData({ ...c, turns, updatedAt: Date.now() });
   });
 
   return changed ? nextConversations : conversations;
@@ -963,7 +981,7 @@ function reducer(state, action) {
       return { ...state, activeConversationId: action.payload };
     }
     case 'NEW_CONVERSATION': {
-      const conv = {
+      const conv = enrichConversationDerivedData({
         id: action.payload.id,
         title: action.payload.title || 'New Debate',
         titleSource: normalizeTitleSource(action.payload.titleSource || TITLE_SOURCE_SEED),
@@ -972,7 +990,7 @@ function reducer(state, action) {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         turns: [],
-      };
+      });
       const conversations = [conv, ...state.conversations];
       return { ...state, conversations, activeConversationId: conv.id };
     }
@@ -980,7 +998,11 @@ function reducer(state, action) {
       const convId = action.payload.conversationId || state.activeConversationId;
       const conversations = state.conversations.map(c =>
         c.id === convId
-          ? { ...c, turns: [...c.turns, action.payload.turn], updatedAt: Date.now() }
+          ? updateConversationLastTurnDerivedData({
+            ...c,
+            turns: [...c.turns, action.payload.turn],
+            updatedAt: Date.now(),
+          })
           : c
       );
       return { ...state, conversations };
@@ -1096,9 +1118,30 @@ function reducer(state, action) {
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_RUNNING_SUMMARY': {
-      const { conversationId, summary } = action.payload;
+      const {
+        conversationId,
+        summary,
+        summarizedTurnCount,
+        expectedCurrentPendingTurnCount,
+      } = action.payload;
       const conversations = state.conversations.map(c =>
-        c.id === conversationId ? { ...c, runningSummary: summary } : c
+        c.id === conversationId
+          ? markConversationSummaryProgress(
+            c,
+            summary,
+            summarizedTurnCount,
+            expectedCurrentPendingTurnCount,
+          )
+          : c
+      );
+      return { ...state, conversations };
+    }
+    case 'SET_RUNNING_SUMMARY_PENDING': {
+      const { conversationId, pendingTurnCount, expectedCurrentPendingTurnCount } = action.payload;
+      const conversations = state.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? markConversationSummaryPending(conversation, pendingTurnCount, expectedCurrentPendingTurnCount)
+          : conversation
       );
       return { ...state, conversations };
     }
@@ -1191,11 +1234,11 @@ function reducer(state, action) {
             title: normalizedTitle,
             titleSource: normalizedSource,
             titleLocked: false,
-            updatedAt: now,
-          };
+              updatedAt: now,
+            };
 
         changed = true;
-        return nextConversation;
+        return updateConversationSidebarHeader(nextConversation);
       });
 
       if (!changed) {
@@ -1206,7 +1249,9 @@ function reducer(state, action) {
     case 'SET_CONVERSATION_DESCRIPTION': {
       const { conversationId, description } = action.payload;
       const conversations = state.conversations.map(c =>
-        c.id === conversationId ? { ...c, description } : c
+        c.id === conversationId
+          ? updateConversationSidebarHeader({ ...c, description, updatedAt: Date.now() })
+          : c
       );
       return { ...state, conversations };
     }
@@ -1267,7 +1312,7 @@ function reducer(state, action) {
       };
 
       const branchConversationId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const branchConversation = {
+      const branchConversation = enrichConversationDerivedData({
         ...sourceConversation,
         id: branchConversationId,
         title: `${sourceConversation.title || 'Debate'} (Branch R${keepCount})`,
@@ -1282,7 +1327,7 @@ function reducer(state, action) {
           sourceTurnId: sourceLastTurn.id || null,
         },
         turns: [...sourceConversation.turns.slice(0, -1), branchTurn],
-      };
+      });
 
       const conversations = [branchConversation, ...state.conversations];
       return { ...state, conversations, activeConversationId: branchConversationId };
@@ -1304,7 +1349,7 @@ function reducer(state, action) {
       const conversations = state.conversations.map(c => {
         if (c.id !== convId) return c;
         const turns = c.turns.slice(0, -1);
-        return { ...c, turns, updatedAt: Date.now() };
+        return enrichConversationDerivedData({ ...c, turns, updatedAt: Date.now() });
       });
       return { ...state, conversations };
     }
@@ -1373,10 +1418,30 @@ export function DebateProvider({ children }) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const timer = window.setTimeout(() => {
-      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, state.conversations);
-    }, 180);
-    return () => window.clearTimeout(timer);
+    if (state.conversations.some((conversation) => isConversationActivelyRunning(conversation))) {
+      return undefined;
+    }
+
+    let timeoutId = 0;
+    let idleId = 0;
+    const flushSnapshot = () => {
+      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, conversationsRef.current);
+    };
+
+    timeoutId = window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(flushSnapshot, { timeout: 2000 });
+      } else {
+        flushSnapshot();
+      }
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (idleId && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+    };
   }, [state.conversations]);
 
   useEffect(() => {
@@ -1621,6 +1686,81 @@ export function DebateProvider({ children }) {
       // Auto title generation failure is non-blocking.
     });
   }, [dispatch]);
+
+  const prepareConversationHistory = useCallback(({
+    conversationId,
+    conversation,
+    summaryModel,
+    apiKey,
+    signal,
+  }) => {
+    const currentConversation = conversation || state.conversations.find((item) => item.id === conversationId) || null;
+    const summarizedTurnCount = currentConversation?.summarizedTurnCount || 0;
+    const pendingSummaryUntilTurnCount = currentConversation?.pendingSummaryUntilTurnCount || summarizedTurnCount;
+    const hasPendingSummary = pendingSummaryUntilTurnCount > summarizedTurnCount;
+    const contextPlan = buildConversationContext({
+      conversation: currentConversation,
+      runningSummary: currentConversation?.runningSummary || null,
+      summarizedTurnCount,
+      pendingSummaryUntilTurnCount,
+    });
+
+    if (
+      !hasPendingSummary
+      && summaryModel
+      && apiKey
+      && contextPlan.needsSummary
+      && currentConversation
+      && contextPlan.summaryEndTurnIndex > contextPlan.summaryStartTurnIndex
+    ) {
+      const nextPendingTurnCount = contextPlan.summaryEndTurnIndex;
+      dispatch({
+        type: 'SET_RUNNING_SUMMARY_PENDING',
+        payload: {
+          conversationId,
+          pendingTurnCount: nextPendingTurnCount,
+        },
+      });
+
+      const turnsForSummary = currentConversation.turns.slice(
+        contextPlan.summaryStartTurnIndex,
+        contextPlan.summaryEndTurnIndex,
+      );
+      const summaryMessages = buildSummaryPrompt({
+        existingSummary: currentConversation.runningSummary || null,
+        turnsToSummarize: turnsForSummary,
+        startTurnNumber: contextPlan.summaryStartTurnIndex + 1,
+      });
+
+      chatCompletion({
+        model: summaryModel,
+        messages: summaryMessages,
+        apiKey,
+        signal,
+      }).then(({ content: summary }) => {
+        dispatch({
+          type: 'SET_RUNNING_SUMMARY',
+          payload: {
+            conversationId,
+            summary,
+            summarizedTurnCount: nextPendingTurnCount,
+            expectedCurrentPendingTurnCount: nextPendingTurnCount,
+          },
+        });
+      }).catch(() => {
+        dispatch({
+          type: 'SET_RUNNING_SUMMARY_PENDING',
+          payload: {
+            conversationId,
+            pendingTurnCount: summarizedTurnCount,
+            expectedCurrentPendingTurnCount: nextPendingTurnCount,
+          },
+        });
+      });
+    }
+
+    return contextPlan.messages;
+  }, [dispatch, state.conversations]);
 
   useEffect(() => {
     if (abortControllersRef.current.size === 0) return;
@@ -2541,35 +2681,14 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    // Build rich conversation context with smart management
     const currentConv = state.conversations.find(c => c.id === convId);
-    const { messages: contextMessages, needsSummary, turnsToSummarize } = buildConversationContext({
+    const contextMessages = prepareConversationHistory({
+      conversationId: convId,
       conversation: currentConv,
-      runningSummary: currentConv?.runningSummary || null,
+      summaryModel: state.synthesizerModel,
+      apiKey,
+      signal: abortController.signal,
     });
-
-    // If context is too large, summarize older turns in the background
-    if (needsSummary && currentConv && turnsToSummarize > 0) {
-      const turnsForSummary = currentConv.turns.slice(0, turnsToSummarize);
-      const summaryMessages = buildSummaryPrompt({
-        existingSummary: currentConv.runningSummary || null,
-        turnsToSummarize: turnsForSummary,
-      });
-      // Fire and forget — don't block the debate
-      chatCompletion({
-        model: state.synthesizerModel,
-        messages: summaryMessages,
-        apiKey,
-        signal: abortController.signal,
-      }).then(({ content: summary }) => {
-        dispatch({
-          type: 'SET_RUNNING_SUMMARY',
-          payload: { conversationId: convId, summary },
-        });
-      }).catch(() => {
-        // Summarization failed — not critical, continue without it
-      });
-    }
 
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
@@ -3074,7 +3193,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -3265,32 +3384,14 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    // Build conversation context
     const currentConv = state.conversations.find(c => c.id === convId);
-    const { messages: contextMessages, needsSummary, turnsToSummarize } = buildConversationContext({
+    const contextMessages = prepareConversationHistory({
+      conversationId: convId,
       conversation: currentConv,
-      runningSummary: currentConv?.runningSummary || null,
+      summaryModel: synthModel,
+      apiKey,
+      signal: abortController.signal,
     });
-
-    // Background summarization if needed
-    if (needsSummary && currentConv && turnsToSummarize > 0) {
-      const turnsForSummary = currentConv.turns.slice(0, turnsToSummarize);
-      const summaryMessages = buildSummaryPrompt({
-        existingSummary: currentConv.runningSummary || null,
-        turnsToSummarize: turnsForSummary,
-      });
-      chatCompletion({
-        model: synthModel,
-        messages: summaryMessages,
-        apiKey,
-        signal: abortController.signal,
-      }).then(({ content: summary }) => {
-        dispatch({
-          type: 'SET_RUNNING_SUMMARY',
-          payload: { conversationId: convId, summary },
-        });
-      }).catch(() => {});
-    }
 
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
@@ -3485,7 +3586,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const startDirect = useCallback(async (userPrompt, {
     webSearch = false,
@@ -3568,32 +3669,14 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    // Build conversation context
     const currentConv = state.conversations.find(c => c.id === convId);
-    const { messages: contextMessages, needsSummary, turnsToSummarize } = buildConversationContext({
+    const contextMessages = prepareConversationHistory({
+      conversationId: convId,
       conversation: currentConv,
-      runningSummary: currentConv?.runningSummary || null,
+      summaryModel: synthModel,
+      apiKey,
+      signal: abortController.signal,
     });
-
-    // Background summarization if needed
-    if (needsSummary && currentConv && turnsToSummarize > 0) {
-      const turnsForSummary = currentConv.turns.slice(0, turnsToSummarize);
-      const summaryMessages = buildSummaryPrompt({
-        existingSummary: currentConv.runningSummary || null,
-        turnsToSummarize: turnsForSummary,
-      });
-      chatCompletion({
-        model: synthModel,
-        messages: summaryMessages,
-        apiKey,
-        signal: abortController.signal,
-      }).then(({ content: summary }) => {
-        dispatch({
-          type: 'SET_RUNNING_SUMMARY',
-          payload: { conversationId: convId, summary },
-        });
-      }).catch(() => {});
-    }
 
     if (nativeSearchStrategy.needsLegacyPreflight) {
       webSearchContext = await runLegacyWebSearch({
@@ -3787,7 +3870,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const cancelDebate = useCallback((conversationId = null) => {
     const normalizedConversationId = (
@@ -3966,6 +4049,8 @@ export function DebateProvider({ children }) {
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
       runningSummary: activeConversation.runningSummary || null,
+      summarizedTurnCount: activeConversation.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: activeConversation.pendingSummaryUntilTurnCount || activeConversation.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -4111,6 +4196,8 @@ export function DebateProvider({ children }) {
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
       runningSummary: activeConversation.runningSummary || null,
+      summarizedTurnCount: activeConversation.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: activeConversation.pendingSummaryUntilTurnCount || activeConversation.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -5322,19 +5409,42 @@ export function DebateProvider({ children }) {
     state.focusedMode,
   ]);
 
+  const conversationList = useMemo(
+    () => state.conversations.map((conversation) => buildConversationListItem(conversation)),
+    [state.conversations],
+  );
+  const getConversationById = useCallback(
+    (conversationId) => state.conversations.find((conversation) => conversation.id === conversationId) || null,
+    [state.conversations],
+  );
+  const getConversationsSnapshot = useCallback(
+    () => state.conversations.slice(),
+    [state.conversations],
+  );
+
   const conversationValue = useMemo(() => ({
-    conversations: state.conversations,
     activeConversationId: state.activeConversationId,
     activeConversation,
     debateInProgress: activeConversationInProgress,
     activeConversationInProgress,
-    isConversationInProgress,
   }), [
-    state.conversations,
     state.activeConversationId,
     activeConversation,
     activeConversationInProgress,
+  ]);
+
+  const conversationListValue = useMemo(() => ({
+    conversations: conversationList,
+    activeConversationId: state.activeConversationId,
     isConversationInProgress,
+    getConversationById,
+    getConversationsSnapshot,
+  }), [
+    conversationList,
+    state.activeConversationId,
+    isConversationInProgress,
+    getConversationById,
+    getConversationsSnapshot,
   ]);
 
   const actionValue = useMemo(() => ({
@@ -5379,9 +5489,11 @@ export function DebateProvider({ children }) {
     <DebateActionContext.Provider value={actionValue}>
       <DebateSettingsContext.Provider value={settingsValue}>
         <DebateUiContext.Provider value={uiValue}>
-          <DebateConversationContext.Provider value={conversationValue}>
-            {children}
-          </DebateConversationContext.Provider>
+          <DebateConversationListContext.Provider value={conversationListValue}>
+            <DebateConversationContext.Provider value={conversationValue}>
+              {children}
+            </DebateConversationContext.Provider>
+          </DebateConversationListContext.Provider>
         </DebateUiContext.Provider>
       </DebateSettingsContext.Provider>
     </DebateActionContext.Provider>
@@ -5412,10 +5524,15 @@ export function useDebateConversations() {
   return useRequiredContext(DebateConversationContext, 'useDebateConversations');
 }
 
+export function useDebateConversationList() {
+  return useRequiredContext(DebateConversationListContext, 'useDebateConversationList');
+}
+
 export function useDebate() {
   return {
     ...useDebateSettings(),
     ...useDebateUi(),
+    ...useDebateConversationList(),
     ...useDebateConversations(),
     ...useDebateActions(),
   };

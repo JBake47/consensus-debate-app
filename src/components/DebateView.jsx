@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -140,7 +141,6 @@ function DebateView({ turn, isLastTurn }) {
   const { debateInProgress } = useDebateConversations();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
   const [viewerAttachment, setViewerAttachment] = useState(null);
-  const [showAllRounds, setShowAllRounds] = useState(false);
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
   const isParallelMode = turn.mode === 'parallel';
@@ -174,48 +174,12 @@ function DebateView({ turn, isLastTurn }) {
       .map((round, index) => (isRoundAttentionRequired(round) ? index : null))
       .filter((value) => value != null)
     : [];
-
-  const roundRenderPlan = (() => {
-    const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
-    if (
-      !streamVirtualizationEnabled ||
-      showAllRounds ||
-      viewMode !== 'cards' ||
-      rounds.length <= keepLatestRounds + 1
-    ) {
-      return {
-        hiddenCount: 0,
-        attentionHiddenCount: 0,
-        items: rounds.map((round, roundIndex) => ({ round, roundIndex })),
-      };
-    }
-    const visibleIndices = new Set([0]);
-    const tailStart = Math.max(0, rounds.length - keepLatestRounds);
-    for (let index = tailStart; index < rounds.length; index += 1) {
-      visibleIndices.add(index);
-    }
-    for (const index of attentionRoundIndices) {
-      visibleIndices.add(index);
-    }
-    const sortedIndices = Array.from(visibleIndices).sort((a, b) => a - b);
-    return {
-      hiddenCount: Math.max(0, rounds.length - sortedIndices.length),
-      attentionHiddenCount: attentionRoundIndices.filter((index) => !visibleIndices.has(index)).length,
-      items: sortedIndices.map((roundIndex) => ({ round: rounds[roundIndex], roundIndex })),
-    };
-  })();
-
-  const hiddenRoundCount = roundRenderPlan.hiddenCount;
-  const pinnedAttentionCount = attentionRoundIndices.filter((index) =>
-    !showAllRounds
-    && roundRenderPlan.items.some((item) => item.roundIndex === index)
-    && index !== 0
-    && index < Math.max(0, turn.rounds.length - keepLatestRounds)
-  ).length;
-
-  useEffect(() => {
-    setShowAllRounds(false);
-  }, [turn.id, turn.timestamp, turn.rounds?.length]);
+  const shouldVirtualizeRounds = (
+    streamVirtualizationEnabled
+    && viewMode === 'cards'
+    && Array.isArray(turn.rounds)
+    && turn.rounds.length > Math.max(6, keepLatestRounds + 1)
+  );
 
   const attentionStreams = hasRounds
     ? turn.rounds.flatMap((round, roundIndex) =>
@@ -551,46 +515,52 @@ function DebateView({ turn, isLastTurn }) {
 
           {viewMode === 'cards' ? (
             <div className="debate-rounds">
-              {hiddenRoundCount > 0 && !showAllRounds && (
+              {shouldVirtualizeRounds && (
                 <div className="debate-virtualized-banner">
                   <span>
-                    {hiddenRoundCount} older round{hiddenRoundCount !== 1 ? 's' : ''} compacted automatically.
-                    {pinnedAttentionCount > 0 && ` ${pinnedAttentionCount} kept visible because they need attention.`}
+                    Large round list virtualized automatically.
+                    {attentionRoundIndices.length > 0 && ` ${attentionRoundIndices.length} round${attentionRoundIndices.length !== 1 ? 's' : ''} currently need attention.`}
                   </span>
-                  <button
-                    className="debate-virtualized-btn"
-                    onClick={() => setShowAllRounds(true)}
-                    type="button"
-                  >
-                    Show All Rounds
-                  </button>
                 </div>
               )}
-              {roundRenderPlan.items.map(({ round, roundIndex: i }) => (
-                <RoundSection
-                  key={round.roundNumber}
-                  round={round}
-                  isLatest={i === turn.rounds.length - 1}
-                  roundIndex={i}
-                  isLastTurn={isLastTurn}
-                  allowRetry
-                  allowRoundRetry={!isParallelMode}
-                  allowStreamRetry
-                  turnMode={turn.mode || 'debate'}
-                  totalRounds={turn.rounds.length}
+              {shouldVirtualizeRounds ? (
+                <Virtuoso
+                  className="debate-rounds-virtuoso"
+                  style={{ height: 'min(72vh, 960px)' }}
+                  data={turn.rounds}
+                  increaseViewportBy={{ top: 500, bottom: 700 }}
+                  computeItemKey={(index, round) => `${round.roundNumber}-${index}`}
+                  itemContent={(index, round) => (
+                    <div className="debate-rounds-item">
+                      <RoundSection
+                        round={round}
+                        isLatest={index === turn.rounds.length - 1}
+                        roundIndex={index}
+                        isLastTurn={isLastTurn}
+                        allowRetry
+                        allowRoundRetry={!isParallelMode}
+                        allowStreamRetry
+                        turnMode={turn.mode || 'debate'}
+                        totalRounds={turn.rounds.length}
+                      />
+                    </div>
+                  )}
                 />
-              ))}
-              {showAllRounds && hiddenRoundCount > 0 && (
-                <div className="debate-virtualized-banner">
-                  <span>All rounds are visible.</span>
-                  <button
-                    className="debate-virtualized-btn"
-                    onClick={() => setShowAllRounds(false)}
-                    type="button"
-                  >
-                    Collapse Older Rounds
-                  </button>
-                </div>
+              ) : (
+                turn.rounds.map((round, index) => (
+                  <RoundSection
+                    key={round.roundNumber}
+                    round={round}
+                    isLatest={index === turn.rounds.length - 1}
+                    roundIndex={index}
+                    isLastTurn={isLastTurn}
+                    allowRetry
+                    allowRoundRetry={!isParallelMode}
+                    allowStreamRetry
+                    turnMode={turn.mode || 'debate'}
+                    totalRounds={turn.rounds.length}
+                  />
+                ))
               )}
             </div>
           ) : (

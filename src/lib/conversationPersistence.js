@@ -123,6 +123,8 @@ function compactTurnForPersistence(turn, strategy) {
 
   return {
     ...turn,
+    contextSummary: undefined,
+    searchSections: undefined,
     attachments: Array.isArray(turn.attachments)
       ? turn.attachments.map((attachment) => compactAttachmentForPersistence(attachment, strategy))
       : turn.attachments,
@@ -144,6 +146,7 @@ export function prepareConversationsForPersistence(conversations, strategyName =
 
   return (Array.isArray(conversations) ? conversations : []).map((conversation) => ({
     ...conversation,
+    sidebarData: undefined,
     runningSummary: truncateString(conversation?.runningSummary, strategy.runningSummaryLimit),
     turns: Array.isArray(conversation?.turns)
       ? conversation.turns.map((turn) => compactTurnForPersistence(turn, strategy))

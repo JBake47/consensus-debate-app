@@ -96,6 +96,45 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.attachment-viewer-modebar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.attachment-viewer-modebutton {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.attachment-viewer-modebutton:hover {
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
+.attachment-viewer-modebutton.active {
+  color: var(--text-primary);
+  border-color: rgba(34, 211, 238, 0.4);
+  background: rgba(34, 211, 238, 0.14);
+}
+
+.attachment-viewer-alert {
+  font-size: 12px;
+  color: #fef3c7;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
 }
 
 .attachment-viewer-media {
@@ -106,9 +145,22 @@
 
 .attachment-viewer-image {
   max-width: 100%;
+  max-height: 70vh;
   display: block;
   margin: 0 auto;
   border-radius: var(--radius-md);
+}
+
+.attachment-viewer-video {
+  width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.attachment-viewer-audio {
+  width: min(640px, 100%);
+  margin: 0 auto;
 }
 
 .attachment-viewer-iframe {
@@ -290,4 +342,43 @@
   background: rgba(255, 255, 255, 0.03);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-md);
+}
+
+.attachment-viewer-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.attachment-viewer-details-grid {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.attachment-viewer-details-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+}
+
+.attachment-viewer-details-row dt {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.attachment-viewer-details-row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  word-break: break-word;
 }

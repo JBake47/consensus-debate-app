@@ -1,6 +1,6 @@
 import { useDeferredValue, useState, useMemo, useRef, useEffect } from 'react';
 import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2 } from 'lucide-react';
-import { useDebateActions, useDebateConversations } from '../context/DebateContext';
+import { useDebateActions, useDebateConversationList } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
 import { exportConversationReport } from '../lib/reportExport';
@@ -10,7 +10,13 @@ const SIDEBAR_PAGE_SIZE = 150;
 
 export default function Sidebar({ open, onClose }) {
   const { dispatch } = useDebateActions();
-  const { conversations, activeConversationId, isConversationInProgress } = useDebateConversations();
+  const {
+    conversations,
+    activeConversationId,
+    isConversationInProgress,
+    getConversationById,
+    getConversationsSnapshot,
+  } = useDebateConversationList();
   const importInputRef = useRef(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -142,25 +148,30 @@ export default function Sidebar({ open, onClose }) {
   };
 
   const handleExportAll = () => {
-    if (conversations.length === 0) return;
+    const fullConversations = getConversationsSnapshot?.() || [];
+    if (fullConversations.length === 0) return;
     downloadJson(
-      { version: 1, exportedAt: new Date().toISOString(), conversations },
+      { version: 1, exportedAt: new Date().toISOString(), conversations: fullConversations },
       `debate-export-all-${new Date().toISOString().slice(0, 10)}.json`,
     );
   };
 
   const handleExportOne = (e, conv) => {
     e.stopPropagation();
-    const slug = (conv.title || 'debate').replace(/[^a-z0-9]+/gi, '-').slice(0, 40).toLowerCase();
+    const fullConversation = getConversationById?.(conv.id);
+    if (!fullConversation) return;
+    const slug = (fullConversation.title || 'debate').replace(/[^a-z0-9]+/gi, '-').slice(0, 40).toLowerCase();
     downloadJson(
-      { version: 1, exportedAt: new Date().toISOString(), conversations: [conv] },
+      { version: 1, exportedAt: new Date().toISOString(), conversations: [fullConversation] },
       `debate-${slug}-${new Date().toISOString().slice(0, 10)}.json`,
     );
   };
 
   const handleShareReport = (e, conv) => {
     e.stopPropagation();
-    exportConversationReport(conv);
+    const fullConversation = getConversationById?.(conv.id);
+    if (!fullConversation) return;
+    exportConversationReport(fullConversation);
   };
 
   const handleImport = (e) => {

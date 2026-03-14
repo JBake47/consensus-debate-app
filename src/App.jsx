@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
+import { forwardRef, useCallback, useState, useEffect, useMemo, lazy, Suspense, useRef } from 'react';
 import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon } from 'lucide-react';
+import { Virtuoso } from 'react-virtuoso';
 import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
 import {
   computeConversationCostMeta,
@@ -15,7 +16,12 @@ import './App.css';
 
 const SettingsModal = lazy(() => import('./components/SettingsModal'));
 const CommandPalette = lazy(() => import('./components/CommandPalette'));
-const MAX_VISIBLE_TURNS = 8;
+
+const TurnList = forwardRef(function TurnList(props, ref) {
+  const { className = '', style, ...rest } = props;
+  const nextClassName = className ? `turns-container ${className}` : 'turns-container';
+  return <div {...rest} ref={ref} className={nextClassName} style={style} />;
+});
 
 function AppContent() {
   const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
@@ -27,9 +33,8 @@ function AppContent() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [headerTitle, setHeaderTitle] = useState('');
   const [headerDesc, setHeaderDesc] = useState('');
-  const [showAllTurns, setShowAllTurns] = useState(false);
   const headerTitleRef = useRef(null);
-  const scrollRef = useRef(null);
+  const virtuosoRef = useRef(null);
 
   const turns = activeConversation?.turns || [];
   const conversationCostMeta = useMemo(() => (
@@ -39,50 +44,9 @@ function AppContent() {
   ), [activeConversation]);
   const conversationCostLabel = formatCostWithQuality(conversationCostMeta);
 
-  const turnRenderPlan = useMemo(() => {
-    if (showAllTurns || turns.length <= MAX_VISIBLE_TURNS + 1) {
-      return {
-        hiddenCount: 0,
-        items: turns.map((turn, index) => ({ turn, index })),
-      };
-    }
-    const first = { turn: turns[0], index: 0 };
-    const tail = turns
-      .slice(-MAX_VISIBLE_TURNS)
-      .map((turn, offset) => ({
-        turn,
-        index: turns.length - MAX_VISIBLE_TURNS + offset,
-      }));
-    return {
-      hiddenCount: Math.max(0, turns.length - (1 + tail.length)),
-      items: [first, ...tail],
-    };
-  }, [turns, showAllTurns]);
-
-  const hiddenTurnCount = turnRenderPlan.hiddenCount;
-
-  // Close header edit when switching conversations
   useEffect(() => {
     setEditingHeader(false);
-    setShowAllTurns(false);
   }, [activeConversation?.id]);
-
-  useEffect(() => {
-    if (turns.length > MAX_VISIBLE_TURNS + 1 && debateInProgress) {
-      setShowAllTurns(false);
-    }
-  }, [turns.length, debateInProgress]);
-
-  // Auto-scroll to bottom only when user is already near the bottom
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const threshold = 150;
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    if (isNearBottom) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [turns, debateInProgress]);
 
   const startHeaderEdit = () => {
     if (!activeConversation) return;
@@ -105,19 +69,23 @@ function AppContent() {
     setEditingHeader(false);
   };
 
-  const handleHeaderKeyDown = (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); saveHeaderEdit(); }
-    else if (e.key === 'Escape') { setEditingHeader(false); }
+  const handleHeaderKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveHeaderEdit();
+    } else if (event.key === 'Escape') {
+      setEditingHeader(false);
+    }
   };
 
   const emitFocusComposer = () => {
     window.dispatchEvent(new Event('consensus:focus-composer'));
   };
 
-  const handleExportReport = () => {
+  const handleExportReport = useCallback(() => {
     if (!activeConversation) return;
     exportConversationReport(activeConversation);
-  };
+  }, [activeConversation]);
 
   const toggleTheme = () => {
     dispatch({ type: 'SET_THEME_MODE', payload: themeMode === 'light' ? 'dark' : 'light' });
@@ -134,9 +102,8 @@ function AppContent() {
   };
 
   const jumpToLatest = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (turns.length === 0) return;
+    virtuosoRef.current?.scrollToIndex({ index: turns.length - 1, align: 'end', behavior: 'smooth' });
   };
 
   const commands = useMemo(() => ([
@@ -219,7 +186,7 @@ function AppContent() {
     retryLastTurn,
     retryAllFailed,
     clearResponseCache,
-    activeConversation,
+    handleExportReport,
   ]);
 
   useEffect(() => {
@@ -325,53 +292,29 @@ function AppContent() {
 
         <div className="chat-window-shell">
           <div className="chat-content-shell">
-            <div className="main-content" ref={scrollRef}>
+            <div className="main-content">
               {turns.length === 0 ? (
                 <WelcomeScreen onQuickStart={handleQuickStart} />
               ) : (
-                <div className="turns-container">
-                  {hiddenTurnCount > 0 && !showAllTurns && (
-                    <div className="turn-virtualized-banner">
-                      <span>
-                        {hiddenTurnCount} older turn{hiddenTurnCount !== 1 ? 's' : ''} compacted automatically.
-                      </span>
-                      <button
-                        className="turn-virtualized-btn"
-                        onClick={() => setShowAllTurns(true)}
-                        type="button"
-                      >
-                        Show All Turns
-                      </button>
+                <Virtuoso
+                  ref={virtuosoRef}
+                  className="turns-virtuoso"
+                  style={{ height: '100%' }}
+                  data={turns}
+                  increaseViewportBy={{ top: 600, bottom: 1200 }}
+                  computeItemKey={(index, turn) => turn.id || turn.timestamp || index}
+                  followOutput={(isAtBottom) => (isAtBottom && debateInProgress ? 'smooth' : false)}
+                  components={{ List: TurnList }}
+                  itemContent={(index, turn) => (
+                    <div className="turns-virtuoso-item">
+                      <DebateView
+                        turn={turn}
+                        index={index}
+                        isLastTurn={index === turns.length - 1}
+                      />
                     </div>
                   )}
-                  {turnRenderPlan.items.map(({ turn, index }) => (
-                    <DebateView
-                      key={turn.id || turn.timestamp || index}
-                      turn={turn}
-                      index={index}
-                      isLastTurn={index === turns.length - 1}
-                    />
-                  ))}
-                  {showAllTurns && hiddenTurnCount > 0 && (
-                    <div className="turn-virtualized-banner">
-                      <span>All turns are visible.</span>
-                      <button
-                        className="turn-virtualized-btn"
-                        onClick={jumpToLatest}
-                        type="button"
-                      >
-                        Jump to Latest
-                      </button>
-                      <button
-                        className="turn-virtualized-btn"
-                        onClick={() => setShowAllTurns(false)}
-                        type="button"
-                      >
-                        Collapse Older Turns
-                      </button>
-                    </div>
-                  )}
-                </div>
+                />
               )}
             </div>
 
@@ -381,6 +324,12 @@ function AppContent() {
           <ChatInput />
         </div>
       </main>
+
+      {turns.length > 0 && (
+        <button className="jump-latest-btn" onClick={jumpToLatest} type="button">
+          Jump to Latest
+        </button>
+      )}
 
       {showSettings && (
         <Suspense fallback={null}>

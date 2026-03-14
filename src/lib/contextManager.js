@@ -1,8 +1,5 @@
-import { getModelDisplayName } from './openrouter';
-
 // Rough token estimate: ~4 chars per token for English text
 const CHARS_PER_TOKEN = 4;
-const MAX_CONTEXT_TOKENS = 100000;
 const SUMMARY_THRESHOLD_TOKENS = 60000;
 
 /**
@@ -17,90 +14,68 @@ export function estimateTokens(text) {
  * Estimate total tokens for an array of messages.
  */
 function estimateMessagesTokens(messages) {
-  return messages.reduce((sum, m) => sum + estimateTokens(m.content) + 4, 0);
+  return messages.reduce((sum, message) => sum + estimateTokens(message.content) + 4, 0);
 }
 
-/**
- * Build a rich summary of a single turn for context.
- * Includes model highlights and synthesis, not just synthesis alone.
- */
-function summarizeTurnForContext(turn) {
-  const parts = [];
-
-  if (Array.isArray(turn.attachments) && turn.attachments.length > 0) {
-    const routing = Array.isArray(turn.attachmentRouting) ? turn.attachmentRouting : [];
-    const attachmentSummary = turn.attachments
-      .map((attachment, index) => {
-        const route = routing[index];
-        const label = route?.primaryLabel || 'Attached';
-        return `${attachment.name} (${label})`;
-      })
-      .join(', ');
-    if (attachmentSummary) {
-      parts.push(`[Attachments: ${attachmentSummary}]`);
-    }
-  }
-
-  // Include web search context if it existed
-  if (turn.webSearchResult?.content && turn.webSearchResult.status === 'complete') {
-    parts.push(`[Web search was performed for this query]`);
-  }
-
-  // Include key model positions from the final round
-  if (turn.rounds && turn.rounds.length > 0) {
-    const finalRound = turn.rounds[turn.rounds.length - 1];
-    const modelSummaries = finalRound.streams
-      .filter(s => s.content && s.status === 'complete')
-      .map(s => `${getModelDisplayName(s.model)}: ${truncateText(s.content, 500)}`)
-      .join('\n');
-    if (modelSummaries) {
-      parts.push(`Model positions (${finalRound.label}):\n${modelSummaries}`);
-    }
-  }
-
-  // Include debate metadata
-  if (turn.debateMetadata) {
-    const { totalRounds, converged, terminationReason } = turn.debateMetadata;
-    if (totalRounds > 1) {
-      parts.push(`[Debate: ${totalRounds} rounds, ${converged ? 'converged' : terminationReason}]`);
-    }
-  }
-
-  // Include synthesis (primary context)
-  if (turn.synthesis?.content && turn.synthesis.status === 'complete') {
-    parts.push(`Synthesized answer:\n${turn.synthesis.content}`);
-  }
-
-  return parts.join('\n\n');
-}
-
-/**
- * Truncate text to a maximum length, adding ellipsis.
- */
 function truncateText(text, maxLength) {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '...';
+  const safeText = typeof text === 'string' ? text : '';
+  if (safeText.length <= maxLength) return safeText;
+  return `${safeText.slice(0, maxLength)}...`;
+}
+
+function buildTurnMessages(turns) {
+  const messages = [];
+
+  for (const turn of turns) {
+    messages.push({ role: 'user', content: turn.userPrompt });
+
+    const richSummary = typeof turn.contextSummary === 'string'
+      ? turn.contextSummary.trim()
+      : '';
+    if (richSummary) {
+      messages.push({ role: 'assistant', content: richSummary });
+    }
+  }
+
+  return messages;
 }
 
 /**
  * Build conversation history messages with smart context management.
  *
  * Strategy:
- * - Recent turns get full context (synthesis + model positions)
- * - If a running summary exists, it's prepended as a system-level recap
- * - If total context exceeds the threshold, older turns are compressed
+ * - A running summary replaces older summarized turns
+ * - Turns already scheduled for summarization stay in the prompt until that
+ *   summary has completed
+ * - If the remaining context still grows too large, summarize additional
+ *   newer turns and keep only the newest turns in full
  *
- * Returns { messages, needsSummary, turnsToSummarize }
+ * Returns { messages, needsSummary, summaryStartTurnIndex, summaryEndTurnIndex }
  */
-export function buildConversationContext({ conversation, runningSummary }) {
-  if (!conversation || !conversation.turns || conversation.turns.length === 0) {
-    return { messages: [], needsSummary: false, turnsToSummarize: 0 };
+export function buildConversationContext({
+  conversation,
+  runningSummary,
+  summarizedTurnCount = 0,
+  pendingSummaryUntilTurnCount = summarizedTurnCount,
+}) {
+  if (!conversation || !Array.isArray(conversation.turns) || conversation.turns.length === 0) {
+    return {
+      messages: [],
+      needsSummary: false,
+      summaryStartTurnIndex: 0,
+      summaryEndTurnIndex: 0,
+    };
   }
 
   const turns = conversation.turns;
   const messages = [];
+  const normalizedSummarizedCount = Number.isFinite(Number(summarizedTurnCount))
+    ? Math.max(0, Math.min(turns.length, Math.floor(Number(summarizedTurnCount))))
+    : 0;
+  const normalizedPendingCount = Number.isFinite(Number(pendingSummaryUntilTurnCount))
+    ? Math.max(normalizedSummarizedCount, Math.min(turns.length, Math.floor(Number(pendingSummaryUntilTurnCount))))
+    : normalizedSummarizedCount;
 
-  // Add running summary if it exists
   if (runningSummary) {
     messages.push({
       role: 'system',
@@ -108,60 +83,57 @@ export function buildConversationContext({ conversation, runningSummary }) {
     });
   }
 
-  // Build messages from all turns with rich context
-  const turnMessages = [];
-  for (const turn of turns) {
-    turnMessages.push({ role: 'user', content: turn.userPrompt });
+  const pendingTurns = turns.slice(normalizedSummarizedCount, normalizedPendingCount);
+  const unscheduledTurns = turns.slice(normalizedPendingCount);
+  const pendingMessages = buildTurnMessages(pendingTurns);
+  const unscheduledMessages = buildTurnMessages(unscheduledTurns);
 
-    const richSummary = summarizeTurnForContext(turn);
-    if (richSummary) {
-      turnMessages.push({ role: 'assistant', content: richSummary });
-    }
-  }
-
-  // Check if we need to compress
-  const totalTokens = estimateMessagesTokens(messages) + estimateMessagesTokens(turnMessages);
-
+  const totalTokens = estimateMessagesTokens(messages)
+    + estimateMessagesTokens(pendingMessages)
+    + estimateMessagesTokens(unscheduledMessages);
   if (totalTokens <= SUMMARY_THRESHOLD_TOKENS) {
-    // Everything fits — use full context
     return {
-      messages: [...messages, ...turnMessages],
+      messages: [...messages, ...pendingMessages, ...unscheduledMessages],
       needsSummary: false,
-      turnsToSummarize: 0,
+      summaryStartTurnIndex: normalizedSummarizedCount,
+      summaryEndTurnIndex: normalizedSummarizedCount,
     };
   }
 
-  // Context is too large — keep recent turns in full, mark older ones for summarization
-  // Work backwards from the most recent turn to find how many we can keep in full
-  let keptTokens = estimateMessagesTokens(messages);
-  let keepFrom = turnMessages.length;
+  let keptTokens = estimateMessagesTokens(messages) + estimateMessagesTokens(pendingMessages);
+  let keepFrom = unscheduledMessages.length;
 
-  for (let i = turnMessages.length - 1; i >= 0; i--) {
-    const msgTokens = estimateTokens(turnMessages[i].content) + 4;
-    if (keptTokens + msgTokens > SUMMARY_THRESHOLD_TOKENS) break;
-    keptTokens += msgTokens;
-    keepFrom = i;
+  for (let index = unscheduledMessages.length - 1; index >= 0; index -= 1) {
+    const messageTokens = estimateTokens(unscheduledMessages[index].content) + 4;
+    if (keptTokens + messageTokens > SUMMARY_THRESHOLD_TOKENS) break;
+    keptTokens += messageTokens;
+    keepFrom = index;
   }
 
-  // Ensure we keep at least the last 2 messages (user + assistant for last turn)
-  keepFrom = Math.min(keepFrom, Math.max(0, turnMessages.length - 2));
+  keepFrom = Math.min(keepFrom, Math.max(0, unscheduledMessages.length - 2));
 
-  const turnsToSummarize = Math.ceil(keepFrom / 2); // Each turn = ~2 messages
-  const keptMessages = turnMessages.slice(keepFrom);
+  const additionalTurnsToSummarize = Math.ceil(keepFrom / 2);
+  const keptMessages = unscheduledMessages.slice(keepFrom);
+  const summaryStartTurnIndex = normalizedPendingCount;
+  const summaryEndTurnIndex = Math.max(
+    summaryStartTurnIndex,
+    Math.min(turns.length, normalizedPendingCount + additionalTurnsToSummarize),
+  );
 
   return {
-    messages: [...messages, ...keptMessages],
-    needsSummary: turnsToSummarize > 0,
-    turnsToSummarize,
+    messages: [...messages, ...pendingMessages, ...keptMessages],
+    needsSummary: summaryEndTurnIndex > summaryStartTurnIndex,
+    summaryStartTurnIndex,
+    summaryEndTurnIndex,
   };
 }
 
 /**
  * Build a prompt to summarize older turns into a running summary.
  */
-export function buildSummaryPrompt({ existingSummary, turnsToSummarize }) {
-  const turnTexts = turnsToSummarize.map((turn, i) => {
-    const parts = [`Turn ${i + 1}:`];
+export function buildSummaryPrompt({ existingSummary, turnsToSummarize, startTurnNumber = 1 }) {
+  const turnTexts = turnsToSummarize.map((turn, index) => {
+    const parts = [`Turn ${startTurnNumber + index}:`];
     parts.push(`User: ${truncateText(turn.userPrompt, 200)}`);
     if (turn.synthesis?.content) {
       parts.push(`Answer: ${truncateText(turn.synthesis.content, 800)}`);
@@ -175,19 +147,19 @@ export function buildSummaryPrompt({ existingSummary, turnsToSummarize }) {
   const messages = [
     {
       role: 'system',
-      content: `You are a conversation summarizer. Create a concise but comprehensive summary that preserves all key facts, decisions, and context from the conversation. This summary will be used as context for future messages, so include anything that might be referenced later.`,
+      content: 'You are a conversation summarizer. Create a concise but comprehensive summary that preserves key facts, decisions, constraints, and unresolved issues for future turns.',
     },
   ];
 
   if (existingSummary) {
     messages.push({
       role: 'user',
-      content: `Here is the existing conversation summary:\n${existingSummary}\n\nHere are new conversation turns to incorporate:\n${turnTexts}\n\nCreate an updated summary that incorporates all of this information.`,
+      content: `Here is the existing conversation summary through Turn ${Math.max(0, startTurnNumber - 1)}:\n${existingSummary}\n\nHere are new conversation turns to incorporate starting at Turn ${startTurnNumber}:\n${turnTexts}\n\nCreate an updated summary that incorporates all of this information.`,
     });
   } else {
     messages.push({
       role: 'user',
-      content: `Summarize the following conversation turns, preserving all key information:\n\n${turnTexts}`,
+      content: `Summarize the following conversation turns starting at Turn ${startTurnNumber}, preserving all key information:\n\n${turnTexts}`,
     });
   }
 

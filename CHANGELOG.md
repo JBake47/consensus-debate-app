@@ -7,17 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-03-14
+
 ### Added
 - Title-generator test coverage for deterministic seed titles and post-processing of model-generated chat names
+- Attachment preview planning helpers with dedicated regression coverage for preview fallback modes, long-chat context handling, sidebar search indexing, and summary-state ordering
+- Derived conversation indexing helpers that cache per-turn context summaries and sidebar search sections for large histories
+- React Virtuoso virtualization for long top-level chat histories, debate threads, and round lists
 
 ### Changed
 - New conversations now start with cleaner topic-style sidebar titles instead of raw prompt truncation
 - Auto-titling now uses stronger prompt guidance plus local cleanup rules to preserve useful specifics while stripping generic question phrasing
 - Retry and replace-model actions now repair the affected round and rebuild forward instead of rerunning a single response in isolation
+- Attachment viewer now supports safer PDF timeout/fallback handling, richer file details, inline audio/video playback, and browser/text/details preview modes for generated artifacts
+- Conversation history assembly now incrementally summarizes older turns, reuses cached turn/search summaries, and persists chats on idle/pagehide instead of synchronous hot-path writes
+- Sidebar chat search now runs from cached metadata instead of rescanning full conversation bodies, while export/report actions resolve the current full conversation on demand
 
 ### Fixed
 - Sidebar conversation rows no longer reserve space for hidden action buttons, reducing premature title truncation
 - Interrupted, cancelled, stopped, and stale carried-forward model responses are now picked up by repair retries consistently
+- Sidebar export/import/report actions once again include full conversation bodies instead of lightweight list items
+- Pending summary turns stay in the live prompt until their summary is committed, and stale or out-of-order summary completions are ignored
+- Command palette report export now tracks the latest active conversation instead of a stale memoized snapshot
 
 ## [0.3.23] - 2026-03-14
 
@@ -481,7 +492,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.20...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.24...HEAD
+[0.3.24]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.23...v0.3.24
+[0.3.23]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.22...v0.3.23
+[0.3.22]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.21...v0.3.22
+[0.3.21]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.17...v0.3.18

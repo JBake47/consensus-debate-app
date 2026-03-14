@@ -249,9 +249,14 @@
 .main-content {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.turns-virtuoso {
+  flex: 1;
+  min-height: 0;
 }
 
 .turns-container {
@@ -262,6 +267,35 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
+}
+
+.turns-virtuoso-item {
+  margin-bottom: var(--space-xl);
+}
+
+.turns-virtuoso-item:last-child {
+  margin-bottom: 0;
+}
+
+.jump-latest-btn {
+  position: fixed;
+  right: 22px;
+  bottom: 96px;
+  z-index: 15;
+  border: 1px solid var(--border-medium);
+  background: var(--surface-header);
+  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  padding: 8px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: all var(--transition-fast);
+}
+
+.jump-latest-btn:hover {
+  background: var(--bg-glass-hover);
+  border-color: var(--border-strong);
 }
 
 .turn-virtualized-banner {
@@ -343,6 +377,15 @@
   .turns-container {
     padding: 20px 16px 28px;
     gap: var(--space-lg);
+  }
+
+  .turns-virtuoso-item {
+    margin-bottom: var(--space-lg);
+  }
+
+  .jump-latest-btn {
+    right: 16px;
+    bottom: 88px;
   }
 
   .turn-virtualized-banner {

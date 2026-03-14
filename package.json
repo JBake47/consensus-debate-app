@@ -1,7 +1,7 @@
 {
   "name": "consensus",
   "private": true,
-  "version": "0.3.23",
+  "version": "0.3.24",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/retryPolicy.test.js && node src/lib/synthesisState.test.js && node src/lib/retryState.test.js && node src/lib/webSearch.test.js && node src/lib/conversationPersistence.test.js && node src/lib/attachmentRouting.test.js && node src/lib/multimodalOrchestrator.test.js && node src/lib/titleGenerator.test.js && node server/searchMetadata.test.js && node server/openrouterPayload.test.js && node server/multimodalApi.test.js"
+    "test": "node src/lib/retryPolicy.test.js && node src/lib/synthesisState.test.js && node src/lib/retryState.test.js && node src/lib/webSearch.test.js && node src/lib/contextManager.test.js && node src/lib/conversationIndex.test.js && node src/lib/searchConversations.test.js && node src/lib/conversationPersistence.test.js && node src/lib/attachmentRouting.test.js && node src/lib/attachmentPreview.test.js && node src/lib/multimodalOrchestrator.test.js && node src/lib/titleGenerator.test.js && node server/searchMetadata.test.js && node server/openrouterPayload.test.js && node server/multimodalApi.test.js"
   },
   "dependencies": {
     "docx": "^9.6.0",
@@ -24,6 +24,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^16.1.0",
+    "react-virtuoso": "^4.18.3",
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {

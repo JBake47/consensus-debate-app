@@ -1,50 +1,89 @@
+function normalizeSection(section, fallbackTurnIndex = null) {
+  if (!section || typeof section !== 'object') return null;
+  const text = String(section.text || '').trim();
+  if (!text) return null;
+  return {
+    matchType: String(section.matchType || 'content'),
+    text,
+    lower: text.toLowerCase(),
+    turnIndex: section.turnIndex ?? fallbackTurnIndex,
+  };
+}
+
+function getSectionsFromSidebarData(conversation) {
+  const sidebarData = conversation?.sidebarData;
+  if (!sidebarData || typeof sidebarData !== 'object') return null;
+
+  const sections = [];
+  for (const section of sidebarData.headerSections || []) {
+    const normalized = normalizeSection(section, null);
+    if (normalized) sections.push(normalized);
+  }
+
+  for (const turnEntry of sidebarData.turnEntries || []) {
+    for (const section of turnEntry?.sections || []) {
+      const normalized = normalizeSection(section, turnEntry?.turnIndex ?? null);
+      if (normalized) sections.push(normalized);
+    }
+  }
+
+  return sections;
+}
+
+function getFallbackSections(conversation) {
+  const sections = [];
+  const title = String(conversation?.title || '').trim();
+  const description = String(conversation?.description || '').trim();
+
+  if (title) {
+    sections.push({ matchType: 'title', text: title, lower: title.toLowerCase(), turnIndex: null });
+  }
+
+  if (description) {
+    sections.push({ matchType: 'description', text: description, lower: description.toLowerCase(), turnIndex: null });
+  }
+
+  for (let turnIndex = 0; turnIndex < (conversation?.turns || []).length; turnIndex += 1) {
+    const turn = conversation.turns[turnIndex];
+    const searchSections = Array.isArray(turn?.searchSections)
+      ? turn.searchSections
+      : [];
+
+    if (searchSections.length > 0) {
+      for (const section of searchSections) {
+        const normalized = normalizeSection(section, turnIndex);
+        if (normalized) sections.push(normalized);
+      }
+      continue;
+    }
+
+    const prompt = String(turn?.userPrompt || '').trim();
+    if (prompt) {
+      sections.push({ matchType: 'prompt', text: prompt, lower: prompt.toLowerCase(), turnIndex });
+    }
+
+    const synthesis = String(turn?.synthesis?.content || '').trim();
+    if (synthesis) {
+      sections.push({ matchType: 'synthesis', text: synthesis, lower: synthesis.toLowerCase(), turnIndex });
+    }
+  }
+
+  return sections;
+}
+
 /**
- * Build a lightweight search index so sidebar queries do not rescan the full
- * conversation tree and repeatedly lowercase large strings on every keypress.
+ * Build a lightweight search index from cached sidebar metadata instead of raw
+ * chat payloads so searching stays cheap even for large histories.
  */
 export function buildConversationSearchIndex(conversations) {
   return [...(Array.isArray(conversations) ? conversations : [])]
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .map((conv) => {
-      const sections = [];
-      const title = String(conv?.title || '').trim();
-      const description = String(conv?.description || '').trim();
-
-      if (title) {
-        sections.push({ matchType: 'title', text: title, lower: title.toLowerCase(), turnIndex: null });
-      }
-
-      if (description) {
-        sections.push({ matchType: 'description', text: description, lower: description.toLowerCase(), turnIndex: null });
-      }
-
-      for (let turnIndex = 0; turnIndex < (conv?.turns || []).length; turnIndex += 1) {
-        const turn = conv.turns[turnIndex];
-        const prompt = String(turn?.userPrompt || '').trim();
-        if (prompt) {
-          sections.push({ matchType: 'prompt', text: prompt, lower: prompt.toLowerCase(), turnIndex });
-        }
-
-        const synthesis = String(turn?.synthesis?.content || '').trim();
-        if (synthesis) {
-          sections.push({ matchType: 'synthesis', text: synthesis, lower: synthesis.toLowerCase(), turnIndex });
-        }
-
-        const finalRound = Array.isArray(turn?.rounds) && turn.rounds.length > 0
-          ? turn.rounds[turn.rounds.length - 1]
-          : null;
-
-        for (const stream of finalRound?.streams || []) {
-          const response = String(stream?.content || '').trim();
-          if (!response) continue;
-          sections.push({ matchType: 'response', text: response, lower: response.toLowerCase(), turnIndex });
-        }
-      }
-
+    .map((conversation) => {
+      const sections = getSectionsFromSidebarData(conversation) || getFallbackSections(conversation);
       return {
-        conversationId: conv?.id,
-        conversationTitle: title || 'Untitled chat',
-        updatedAt: conv?.updatedAt || conv?.createdAt || 0,
+        conversationId: conversation?.id,
+        conversationTitle: String(conversation?.title || '').trim() || 'Untitled chat',
+        updatedAt: conversation?.updatedAt || conversation?.createdAt || 0,
         sections,
       };
     })

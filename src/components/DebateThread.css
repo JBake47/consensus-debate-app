@@ -4,6 +4,31 @@
   gap: 0;
 }
 
+.debate-thread-virtualized {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.02);
+  padding: var(--space-sm);
+}
+
+.debate-thread-virtuoso {
+  min-height: 0;
+}
+
+.thread-virtuoso-item {
+  padding-bottom: var(--space-md);
+}
+
+.thread-virtuoso-item:last-child {
+  padding-bottom: 0;
+}
+
+.thread-virtualized-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 0 var(--space-sm);
+}
+
 /* Round dividers */
 .thread-round-divider {
   display: flex;
