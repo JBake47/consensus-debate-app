@@ -1,10 +1,9 @@
-import { memo, useEffect, useRef, useState } from 'react';
-import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, FileText, Image as ImageIcon, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ExpandButton from './ExpandButton';
-import { formatFileSize } from '../lib/formatFileSize';
 import ModelCard from './ModelCard';
 import ReplaceModelButton from './ReplaceModelButton';
 import RoundSection from './RoundSection';
@@ -12,6 +11,7 @@ import DebateThread from './DebateThread';
 import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import EnsembleResultPanel from './EnsembleResultPanel';
+import AttachmentCard from './AttachmentCard';
 import AttachmentViewer from './AttachmentViewer';
 import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
@@ -23,6 +23,7 @@ import {
   getStreamDisplayState,
   isRoundAttentionRequired,
 } from '../lib/retryState';
+import { buildAttachmentRoutingOverview } from '../lib/attachmentRouting';
 import {
   computeTurnCostMeta,
   formatCostWithQuality,
@@ -133,6 +134,8 @@ function DebateView({ turn, isLastTurn }) {
   const {
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
+    modelCatalog,
+    capabilityRegistry,
   } = useDebateSettings();
   const { debateInProgress } = useDebateConversations();
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'thread'
@@ -149,6 +152,23 @@ function DebateView({ turn, isLastTurn }) {
   const turnCostMeta = computeTurnCostMeta(turn);
   const turnCostLabel = formatCostWithQuality(turnCostMeta);
   const keepLatestRounds = Math.max(2, Number(streamVirtualizationKeepLatest) || 4);
+  const turnAttachmentRouting = useMemo(() => {
+    if (!Array.isArray(turn.attachments) || turn.attachments.length === 0) {
+      return [];
+    }
+    if (Array.isArray(turn.attachmentRouting) && turn.attachmentRouting.length === turn.attachments.length) {
+      return turn.attachmentRouting;
+    }
+    const turnModels = Array.isArray(turn.modelOverrides) && turn.modelOverrides.length > 0
+      ? turn.modelOverrides
+      : (turn.rounds?.[0]?.streams || []).map((stream) => stream.model).filter(Boolean);
+    return buildAttachmentRoutingOverview({
+      attachments: turn.attachments,
+      models: turnModels,
+      modelCatalog,
+      capabilityRegistry,
+    });
+  }, [turn.attachments, turn.attachmentRouting, turn.modelOverrides, turn.rounds, modelCatalog, capabilityRegistry]);
   const attentionRoundIndices = Array.isArray(turn.rounds)
     ? turn.rounds
       .map((round, index) => (isRoundAttentionRequired(round) ? index : null))
@@ -321,18 +341,14 @@ function DebateView({ turn, isLastTurn }) {
             <MarkdownRenderer>{turn.userPrompt}</MarkdownRenderer>
           </div>
           {turn.attachments && turn.attachments.length > 0 && (
-            <div className="user-attachments">
+            <div className="user-attachments-grid">
               {turn.attachments.map((att, i) => (
-                <button
-                  key={i}
-                  className={`user-attachment-chip ${att.category}`}
-                  onClick={() => setViewerAttachment(att)}
-                  title="View attachment"
-                >
-                  {att.category === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}
-                  <span className="user-attachment-name">{att.name}</span>
-                  <span className="user-attachment-size">{formatFileSize(att.size)}</span>
-                </button>
+                <AttachmentCard
+                  key={att.uploadId || att.storageId || `${att.name}-${i}`}
+                  attachment={att}
+                  routing={turnAttachmentRouting[i]}
+                  onPreview={() => setViewerAttachment(att)}
+                />
               ))}
             </div>
           )}

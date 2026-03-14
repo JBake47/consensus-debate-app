@@ -18,6 +18,7 @@ import {
   WidthType,
 } from 'docx';
 import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
+import { buildOpenRouterPlugins } from './openrouterPayload.js';
 
 dotenv.config();
 
@@ -28,6 +29,8 @@ const ALLOW_REMOTE_API = process.env.ALLOW_REMOTE_API === 'true';
 const SERVER_AUTH_TOKEN = process.env.SERVER_AUTH_TOKEN || '';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const OPENROUTER_WEB_PLUGIN_ID = process.env.OPENROUTER_WEB_PLUGIN_ID || 'web';
+const OPENROUTER_FILE_PLUGIN_ID = process.env.OPENROUTER_FILE_PLUGIN_ID || 'file-parser';
+const OPENROUTER_PDF_ENGINE = process.env.OPENROUTER_PDF_ENGINE || 'pdf-text';
 const ANTHROPIC_WEB_SEARCH_TOOL_TYPE = process.env.ANTHROPIC_WEB_SEARCH_TOOL_TYPE || 'web_search_20250305';
 const ANTHROPIC_WEB_SEARCH_BETA = process.env.ANTHROPIC_WEB_SEARCH_BETA || 'web-search-2025-03-05';
 const OPENAI_WEB_SEARCH_MODE = process.env.OPENAI_WEB_SEARCH_MODE || 'web_search_options';
@@ -531,8 +534,15 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
     stream,
     include_reasoning: true,
   };
-  if (nativeWebSearch) {
-    body.plugins = [{ id: OPENROUTER_WEB_PLUGIN_ID }];
+  const plugins = buildOpenRouterPlugins({
+    nativeWebSearch,
+    messages,
+    webPluginId: OPENROUTER_WEB_PLUGIN_ID,
+    filePluginId: OPENROUTER_FILE_PLUGIN_ID,
+    pdfEngine: OPENROUTER_PDF_ENGINE,
+  });
+  if (plugins.length > 0) {
+    body.plugins = plugins;
   }
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {

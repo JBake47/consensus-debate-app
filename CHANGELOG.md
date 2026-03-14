@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-03-14
+
+### Added
+- Attachment routing and transport helpers for per-model multimodal payload construction, including native OpenRouter PDF file parts and OpenRouter plugin selection coverage
+- Reusable attachment tiles plus dedicated tests for attachment routing and OpenRouter file-plugin behavior
+
+### Changed
+- Reworked the composer and turn-history attachment UI into a thumbnail tray with richer previews, routing badges, targeted warnings, and click-to-expand attachments
+- Debate, direct, parallel, and retry flows now build attachment-aware messages per model and persist routing summaries into conversation context
+- Attachment previews now capture richer metadata during processing, and the PDF viewer uses a scrollable multi-page stack with lazy rendering for faster open times
+
+### Fixed
+- Image-only turns no longer become unsendable while provider capability metadata is still loading
+- The attach-file dialog no longer hides supported extensionless files such as `Dockerfile` and `Makefile`
+- Attachment metadata captions now render with clean separators instead of mojibake
+
 ## [0.3.22] - 2026-03-12
 
 ### Added

@@ -2,15 +2,25 @@ import { processFile } from '../lib/fileProcessor';
 
 self.onmessage = async (event) => {
   const requestId = event.data?.requestId;
-  const files = Array.isArray(event.data?.files) ? event.data.files : [];
+  const fileEntries = Array.isArray(event.data?.files) ? event.data.files : [];
 
   const results = await Promise.all(
-    files.map(async (file) => {
+    fileEntries.map(async (entry) => {
+      const file = entry?.file || entry;
+      const uploadId = entry?.uploadId || null;
       try {
-        return { attachment: await processFile(file) };
+        return {
+          uploadId,
+          attachment: {
+            ...(await processFile(file)),
+            uploadId,
+          },
+        };
       } catch {
         return {
+          uploadId,
           attachment: {
+            uploadId,
             name: file?.name || 'attachment',
             size: Number(file?.size || 0),
             type: file?.type || '',
@@ -18,6 +28,7 @@ self.onmessage = async (event) => {
             content: '',
             preview: 'error',
             error: 'Failed to process file',
+            processingStatus: 'error',
           },
         };
       }

@@ -112,68 +112,11 @@
   color: var(--text-primary);
 }
 
-.user-attachments {
+.user-attachments-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: var(--space-xs);
-}
-
-.user-attachment-chip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 2px 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-}
-
-.user-attachment-chip:hover {
-  border-color: var(--border-medium);
-  color: var(--text-primary);
-}
-
-.user-attachment-chip:focus-visible {
-  outline: 2px solid var(--accent-blue);
-  outline-offset: 2px;
-}
-
-.user-attachment-chip.image {
-  border-color: rgba(168, 85, 247, 0.25);
-  color: var(--accent-purple);
-}
-
-.user-attachment-chip.excel {
-  border-color: rgba(34, 197, 94, 0.25);
-  color: var(--accent-green);
-}
-
-.user-attachment-chip.word {
-  border-color: rgba(79, 143, 247, 0.25);
-  color: var(--accent-blue);
-}
-
-.user-attachment-chip.pdf {
-  border-color: rgba(239, 68, 68, 0.25);
-  color: var(--status-error);
-}
-
-.user-attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 150px;
-  font-weight: 500;
-}
-
-.user-attachment-size {
-  color: var(--text-muted);
-  flex-shrink: 0;
+  gap: 12px;
+  margin-top: var(--space-sm);
 }
 
 .turn-cost-summary {

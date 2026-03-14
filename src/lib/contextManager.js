@@ -27,6 +27,20 @@ function estimateMessagesTokens(messages) {
 function summarizeTurnForContext(turn) {
   const parts = [];
 
+  if (Array.isArray(turn.attachments) && turn.attachments.length > 0) {
+    const routing = Array.isArray(turn.attachmentRouting) ? turn.attachmentRouting : [];
+    const attachmentSummary = turn.attachments
+      .map((attachment, index) => {
+        const route = routing[index];
+        const label = route?.primaryLabel || 'Attached';
+        return `${attachment.name} (${label})`;
+      })
+      .join(', ');
+    if (attachmentSummary) {
+      parts.push(`[Attachments: ${attachmentSummary}]`);
+    }
+  }
+
   // Include web search context if it existed
   if (turn.webSearchResult?.content && turn.webSearchResult.status === 'complete') {
     parts.push(`[Web search was performed for this query]`);

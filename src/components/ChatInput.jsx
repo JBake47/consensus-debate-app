@@ -1,17 +1,97 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Swords, Square, Globe, Paperclip, X, FileText, Image as ImageIcon, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
+import { Swords, Square, Globe, Paperclip, X, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
 import {
   useDebateActions,
   useDebateConversations,
   useDebateSettings,
   useDebateUi,
 } from '../context/DebateContext';
-import { getImageIncompatibleModels } from '../lib/modelCapabilities';
 import { estimateTurnBudget } from '../lib/budgetEstimator';
 import { formatCostWithQuality } from '../lib/formatTokens';
-import { formatFileSize } from '../lib/formatFileSize';
+import AttachmentCard from './AttachmentCard';
+import AttachmentViewer from './AttachmentViewer';
+import {
+  DEFAULT_MAX_ATTACHMENTS,
+  buildAttachmentRoutingOverview,
+} from '../lib/attachmentRouting';
 import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
+import { IMAGE_TYPES, getFileCategory } from '../lib/fileProcessor';
 import './ChatInput.css';
+
+const FILE_INPUT_ACCEPT_PARTS = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.pdf', '.docx', '.xlsx', '.xls', '.xlsm',
+  '.txt', '.md', '.mdx', '.csv', '.json', '.xml', '.html', '.htm',
+  '.css', '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.c', '.cpp',
+  '.h', '.hpp', '.rs', '.go', '.rb', '.php', '.sh', '.yaml', '.yml',
+  '.toml', '.ini', '.cfg', '.conf', '.log', '.sql',
+];
+const SUPPORTED_EXTENSIONS = new Set(FILE_INPUT_ACCEPT_PARTS.map((value) => value.toLowerCase()));
+const EXTENSIONLESS_TEXT_NAMES = new Set(['dockerfile', 'makefile', '.env', '.gitignore']);
+const SUPPORTED_MIME_HINTS = [
+  'application/pdf',
+  'application/json',
+  'application/xml',
+  'application/javascript',
+  'application/x-javascript',
+  'application/typescript',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-excel.sheet.macroenabled.12',
+];
+const ATTACHMENT_SUPPORT_SUMMARY = 'Supported: images, PDF, DOCX, XLSX, and text/code files.';
+
+function getFileExtension(name) {
+  const fileName = String(name || '').trim();
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : '';
+}
+
+function isSupportedAttachment(file) {
+  const name = String(file?.name || '').trim().toLowerCase();
+  const type = String(file?.type || '').trim().toLowerCase();
+  const extension = getFileExtension(name);
+
+  if (SUPPORTED_EXTENSIONS.has(extension) || EXTENSIONLESS_TEXT_NAMES.has(name)) {
+    return true;
+  }
+  if (IMAGE_TYPES.includes(type)) {
+    return true;
+  }
+  if (type.startsWith('text/')) {
+    return true;
+  }
+  return SUPPORTED_MIME_HINTS.some((hint) => type === hint);
+}
+
+function formatUnsupportedAttachmentNotice(files) {
+  const names = files
+    .map((file) => String(file?.name || '').trim() || 'clipboard item')
+    .filter(Boolean);
+  const preview = names.slice(0, 3).join(', ');
+  const remainder = names.length > 3 ? `, +${names.length - 3} more` : '';
+  if (names.length === 1) {
+    return `"${preview}" is not supported. ${ATTACHMENT_SUPPORT_SUMMARY}`;
+  }
+  return `${names.length} attachments are not supported (${preview}${remainder}). ${ATTACHMENT_SUPPORT_SUMMARY}`;
+}
+
+function createPendingAttachment(file, uploadId) {
+  return {
+    uploadId,
+    name: file?.name || 'attachment',
+    size: Number(file?.size || 0),
+    type: file?.type || '',
+    category: getFileCategory(file),
+    content: '',
+    preview: 'loading',
+    dataUrl: null,
+    inlineWarning: null,
+    previewMeta: null,
+    processingStatus: 'processing',
+  };
+}
 
 export default function ChatInput() {
   const { startDebate, startDirect, startParallel, cancelDebate, dispatch } = useDebateActions();
@@ -20,8 +100,8 @@ export default function ChatInput() {
     apiKey,
     selectedModels,
     modelCatalog,
-    modelCatalogStatus,
     providerStatus,
+    capabilityRegistry,
     synthesizerModel,
     convergenceModel,
     webSearchModel,
@@ -39,6 +119,8 @@ export default function ChatInput() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [budgetConfirm, setBudgetConfirm] = useState(null);
   const [orchestrating, setOrchestrating] = useState(false);
+  const [attachmentNotice, setAttachmentNotice] = useState('');
+  const [viewerAttachment, setViewerAttachment] = useState(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
@@ -66,7 +148,8 @@ export default function ChatInput() {
     }
   }, [editingTurn, dispatch]);
 
-  const fallbackAttachment = useCallback((file) => ({
+  const fallbackAttachment = useCallback((file, uploadId = null) => ({
+    uploadId,
     name: file?.name || 'attachment',
     size: Number(file?.size || 0),
     type: file?.type || '',
@@ -74,6 +157,7 @@ export default function ChatInput() {
     content: '',
     preview: 'error',
     error: 'Failed to process file',
+    processingStatus: 'error',
   }), []);
 
   const ensureFileWorker = useCallback(() => {
@@ -83,16 +167,27 @@ export default function ChatInput() {
     return fileWorkerRef.current;
   }, []);
 
-  const processFilesOnMainThread = useCallback(async (files) => {
+  const processFilesOnMainThread = useCallback(async (entries) => {
     const { processFile } = await import('../lib/fileProcessor');
     return Promise.all(
-      Array.from(files).map((file) => processFile(file).catch(() => fallbackAttachment(file)))
+      Array.from(entries).map(async (entry) => {
+        const file = entry?.file || entry;
+        const uploadId = entry?.uploadId || null;
+        try {
+          return {
+            ...(await processFile(file)),
+            uploadId,
+          };
+        } catch {
+          return fallbackAttachment(file, uploadId);
+        }
+      })
     );
   }, [fallbackAttachment]);
 
-  const processFilesInWorker = useCallback((files) => {
-    const safeFiles = Array.from(files || []);
-    if (safeFiles.length === 0) return Promise.resolve([]);
+  const processFilesInWorker = useCallback((entries) => {
+    const safeEntries = Array.from(entries || []);
+    if (safeEntries.length === 0) return Promise.resolve([]);
 
     return new Promise((resolve, reject) => {
       const worker = ensureFileWorker();
@@ -107,7 +202,10 @@ export default function ChatInput() {
         if (event.data?.requestId !== requestId) return;
         cleanup();
         const nextAttachments = Array.isArray(event.data?.results)
-          ? event.data.results.map((entry, index) => entry?.attachment || fallbackAttachment(safeFiles[index]))
+          ? event.data.results.map((result, index) => {
+            const fallbackEntry = safeEntries[index];
+            return result?.attachment || fallbackAttachment(fallbackEntry?.file || fallbackEntry, fallbackEntry?.uploadId || null);
+          })
           : [];
         resolve(nextAttachments);
       };
@@ -119,25 +217,58 @@ export default function ChatInput() {
 
       worker.addEventListener('message', handleMessage);
       worker.addEventListener('error', handleError);
-      worker.postMessage({ requestId, files: safeFiles });
+      worker.postMessage({ requestId, files: safeEntries });
     });
   }, [ensureFileWorker, fallbackAttachment]);
 
   const handleFiles = useCallback(async (files) => {
-    if (!files || files.length === 0) return;
+    const incomingFiles = Array.from(files || []);
+    if (incomingFiles.length === 0) return;
+    const supportedFiles = incomingFiles.filter((file) => isSupportedAttachment(file));
+    const unsupportedFiles = incomingFiles.filter((file) => !isSupportedAttachment(file));
+    const remainingSlots = Math.max(0, DEFAULT_MAX_ATTACHMENTS - attachments.length);
+    const noticeParts = [];
+    if (unsupportedFiles.length > 0) {
+      noticeParts.push(formatUnsupportedAttachmentNotice(unsupportedFiles));
+    }
+    if (remainingSlots <= 0) {
+      noticeParts.push(`You can attach up to ${DEFAULT_MAX_ATTACHMENTS} files per turn.`);
+      setAttachmentNotice(noticeParts.join(' '));
+      return;
+    }
+    const acceptedFiles = supportedFiles.slice(0, remainingSlots);
+    if (supportedFiles.length > acceptedFiles.length) {
+      noticeParts.push(
+        `Only the first ${remainingSlots} supported file${remainingSlots === 1 ? '' : 's'} were added.`
+      );
+    }
+    if (acceptedFiles.length === 0) {
+      setAttachmentNotice(noticeParts.join(' '));
+      return;
+    }
+    const pendingEntries = acceptedFiles.map((file, index) => ({
+      file,
+      uploadId: `upload-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    }));
+    const pendingAttachments = pendingEntries.map(({ file, uploadId }) => createPendingAttachment(file, uploadId));
+    setAttachments((prev) => [...prev, ...pendingAttachments]);
+    setAttachmentNotice(noticeParts.join(' '));
     setProcessing(true);
     try {
       let processed;
       try {
-        processed = await processFilesInWorker(files);
+        processed = await processFilesInWorker(pendingEntries);
       } catch {
-        processed = await processFilesOnMainThread(files);
+        processed = await processFilesOnMainThread(pendingEntries);
       }
-      setAttachments((prev) => [...prev, ...processed]);
+      const processedById = new Map(processed.map((attachment) => [attachment.uploadId, attachment]));
+      setAttachments((prev) => prev.map((attachment) => (
+        processedById.get(attachment.uploadId) || attachment
+      )));
     } finally {
       setProcessing(false);
     }
-  }, [processFilesInWorker, processFilesOnMainThread]);
+  }, [attachments.length, processFilesInWorker, processFilesOnMainThread]);
 
   const removeAttachment = (index) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -245,9 +376,26 @@ export default function ChatInput() {
     quality: budgetEstimate.quality,
   });
 
+  const attachmentRouting = useMemo(() => buildAttachmentRoutingOverview({
+    attachments,
+    models: selectedModels,
+    modelCatalog,
+    capabilityRegistry,
+  }), [attachments, selectedModels, modelCatalog, capabilityRegistry]);
+
+  const sendableAttachmentCount = useMemo(() => attachmentRouting.reduce((count, route) => {
+    if (!route || route.state !== 'ready') return count;
+    return count + ((route.nativeModels.length > 0 || route.fallbackModels.length > 0) ? 1 : 0);
+  }, 0), [attachmentRouting]);
+
+  const anyAttachmentProcessing = attachments.some((attachment) => attachment.processingStatus === 'processing');
+  const canSubmit = (!input.trim() && sendableAttachmentCount === 0)
+    ? false
+    : (!debateInProgress && !orchestrating && !anyAttachmentProcessing);
+
   const handleSubmit = () => {
     const trimmed = input.trim();
-    if ((!trimmed && attachments.length === 0) || debateInProgress || orchestrating) return;
+    if ((!trimmed && sendableAttachmentCount === 0) || debateInProgress || orchestrating || anyAttachmentProcessing) return;
 
     const estimatedCost = Number(budgetEstimate.totalEstimatedCost || 0);
     const softLimit = Number(budgetSoftLimitUsd || 0);
@@ -273,7 +421,7 @@ export default function ChatInput() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit();
+      if (canSubmit) handleSubmit();
     }
   };
 
@@ -380,16 +528,6 @@ export default function ChatInput() {
     }
   };
 
-  const hasImageAttachment = useMemo(
-    () => attachments.some(att => att.category === 'image'),
-    [attachments]
-  );
-
-  const imageIncompatibleModels = useMemo(() => {
-    if (!hasImageAttachment || modelCatalogStatus !== 'ready') return [];
-    return getImageIncompatibleModels(selectedModels, modelCatalog);
-  }, [hasImageAttachment, modelCatalogStatus, selectedModels, modelCatalog]);
-
   return (
     <div className="chat-input-wrapper">
       <div
@@ -401,7 +539,12 @@ export default function ChatInput() {
         {dragOver && (
           <div className="drag-overlay">
             <Paperclip size={24} />
-            <span>Drop files here</span>
+            <div className="drag-overlay-copy">
+              <span className="drag-overlay-title">Drop supported files here</span>
+              <span className="drag-overlay-hint">
+                {ATTACHMENT_SUPPORT_SUMMARY} Up to {DEFAULT_MAX_ATTACHMENTS} files per turn.
+              </span>
+            </div>
           </div>
         )}
 
@@ -441,24 +584,21 @@ export default function ChatInput() {
           </div>
         )}
 
-        {attachments.length > 0 && (
-          <div className="attachment-chips">
-            {attachments.map((att, i) => (
-              <div key={i} className={`attachment-chip ${att.category}`}>
-                {att.category === 'image' ? <ImageIcon size={13} /> : <FileText size={13} />}
-                <span className="attachment-chip-name">{att.name}</span>
-                <span className="attachment-chip-size">{formatFileSize(att.size)}</span>
-                <button className="attachment-chip-remove" onClick={() => removeAttachment(i)}>
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
+        {attachmentNotice && (
+          <div className="attachment-warning">{attachmentNotice}</div>
         )}
 
-        {hasImageAttachment && imageIncompatibleModels.length > 0 && (
-          <div className="attachment-warning">
-            Images will not be sent to: {imageIncompatibleModels.join(', ')}
+        {attachments.length > 0 && (
+          <div className="attachment-tray">
+            {attachments.map((att, i) => (
+              <AttachmentCard
+                key={att.uploadId || `${att.name}-${i}`}
+                attachment={att}
+                routing={attachmentRouting[i]}
+                onPreview={() => setViewerAttachment(att)}
+                onRemove={() => removeAttachment(i)}
+              />
+            ))}
           </div>
         )}
 
@@ -573,7 +713,7 @@ export default function ChatInput() {
                   <button
                     className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
                     onClick={handleSubmit}
-                    disabled={(!input.trim() && attachments.length === 0) || orchestrating}
+                    disabled={!canSubmit}
                   >
                     {chatMode === 'debate' && <Swords size={16} />}
                     {chatMode === 'direct' && <Send size={16} />}
@@ -588,6 +728,7 @@ export default function ChatInput() {
       </div>
       <p className="chat-input-hint">
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line {' | '} Drag and drop or paste files
+        {anyAttachmentProcessing && ' | Processing attachments...'}
         {orchestrating && ' | Preparing multimodal tools...'}
         {budgetEstimateLabel && (
           <>
@@ -595,6 +736,9 @@ export default function ChatInput() {
           </>
         )}
       </p>
+      {viewerAttachment && (
+        <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+      )}
     </div>
   );
 }

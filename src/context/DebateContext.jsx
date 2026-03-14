@@ -22,7 +22,11 @@ import {
   parseEnsembleVoteResponse,
   getFocusedEnsembleAnalysisPrompt,
 } from '../lib/debateEngine';
-import { buildAttachmentContent, buildAttachmentTextContent } from '../lib/attachmentContent';
+import {
+  buildAttachmentMessagesForModels,
+  buildAttachmentRoutingOverview,
+  buildAttachmentTextContent,
+} from '../lib/attachmentContent';
 import {
   buildConversationContext,
   buildSummaryPrompt,
@@ -2089,6 +2093,31 @@ export function DebateProvider({ children }) {
     return `${prompt}${evidenceInstruction}`;
   };
 
+  const buildInitialMessagesForModels = ({
+    models,
+    conversationHistory,
+    userMessageContent,
+    attachments,
+    videoUrls = [],
+    systemMessages = [],
+  }) => buildAttachmentMessagesForModels({
+    models,
+    systemMessages,
+    conversationHistory,
+    userMessageContent,
+    attachments,
+    modelCatalog: state.modelCatalog,
+    capabilityRegistry: state.capabilityRegistry,
+    videoUrls,
+  });
+
+  const buildAttachmentRoutingForTurn = (attachments, models) => buildAttachmentRoutingOverview({
+    attachments,
+    models,
+    modelCatalog: state.modelCatalog,
+    capabilityRegistry: state.capabilityRegistry,
+  });
+
   const runLegacyWebSearch = async ({
     convId,
     turnId,
@@ -2465,6 +2494,7 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      attachmentRouting: buildAttachmentRoutingForTurn(attachments, models),
       modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
       routeInfo,
       mode: 'debate',
@@ -2559,11 +2589,13 @@ export function DebateProvider({ children }) {
     // conversationHistory for rebuttal/synthesis builders (just the context messages)
     const conversationHistory = contextMessages;
 
-    // Build user message content with attachments (text inline, images as multimodal parts)
-    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+    const initialMessagesPerModel = buildInitialMessagesForModels({
+      models,
+      conversationHistory,
+      userMessageContent,
+      attachments,
       videoUrls: routeInfo?.youtubeUrls || [],
     });
-    const initialMessages = [...conversationHistory, { role: 'user', content: userContent }];
 
     let lastCompletedStreams = null;
     let converged = false;
@@ -2619,8 +2651,7 @@ export function DebateProvider({ children }) {
       let messagesPerModel = null;
 
       if (roundNum === 1) {
-        // Round 1: all models get the same initial messages
-        roundMessages = initialMessages;
+        messagesPerModel = initialMessagesPerModel;
       } else {
         // Rebuttal rounds: each model gets messages with previous round's responses
         messagesPerModel = models.map(() =>
@@ -2710,14 +2741,18 @@ export function DebateProvider({ children }) {
             requireEvidence: nativeWebSearchEnabled,
             strictMode: strictWebSearch,
           });
-          const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+          roundMessages = null;
+          messagesPerModel = buildInitialMessagesForModels({
+            models,
+            conversationHistory,
+            userMessageContent: fallbackUserMessageContent,
+            attachments,
             videoUrls: routeInfo?.youtubeUrls || [],
           });
-          roundMessages = [...conversationHistory, { role: 'user', content: fallbackUserContent }];
           results = await runRound({
             models,
             messages: roundMessages,
-            messagesPerModel: null,
+            messagesPerModel,
             convId,
             turnId,
             runId,
@@ -3030,7 +3065,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -3189,6 +3224,7 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      attachmentRouting: buildAttachmentRoutingForTurn(attachments, models),
       modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
       routeInfo,
       mode: 'parallel',
@@ -3273,11 +3309,15 @@ export function DebateProvider({ children }) {
     });
 
     const conversationHistory = contextMessages;
-    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+    const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
+    const initialMessagesPerModel = buildInitialMessagesForModels({
+      models,
+      systemMessages: focusedSystemMsg,
+      conversationHistory,
+      userMessageContent,
+      attachments,
       videoUrls: routeInfo?.youtubeUrls || [],
     });
-    const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
-    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
     // ===== PARALLEL RESPONSES =====
     const roundLabel = focused ? 'Focused Responses' : 'Parallel Responses';
@@ -3288,7 +3328,7 @@ export function DebateProvider({ children }) {
 
     let results = await runRound({
       models,
-      messages: initialMessages,
+      messagesPerModel: initialMessagesPerModel,
       convId,
       turnId,
       runId,
@@ -3355,13 +3395,17 @@ export function DebateProvider({ children }) {
           requireEvidence: nativeWebSearchEnabled,
           strictMode: strictWebSearch,
         });
-        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+        const fallbackInitialMessagesPerModel = buildInitialMessagesForModels({
+          models,
+          systemMessages: focusedSystemMsg,
+          conversationHistory,
+          userMessageContent: fallbackUserMessageContent,
+          attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
         });
-        const fallbackInitialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
         results = await runRound({
           models,
-          messages: fallbackInitialMessages,
+          messagesPerModel: fallbackInitialMessagesPerModel,
           convId,
           turnId,
           runId,
@@ -3434,7 +3478,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const startDirect = useCallback(async (userPrompt, {
     webSearch = false,
@@ -3480,6 +3524,7 @@ export function DebateProvider({ children }) {
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
+      attachmentRouting: buildAttachmentRoutingForTurn(attachments, models),
       modelOverrides: Array.isArray(modelOverrides) ? modelOverrides : null,
       routeInfo,
       mode: 'direct',
@@ -3569,11 +3614,15 @@ export function DebateProvider({ children }) {
     });
 
     const conversationHistory = contextMessages;
-    const userContent = buildAttachmentContent(userMessageContent, attachments, {
+    const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
+    const initialMessagesPerModel = buildInitialMessagesForModels({
+      models,
+      systemMessages: focusedSystemMsg,
+      conversationHistory,
+      userMessageContent,
+      attachments,
       videoUrls: routeInfo?.youtubeUrls || [],
     });
-    const focusedSystemMsg = focused ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }] : [];
-    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
 
     // ===== PHASE 1: All debate models in parallel =====
     const roundLabel = focused ? 'Focused Analyses' : 'Independent Analyses';
@@ -3584,7 +3633,7 @@ export function DebateProvider({ children }) {
 
     let results = await runRound({
       models,
-      messages: initialMessages,
+      messagesPerModel: initialMessagesPerModel,
       convId,
       turnId,
       runId,
@@ -3651,13 +3700,17 @@ export function DebateProvider({ children }) {
           requireEvidence: nativeWebSearchEnabled,
           strictMode: strictWebSearch,
         });
-        const fallbackUserContent = buildAttachmentContent(fallbackUserMessageContent, attachments, {
+        const fallbackInitialMessagesPerModel = buildInitialMessagesForModels({
+          models,
+          systemMessages: focusedSystemMsg,
+          conversationHistory,
+          userMessageContent: fallbackUserMessageContent,
+          attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
         });
-        const fallbackInitialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
         results = await runRound({
           models,
-          messages: fallbackInitialMessages,
+          messagesPerModel: fallbackInitialMessagesPerModel,
           convId,
           turnId,
           runId,
@@ -3729,7 +3782,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const cancelDebate = useCallback((conversationId = null) => {
     const normalizedConversationId = (
@@ -3993,7 +4046,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode, state.modelCatalog, state.capabilityRegistry, setAbortController]);
 
   const branchFromRound = useCallback((roundIndex) => {
     if (!activeConversation || !activeConversation.id) return;
@@ -4090,13 +4143,17 @@ export function DebateProvider({ children }) {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
     });
-    const userContent = buildAttachmentContent(userMessageContent, attachments, {
-      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
-    });
     const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
       ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
       : [];
-    let initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
+    let initialMessagesPerModel = buildInitialMessagesForModels({
+      models,
+      systemMessages: focusedSystemMsg,
+      conversationHistory,
+      userMessageContent,
+      attachments,
+      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+    });
 
     // Get previous round streams for rebuttal context
     let previousRoundStreams = null;
@@ -4126,7 +4183,7 @@ export function DebateProvider({ children }) {
 
       let results = await runRound({
         models,
-        messages: initialMessages,
+        messagesPerModel: initialMessagesPerModel,
         convId,
         turnId,
         runId,
@@ -4183,13 +4240,17 @@ export function DebateProvider({ children }) {
             requireEvidence: Boolean(lastTurn.webSearchEnabled),
             strictMode: strictWebSearch,
           });
-          const fallbackUserContent = buildAttachmentContent(fallbackPrompt, attachments, {
+          initialMessagesPerModel = buildInitialMessagesForModels({
+            models,
+            systemMessages: focusedSystemMsg,
+            conversationHistory,
+            userMessageContent: fallbackPrompt,
+            attachments,
             videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
           });
-          initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: fallbackUserContent }];
           results = await runRound({
             models,
-            messages: initialMessages,
+            messagesPerModel: initialMessagesPerModel,
             convId,
             turnId,
             runId,
@@ -4558,7 +4619,7 @@ export function DebateProvider({ children }) {
         // Build messages for this model
         let modelMessages;
         if (roundIndex === 0) {
-          modelMessages = initialMessages;
+          modelMessages = initialMessagesPerModel[si] || initialMessagesPerModel[0] || [];
         } else {
           modelMessages = buildRebuttalMessages({
             userPrompt,
@@ -5074,7 +5135,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, buildNativeWebSearchStrategy, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, setAbortController]);
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -5206,13 +5267,17 @@ export function DebateProvider({ children }) {
       requireEvidence: Boolean(lastTurn.webSearchEnabled),
       strictMode: strictWebSearch,
     });
-    const userContent = buildAttachmentContent(userMessageContent, attachments, {
-      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
-    });
     const focusedSystemMsg = turnFocused && lastTurn.mode === 'direct'
       ? [{ role: 'system', content: getFocusedEnsembleAnalysisPrompt() }]
       : [];
-    const initialMessages = [...focusedSystemMsg, ...conversationHistory, { role: 'user', content: userContent }];
+    const initialMessages = buildInitialMessagesForModels({
+      models: [retryModel],
+      systemMessages: focusedSystemMsg,
+      conversationHistory,
+      userMessageContent,
+      attachments,
+      videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+    })[0];
 
     // Build messages for this specific model in this round
     let modelMessages;
@@ -5756,7 +5821,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, buildNativeWebSearchStrategy, setAbortController]);
+  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, setAbortController]);
 
   const suggestReplacementModel = useCallback((roundIndex, streamIndex) => {
     if (!activeConversation || activeConversation.turns.length === 0) return null;

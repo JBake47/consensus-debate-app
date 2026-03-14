@@ -1,14 +1,15 @@
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
-const TEXT_EXTENSIONS = [
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+export const TEXT_EXTENSIONS = [
   '.txt', '.md', '.mdx', '.json', '.csv', '.xml', '.html', '.htm', '.css', '.js', '.jsx',
   '.ts', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.rb',
   '.php', '.sh', '.bash', '.zsh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
   '.log', '.sql', '.r', '.swift', '.kt', '.scala', '.lua', '.pl', '.m', '.env',
   '.gitignore', '.dockerfile', '.makefile', '.rtf', '.csv', '.tsv',
 ];
-const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
-const MAX_INLINE_BYTES = 40 * 1024 * 1024;
-const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
+export const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
+export const MAX_INLINE_BYTES = 40 * 1024 * 1024;
+export const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
+export const DEFAULT_MAX_ATTACHMENTS = 16;
 
 /**
  * Determine the category of a file.
@@ -48,23 +49,48 @@ export async function processFile(file) {
     category,
     dataUrl,
     inlineWarning: canInline ? null : 'File too large to store for preview. Reattach to view or download.',
+    processingStatus: 'ready',
   };
 
   switch (category) {
     case 'image':
-      return { ...base, content: '', preview: 'image' };
-    case 'excel':
-      return { ...base, content: await readOfficeDocument(file, 'excel'), preview: 'text' };
-    case 'word':
-      return { ...base, content: await readOfficeDocument(file, 'word'), preview: 'text' };
-    case 'pdf':
-      return { ...base, content: await readPdf(file), preview: 'text' };
+      return { ...base, content: '', preview: 'image', previewMeta: await readImageMeta(file, dataUrl) };
+    case 'excel': {
+      const content = await readOfficeDocument(file, 'excel');
+      return { ...base, content, preview: 'text', previewMeta: buildTextPreviewMeta(content) };
+    }
+    case 'word': {
+      const content = await readOfficeDocument(file, 'word');
+      return { ...base, content, preview: 'text', previewMeta: buildTextPreviewMeta(content) };
+    }
+    case 'pdf': {
+      const pdf = await readPdf(file);
+      return {
+        ...base,
+        content: pdf.content,
+        preview: 'text',
+        previewMeta: {
+          ...buildTextPreviewMeta(pdf.content),
+          pageCount: pdf.pageCount,
+        },
+      };
+    }
     case 'binary':
       return { ...base, content: '', preview: 'binary' };
     case 'text':
-    default:
-      return { ...base, content: await readAsText(file), preview: 'text' };
+    default: {
+      const content = await readAsText(file);
+      return { ...base, content, preview: 'text', previewMeta: buildTextPreviewMeta(content) };
+    }
   }
+}
+
+function buildTextPreviewMeta(content) {
+  const text = String(content || '');
+  return {
+    lineCount: text ? text.split(/\r?\n/).length : 0,
+    charCount: text.length,
+  };
 }
 
 async function readAsDataURL(file) {
@@ -106,6 +132,39 @@ async function readAsArrayBuffer(file) {
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsArrayBuffer(file);
   });
+}
+
+async function readImageMeta(file, dataUrl) {
+  const source = String(dataUrl || '').trim();
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const meta = {
+        width: bitmap.width,
+        height: bitmap.height,
+      };
+      bitmap.close?.();
+      return meta;
+    } catch {
+      // fall through
+    }
+  }
+
+  if (typeof Image !== 'undefined' && source) {
+    try {
+      const meta = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => reject(new Error('Failed to read image dimensions'));
+        img.src = source;
+      });
+      return meta;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function arrayBufferToBase64(buffer) {
@@ -179,9 +238,15 @@ async function readPdf(file) {
         pages.push(`--- Page ${i} ---\n${text}`);
       }
     }
-    return pages.join('\n\n') || '(No text content extracted from PDF)';
+    return {
+      content: pages.join('\n\n') || '(No text content extracted from PDF)',
+      pageCount: pdf.numPages || 0,
+    };
   } catch {
-    return '(Failed to parse PDF -- the file may be scanned or encrypted)';
+    return {
+      content: '(Failed to parse PDF -- the file may be scanned or encrypted)',
+      pageCount: 0,
+    };
   }
 }
 
