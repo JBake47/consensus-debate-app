@@ -311,9 +311,6 @@ export default function Sidebar({ open, onClose }) {
                   ) : (
                     <div className="sidebar-item-text">
                       <span className="sidebar-item-title">{conv.title}</span>
-                      {conv.description && (
-                        <span className="sidebar-item-desc">{conv.description}</span>
-                      )}
                       <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
                       {conversationRunning && (
                         <span className="sidebar-item-running">
