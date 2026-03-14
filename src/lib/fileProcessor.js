@@ -38,10 +38,11 @@ function getExtension(filename) {
  * For images: content is a data URL (base64)
  * For text/docs: content is the extracted text
  */
-export async function processFile(file) {
+export async function processFile(file, options = {}) {
   const category = getFileCategory(file);
   const canInline = file.size <= MAX_INLINE_BYTES || category === 'image';
   const dataUrl = canInline ? await readAsDataURL(file) : null;
+  const safePdfFallback = options?.safePdfFallback === true;
   const base = {
     name: file.name,
     size: file.size,
@@ -64,6 +65,21 @@ export async function processFile(file) {
       return { ...base, content, preview: 'text', previewMeta: buildTextPreviewMeta(content) };
     }
     case 'pdf': {
+      if (safePdfFallback) {
+        return {
+          ...base,
+          content: '',
+          preview: 'binary',
+          inlineWarning: canInline
+            ? 'PDF text extraction was skipped to keep the app responsive after worker processing failed. Open the PDF in Details or Pages mode to inspect it.'
+            : 'PDF text extraction was skipped after worker processing failed, and the file is too large to store inline for preview.',
+          previewMeta: {
+            pageCount: 0,
+            lineCount: 0,
+            charCount: 0,
+          },
+        };
+      }
       const pdf = await readPdf(file);
       return {
         ...base,

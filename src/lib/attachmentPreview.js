@@ -1,5 +1,6 @@
 export const PDF_PREVIEW_LOAD_TIMEOUT_MS = 12_000;
 export const PDF_PREVIEW_RENDER_TIMEOUT_MS = 15_000;
+export const MAX_INLINE_TEXT_PREVIEW_CHARS = 120_000;
 
 const TEXT_MIME_TYPES = new Set([
   'application/json',
@@ -99,6 +100,34 @@ export function getAttachmentPreviewFallbackMessage(attachment, previewPlan = nu
   return attachment?.inlineWarning || 'Preview unavailable.';
 }
 
+export function getAttachmentTextPreview(content, maxChars = MAX_INLINE_TEXT_PREVIEW_CHARS) {
+  const text = String(content || '');
+  if (!text) {
+    return {
+      text: '',
+      shownChars: 0,
+      totalChars: 0,
+      truncated: false,
+    };
+  }
+
+  if (text.length <= maxChars) {
+    return {
+      text,
+      shownChars: text.length,
+      totalChars: text.length,
+      truncated: false,
+    };
+  }
+
+  return {
+    text: `${text.slice(0, maxChars)}\n\n... (preview truncated)`,
+    shownChars: maxChars,
+    totalChars: text.length,
+    truncated: true,
+  };
+}
+
 export function getAttachmentPreviewPlan(attachment) {
   if (!attachment || typeof attachment !== 'object') {
     return {
@@ -116,6 +145,7 @@ export function getAttachmentPreviewPlan(attachment) {
   const processingStatus = normalize(attachment.processingStatus).toLowerCase();
   const source = getAttachmentPrimarySource(attachment);
   const hasSource = Boolean(source);
+  const sourceIsDataUrl = source?.startsWith('data:') || false;
   const hasText = hasTextContent(attachment);
 
   if (processingStatus === 'processing') {
@@ -153,21 +183,29 @@ export function getAttachmentPreviewPlan(attachment) {
 
   if (category === 'pdf') {
     const modes = [];
-    if (hasSource) {
-      modes.push('pdfjs', 'browser');
-    }
     if (hasText) {
       modes.push('text');
+    }
+    if (hasSource && !sourceIsDataUrl) {
+      modes.push('browser');
+    }
+    if (hasSource) {
+      modes.push('pdfjs');
     }
     if (modes.length === 0) {
       modes.push('details');
     }
-    const fallbackMode = hasText ? 'text' : (hasSource ? 'browser' : 'details');
+    const fallbackMode = hasText
+      ? 'text'
+      : (hasSource && !sourceIsDataUrl ? 'browser' : 'details');
+    if (!modes.includes(fallbackMode)) {
+      modes.unshift(fallbackMode);
+    }
     return {
       kind: 'pdf',
       source,
       modes,
-      initialMode: hasSource ? 'pdfjs' : fallbackMode,
+      initialMode: hasText ? 'text' : fallbackMode,
       fallbackMode,
       pdfFallbackMode: fallbackMode,
     };

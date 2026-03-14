@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Title-generator test coverage for deterministic seed titles and post-processing of model-generated chat names
 - Attachment preview planning helpers with dedicated regression coverage for preview fallback modes, long-chat context handling, sidebar search indexing, and summary-state ordering
+- File-processor regression coverage for the safe main-thread PDF fallback path used when worker processing is unavailable
 - Derived conversation indexing helpers that cache per-turn context summaries and sidebar search sections for large histories
 - React Virtuoso virtualization for long top-level chat histories, debate threads, and round lists
 
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto-titling now uses stronger prompt guidance plus local cleanup rules to preserve useful specifics while stripping generic question phrasing
 - Retry and replace-model actions now repair the affected round and rebuild forward instead of rerunning a single response in isolation
 - Attachment viewer now supports safer PDF timeout/fallback handling, richer file details, inline audio/video playback, and browser/text/details preview modes for generated artifacts
+- Fresh PDF uploads now open in a lighter preview path, truncate oversized extracted text previews, and render a single page at a time when the canvas viewer is selected
 - Conversation history assembly now incrementally summarizes older turns, reuses cached turn/search summaries, and persists chats on idle/pagehide instead of synchronous hot-path writes
 - Sidebar chat search now runs from cached metadata instead of rescanning full conversation bodies, while export/report actions resolve the current full conversation on demand
 
@@ -29,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sidebar export/import/report actions once again include full conversation bodies instead of lightweight list items
 - Pending summary turns stay in the live prompt until their summary is committed, and stale or out-of-order summary completions are ignored
 - Command palette report export now tracks the latest active conversation instead of a stale memoized snapshot
+- Worker failures no longer fall back to synchronous full-PDF parsing on the main thread, which previously could freeze the app when opening a newly attached PDF immediately
 
 ## [0.3.23] - 2026-03-14
 

@@ -2,17 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, X } from 'lucide-react';
 import { formatFileSize } from '../lib/formatFileSize';
 import {
+  MAX_INLINE_TEXT_PREVIEW_CHARS,
   PDF_PREVIEW_LOAD_TIMEOUT_MS,
   PDF_PREVIEW_RENDER_TIMEOUT_MS,
   getAttachmentPreviewFallbackMessage,
   getAttachmentPreviewModeLabel,
   getAttachmentPreviewPlan,
+  getAttachmentTextPreview,
   getAttachmentTypeLabel,
 } from '../lib/attachmentPreview';
 import MarkdownRenderer from './MarkdownRenderer';
 import './AttachmentViewer.css';
 
-const MAX_INLINE_PDF_CANVAS_PAGES = 60;
+const MAX_INLINE_PDF_CANVAS_PAGES = 250;
 
 function isLikelyMarkdown(name) {
   return /\.mdx?$/i.test(name || '');
@@ -72,15 +74,11 @@ function PdfPageCanvas({
   pageNumber,
   scale,
   onRenderError,
-  scrollRootRef,
-  eager = false,
   estimatedPageSize = null,
 }) {
-  const pageRef = useRef(null);
   const canvasRef = useRef(null);
   const renderTaskRef = useRef(null);
-  const [shouldRender, setShouldRender] = useState(eager);
-  const [isRendering, setIsRendering] = useState(eager);
+  const [isRendering, setIsRendering] = useState(true);
   const [pageSize, setPageSize] = useState(estimatedPageSize);
 
   useEffect(() => {
@@ -88,47 +86,10 @@ function PdfPageCanvas({
   }, [estimatedPageSize]);
 
   useEffect(() => {
-    if (eager) {
-      setShouldRender(true);
-    }
-  }, [eager]);
-
-  useEffect(() => {
-    if (shouldRender) return undefined;
-    if (typeof IntersectionObserver !== 'function') {
-      setShouldRender(true);
-      return undefined;
-    }
-
-    const pageElement = pageRef.current;
-    const scrollRoot = scrollRootRef?.current;
-    if (!pageElement || !scrollRoot) {
-      setShouldRender(true);
-      return undefined;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        setShouldRender(true);
-        observer.disconnect();
-      },
-      {
-        root: scrollRoot,
-        rootMargin: '900px 0px',
-        threshold: 0.01,
-      }
-    );
-
-    observer.observe(pageElement);
-    return () => observer.disconnect();
-  }, [scrollRootRef, shouldRender]);
-
-  useEffect(() => {
     let cancelled = false;
     let page = null;
 
-    if (!pdfDoc || !canvasRef.current || !shouldRender) return undefined;
+    if (!pdfDoc || !canvasRef.current) return undefined;
 
     setIsRendering(true);
 
@@ -194,7 +155,7 @@ function PdfPageCanvas({
       }
       page?.cleanup?.();
     };
-  }, [onRenderError, pageNumber, pdfDoc, scale, shouldRender]);
+  }, [onRenderError, pageNumber, pdfDoc, scale]);
 
   const fallbackWidth = Math.max(280, Math.round(
     pageSize?.width || ((estimatedPageSize?.width || 612) * scale)
@@ -205,19 +166,13 @@ function PdfPageCanvas({
 
   return (
     <div
-      ref={pageRef}
       className={`attachment-viewer-pdf-canvas${isRendering ? ' is-rendering' : ''}`}
       style={{
         '--pdf-page-width': `${fallbackWidth}px`,
         '--pdf-page-height': `${fallbackHeight}px`,
       }}
     >
-      {!shouldRender && (
-        <div className="attachment-viewer-pdf-placeholder">
-          <span>Page {pageNumber}</span>
-        </div>
-      )}
-      {shouldRender && <canvas ref={canvasRef} />}
+      <canvas ref={canvasRef} />
     </div>
   );
 }
@@ -235,7 +190,6 @@ export default function AttachmentViewer({ attachment, onClose }) {
   const [mediaError, setMediaError] = useState('');
   const [pdfPageSize, setPdfPageSize] = useState(null);
   const pdfLoadIdRef = useRef(0);
-  const pdfScrollRef = useRef(null);
 
   const previewPlan = useMemo(() => getAttachmentPreviewPlan(attachment), [attachment]);
   const detailRows = useMemo(() => buildDetailRows(attachment), [attachment]);
@@ -243,9 +197,9 @@ export default function AttachmentViewer({ attachment, onClose }) {
   const sourceUrl = attachment?.downloadUrl || attachment?.dataUrl || objectUrl || null;
   const canDownload = Boolean(sourceUrl);
   const previewModes = previewPlan.modes || ['details'];
-  const pdfPageNumbers = useMemo(
-    () => Array.from({ length: Math.max(0, pdfPages) }, (_, index) => index + 1),
-    [pdfPages]
+  const textPreview = useMemo(
+    () => getAttachmentTextPreview(attachment?.content, MAX_INLINE_TEXT_PREVIEW_CHARS),
+    [attachment?.content]
   );
 
   const loadPdfjs = useMemo(() => {
@@ -293,14 +247,6 @@ export default function AttachmentViewer({ attachment, onClose }) {
     handlePdfFallback(formatAssetLoadError(error, 'Unable to render PDF preview.'));
   }, [handlePdfFallback]);
 
-  const renderTextDocument = useCallback((content, markdown = false) => (
-    <div className="attachment-viewer-document">
-      <div className="attachment-viewer-document-scroll attachment-viewer-text">
-        {markdown ? <MarkdownRenderer>{content}</MarkdownRenderer> : <pre>{content}</pre>}
-      </div>
-    </div>
-  ), []);
-
   const renderDetails = useCallback((message = null) => (
     <div className="attachment-viewer-details">
       <div className="attachment-viewer-message">
@@ -317,16 +263,26 @@ export default function AttachmentViewer({ attachment, onClose }) {
     </div>
   ), [attachment, detailRows, previewPlan]);
 
-  const scrollToPdfPage = useCallback((targetPage) => {
-    const boundedPage = Math.max(1, Math.min(pdfPages || targetPage, targetPage));
-    const pageElement = pdfScrollRef.current?.querySelector(`[data-pdf-page="${boundedPage}"]`);
-    if (!pageElement) {
-      setPdfPage(boundedPage);
-      return;
+  const renderTextDocument = useCallback((markdown = false) => {
+    if (!textPreview.text) {
+      return renderDetails('No extracted text preview is available for this file.');
     }
-    pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setPdfPage(boundedPage);
-  }, [pdfPages]);
+
+    const truncationLabel = textPreview.truncated
+      ? `Showing the first ${textPreview.shownChars.toLocaleString()} of ${textPreview.totalChars.toLocaleString()} characters for a stable preview.`
+      : '';
+
+    return (
+      <div className="attachment-viewer-document">
+        {truncationLabel && (
+          <div className="attachment-viewer-text-banner">{truncationLabel}</div>
+        )}
+        <div className="attachment-viewer-document-scroll attachment-viewer-text">
+          {markdown ? <MarkdownRenderer>{textPreview.text}</MarkdownRenderer> : <pre>{textPreview.text}</pre>}
+        </div>
+      </div>
+    );
+  }, [renderDetails, textPreview]);
 
   useEffect(() => {
     if (!attachment) return undefined;
@@ -440,9 +396,6 @@ export default function AttachmentViewer({ attachment, onClose }) {
           width: firstViewport.width,
           height: firstViewport.height,
         });
-        if (pdfScrollRef.current) {
-          pdfScrollRef.current.scrollTop = 0;
-        }
         setPdfLoading(false);
       } catch (error) {
         if (cancelled) return;
@@ -476,43 +429,6 @@ export default function AttachmentViewer({ attachment, onClose }) {
       Promise.resolve(pdfDoc.destroy()).catch(() => {});
     }
   }, [pdfDoc]);
-
-  useEffect(() => {
-    const container = pdfScrollRef.current;
-    if (
-      previewMode !== 'pdfjs' ||
-      typeof IntersectionObserver !== 'function' ||
-      !container ||
-      pdfPageNumbers.length === 0
-    ) {
-      return undefined;
-    }
-
-    const pageElements = Array.from(container.querySelectorAll('[data-pdf-page]'));
-    if (pageElements.length === 0) return undefined;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visibleEntry = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
-
-        if (!visibleEntry) return;
-        const nextPage = Number(visibleEntry.target.getAttribute('data-pdf-page')) || 1;
-        setPdfPage((current) => (current === nextPage ? current : nextPage));
-      },
-      {
-        root: container,
-        threshold: [0.25, 0.5, 0.75],
-      }
-    );
-
-    pageElements.forEach((element) => observer.observe(element));
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [pdfPageNumbers, pdfScale, previewMode]);
 
   if (!attachment) return null;
 
@@ -607,8 +523,8 @@ export default function AttachmentViewer({ attachment, onClose }) {
 
     if (previewMode === 'pdfjs') {
       if (!sourceUrl) {
-        return attachment.content
-          ? renderTextDocument(attachment.content)
+        return textPreview.text
+          ? renderTextDocument(false)
           : renderDetails();
       }
 
@@ -617,7 +533,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
           <div className="attachment-viewer-pdf-controls">
             <button
               type="button"
-              onClick={() => scrollToPdfPage(pdfPage - 1)}
+              onClick={() => setPdfPage((current) => Math.max(1, current - 1))}
               disabled={pdfPage <= 1 || pdfLoading}
             >
               Prev
@@ -625,12 +541,11 @@ export default function AttachmentViewer({ attachment, onClose }) {
             <span>Page {pdfPage} / {pdfPages || '-'}</span>
             <button
               type="button"
-              onClick={() => scrollToPdfPage(pdfPage + 1)}
+              onClick={() => setPdfPage((current) => Math.min(pdfPages || current, current + 1))}
               disabled={pdfPages === 0 || pdfPage >= pdfPages || pdfLoading}
             >
               Next
             </button>
-            <span className="attachment-viewer-pdf-hint">Scroll to browse pages</span>
             <div className="attachment-viewer-pdf-spacer" />
             <button
               type="button"
@@ -649,39 +564,30 @@ export default function AttachmentViewer({ attachment, onClose }) {
             </button>
             <button type="button" onClick={() => setPdfScale(1)} disabled={pdfLoading}>Reset</button>
           </div>
-          <div className="attachment-viewer-pdf-pages" ref={pdfScrollRef}>
+          <div className="attachment-viewer-pdf-stage">
             {pdfLoading && <div className="attachment-viewer-message">Loading PDF...</div>}
-            {!pdfLoading && pdfPageNumbers.length === 0 && (
+            {!pdfLoading && pdfPages === 0 && (
               <div className="attachment-viewer-message">No PDF pages are available for preview.</div>
             )}
-            {!pdfLoading && pdfPageNumbers.map((pageNumber) => (
-              <div
-                key={`${attachment.name || 'pdf'}-${pageNumber}-${pdfScale}`}
-                className="attachment-viewer-pdf-page"
-                data-pdf-page={pageNumber}
-              >
-                <div className="attachment-viewer-pdf-page-label">Page {pageNumber}</div>
+            {!pdfLoading && pdfPages > 0 && (
+              <>
+                <div className="attachment-viewer-pdf-page-label">Page {pdfPage}</div>
                 <PdfPageCanvas
                   pdfDoc={pdfDoc}
-                  pageNumber={pageNumber}
+                  pageNumber={pdfPage}
                   scale={pdfScale}
                   onRenderError={handlePdfRenderError}
-                  scrollRootRef={pdfScrollRef}
-                  eager={pageNumber <= 2}
                   estimatedPageSize={pdfPageSize}
                 />
-              </div>
-            ))}
+              </>
+            )}
           </div>
         </div>
       );
     }
 
     if (previewMode === 'text') {
-      if (!attachment.content) {
-        return renderDetails('No extracted text preview is available for this file.');
-      }
-      return renderTextDocument(attachment.content, isMarkdown);
+      return renderTextDocument(isMarkdown);
     }
 
     return renderDetails();

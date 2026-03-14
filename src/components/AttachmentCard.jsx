@@ -70,6 +70,7 @@ function renderModelNames(modelIds) {
 
 function buildDocumentPreviewLines(attachment) {
   const baseText = String(attachment?.content || '')
+    .slice(0, 4000)
     .replace(/\r/g, '')
     .split('\n')
     .map((line) => line.trim())
