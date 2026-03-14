@@ -31,7 +31,7 @@ import {
   buildConversationContext,
   buildSummaryPrompt,
 } from '../lib/contextManager';
-import { generateTitle } from '../lib/titleGenerator';
+import { createSeedTitle, generateTitle } from '../lib/titleGenerator';
 import {
   DEFAULT_RETRY_POLICY,
   normalizeRetryPolicy,
@@ -2475,9 +2475,7 @@ export function DebateProvider({ children }) {
     let convId = state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
-      const title = userPrompt.length > 50
-        ? userPrompt.slice(0, 50) + '...'
-        : userPrompt;
+      const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
     const existingConversation = state.conversations.find(c => c.id === convId);
@@ -3206,9 +3204,7 @@ export function DebateProvider({ children }) {
     let convId = state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
-      const title = userPrompt.length > 50
-        ? userPrompt.slice(0, 50) + '...'
-        : userPrompt;
+      const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
     const existingConversation = state.conversations.find(c => c.id === convId);
@@ -3505,9 +3501,7 @@ export function DebateProvider({ children }) {
     let convId = state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
-      const title = userPrompt.length > 50
-        ? userPrompt.slice(0, 50) + '...'
-        : userPrompt;
+      const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
     const existingConversation = state.conversations.find(c => c.id === convId);

@@ -166,11 +166,15 @@
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+  max-width: 0;
+  overflow: hidden;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transition: max-width var(--transition-fast), opacity var(--transition-fast);
 }
 
-.sidebar-item:hover .sidebar-item-actions {
+.sidebar-item:hover .sidebar-item-actions,
+.sidebar-item:focus-within .sidebar-item-actions {
+  max-width: 104px;
   opacity: 1;
 }
 

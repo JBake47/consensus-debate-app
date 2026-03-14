@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Title-generator test coverage for deterministic seed titles and post-processing of model-generated chat names
+
+### Changed
+- New conversations now start with cleaner topic-style sidebar titles instead of raw prompt truncation
+- Auto-titling now uses stronger prompt guidance plus local cleanup rules to preserve useful specifics while stripping generic question phrasing
+
+### Fixed
+- Sidebar conversation rows no longer reserve space for hidden action buttons, reducing premature title truncation
+
 ## [0.3.23] - 2026-03-14
 
 ### Added
