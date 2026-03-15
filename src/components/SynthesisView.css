@@ -167,6 +167,11 @@
   line-height: 1.7;
 }
 
+.synthesis-content > * {
+  width: min(100%, 82ch);
+  margin-inline: auto;
+}
+
 .synthesis-content.scroll-preview {
   height: var(--response-preview-height);
 }
