@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-03-15
+
+### Changed
+- Condensed each debate turn around the original prompt, a compact `Turn Breakdown` accordion, and the synthesized answer so the main chat context is easier to scan
+- Grouped debate internals under top-level `Web Search`, `Initial Responses`, and `Rebuttal Rounds` tabs, with rebuttals switchable between sequential and round-by-round views
+- Added a cleaner synthesis rendering path that can hide internal debate sections when the new turn breakdown layout is active
+
+### Fixed
+- Stopping a live run now cancels all active web search, debate round, synthesis, and ensemble work for the current turn in one action instead of sometimes requiring a second click
+
 ## [0.3.24] - 2026-03-14
 
 ### Added

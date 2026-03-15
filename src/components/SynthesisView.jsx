@@ -158,7 +158,7 @@ function DebateInternals({ rounds, debateMetadata }) {
   );
 }
 
-function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult }) {
+function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult, showInternals = true }) {
   const { retrySynthesis } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const { model, content, status, error } = synthesis;
@@ -335,7 +335,7 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
         </div>
       )}
 
-      {status === 'complete' && rounds && (
+      {showInternals && status === 'complete' && rounds && (
         <DebateInternals rounds={rounds} debateMetadata={debateMetadata} />
       )}
     </div>

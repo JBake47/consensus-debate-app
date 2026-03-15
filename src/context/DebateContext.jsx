@@ -3889,42 +3889,42 @@ export function DebateProvider({ children }) {
 
     if (targetConversation?.turns?.length) {
       const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
-      if (lastTurn.rounds?.length) {
-        const lastRoundIndex = lastTurn.rounds.length - 1;
-        const lastRound = lastTurn.rounds[lastRoundIndex];
-        const hasInFlightStreams = (lastRound.streams || []).some(
-          (stream) => stream.status === 'streaming' || stream.status === 'pending'
-        );
-        if (lastRound.status === 'streaming' || hasInFlightStreams) {
-          dispatch({
-            type: 'UPDATE_ROUND_STATUS',
-            payload: {
-              conversationId: targetConversationId,
-              roundIndex: lastRoundIndex,
-              status: 'error',
-            },
-          });
-        }
+      if (Array.isArray(lastTurn.rounds) && lastTurn.rounds.length > 0) {
+        lastTurn.rounds.forEach((round, roundIndex) => {
+          const streams = Array.isArray(round?.streams) ? round.streams : [];
+          const hasLiveStreams = streams.some((stream) => isLiveStatus(stream?.status));
 
-        (lastRound.streams || []).forEach((stream, streamIndex) => {
-          if (stream.status !== 'streaming' && stream.status !== 'pending') return;
-          dispatch({
-            type: 'UPDATE_ROUND_STREAM',
-            payload: {
-              conversationId: targetConversationId,
-              roundIndex: lastRoundIndex,
-              streamIndex,
-              content: stream.content || '',
-              status: 'error',
-              error: 'Cancelled',
-              errorKind: 'cancelled',
-              retryProgress: null,
-              reasoning: stream.reasoning,
-            },
+          if (isLiveStatus(round?.status) || hasLiveStreams) {
+            dispatch({
+              type: 'UPDATE_ROUND_STATUS',
+              payload: {
+                conversationId: targetConversationId,
+                roundIndex,
+                status: 'error',
+              },
+            });
+          }
+
+          streams.forEach((stream, streamIndex) => {
+            if (!isLiveStatus(stream?.status)) return;
+            dispatch({
+              type: 'UPDATE_ROUND_STREAM',
+              payload: {
+                conversationId: targetConversationId,
+                roundIndex,
+                streamIndex,
+                content: stream.content || '',
+                status: 'error',
+                error: 'Cancelled',
+                errorKind: 'cancelled',
+                retryProgress: null,
+                reasoning: stream.reasoning,
+              },
+            });
           });
         });
       }
-      if (lastTurn.synthesis?.status === 'streaming' || lastTurn.synthesis?.status === 'pending') {
+      if (isLiveStatus(lastTurn.synthesis?.status)) {
         dispatch({
           type: 'UPDATE_SYNTHESIS',
           payload: {
@@ -3939,7 +3939,7 @@ export function DebateProvider({ children }) {
           },
         });
       }
-      if (lastTurn.ensembleResult?.status === 'analyzing') {
+      if (isLiveStatus(lastTurn.ensembleResult?.status)) {
         dispatch({
           type: 'SET_ENSEMBLE_RESULT',
           payload: {
@@ -3952,7 +3952,7 @@ export function DebateProvider({ children }) {
           },
         });
       }
-      if (lastTurn.webSearchResult?.status === 'searching') {
+      if (isLiveStatus(lastTurn.webSearchResult?.status)) {
         dispatch({
           type: 'SET_WEB_SEARCH_RESULT',
           payload: {
