@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Sidebar ordering helpers and regression coverage so in-progress conversations can sort by their current turn start time instead of live `updatedAt` churn
+
+### Changed
+- Attachment viewer PDF handling now prepares stable object URLs for local data uploads, warms the pdf.js worker after paint, and keeps preview/download behavior consistent across local and remote files
+
+### Fixed
+- Synthesizer, convergence-check, and web-search model fields can now be fully cleared and retyped without live validation snapping them back to catalog defaults mid-edit
+- Running conversations now keep a steadier sidebar position while responses stream instead of reordering on every status update
+
 ## [0.3.25] - 2026-03-15
 
 ### Changed

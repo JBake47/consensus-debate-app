@@ -176,6 +176,9 @@ export default function SettingsModal() {
   const [searchProvider, setSearchProvider] = useState('openrouter');
   const presetSheetInputRef = useRef(null);
   const liveApplyReadyRef = useRef(false);
+  const synthEditingRef = useRef(false);
+  const convEditingRef = useRef(false);
+  const searchEditingRef = useRef(false);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -380,6 +383,12 @@ export default function SettingsModal() {
     }, 240);
     return () => clearTimeout(timer);
   }, [keyInput]);
+
+  useEffect(() => {
+    synthEditingRef.current = false;
+    convEditingRef.current = false;
+    searchEditingRef.current = false;
+  }, [showSettings]);
 
   useEffect(() => {
     if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
@@ -675,11 +684,11 @@ export default function SettingsModal() {
     liveApplyReadyRef.current = false;
     setKeyInput(apiKey);
     setModels(selectedModels);
-    setSynth(synthesizerModel);
-    setConvModel(convergenceModel);
+    if (!synthEditingRef.current) setSynth(synthesizerModel);
+    if (!convEditingRef.current) setConvModel(convergenceModel);
     setConvOnFinalRound(Boolean(convergenceOnFinalRound));
     setMaxRounds(maxDebateRounds);
-    setSearchModel(webSearchModel);
+    if (!searchEditingRef.current) setSearchModel(webSearchModel);
     setStrictSearch(strictWebSearch);
     setRetryMaxAttempts(retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts);
     setRetryBaseDelayMs(retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs);
@@ -701,9 +710,9 @@ export default function SettingsModal() {
     setDebouncedKeyInput(apiKey.trim());
     closePresetSheet();
     setSelectedPresetId('');
-    setSynthProvider(getDirectProviderFromValue(synthesizerModel));
-    setConvProvider(getDirectProviderFromValue(convergenceModel));
-    setSearchProvider(getDirectProviderFromValue(webSearchModel));
+    if (!synthEditingRef.current) setSynthProvider(getDirectProviderFromValue(synthesizerModel));
+    if (!convEditingRef.current) setConvProvider(getDirectProviderFromValue(convergenceModel));
+    if (!searchEditingRef.current) setSearchProvider(getDirectProviderFromValue(webSearchModel));
     const timer = setTimeout(() => {
       liveApplyReadyRef.current = true;
     }, 0);
@@ -745,10 +754,10 @@ export default function SettingsModal() {
     if (!arraysEqual(models, selectedModels)) {
       dispatch({ type: 'SET_MODELS', payload: models });
     }
-    if (normalizedSynthValue !== synthesizerModel) {
+    if (!synthEditingRef.current && normalizedSynthValue !== synthesizerModel) {
       dispatch({ type: 'SET_SYNTHESIZER', payload: normalizedSynthValue });
     }
-    if (normalizedConvergenceValue !== convergenceModel) {
+    if (!convEditingRef.current && normalizedConvergenceValue !== convergenceModel) {
       dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: normalizedConvergenceValue });
     }
     if (Boolean(convOnFinalRound) !== Boolean(convergenceOnFinalRound)) {
@@ -757,7 +766,7 @@ export default function SettingsModal() {
     if (Number(maxRounds) !== Number(maxDebateRounds)) {
       dispatch({ type: 'SET_MAX_DEBATE_ROUNDS', payload: maxRounds });
     }
-    if (normalizedSearchValue !== webSearchModel) {
+    if (!searchEditingRef.current && normalizedSearchValue !== webSearchModel) {
       dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearchValue });
     }
     if (Boolean(strictSearch) !== Boolean(strictWebSearch)) {
@@ -1181,8 +1190,23 @@ export default function SettingsModal() {
                 placeholder={synthProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={synth}
                 onChange={e => setSynth(e.target.value)}
+                onFocus={() => {
+                  synthEditingRef.current = true;
+                }}
+                onBlur={(e) => {
+                  synthEditingRef.current = false;
+                  const nextValue = normalizeModelForProvider(synthProvider, e.target.value) || e.target.value.trim();
+                  if (nextValue !== synthesizerModel) {
+                    dispatch({ type: 'SET_SYNTHESIZER', payload: nextValue });
+                  }
+                }}
                 title={getModelStatsTitle(normalizedSynthValue)}
-                list={getProviderModelOptions(synthProvider).length > 0 ? `provider-models-synth-${synthProvider}` : undefined}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-form-type="other"
+                data-lpignore="true"
               />
               <button
                 className="model-browse-btn"
@@ -1191,13 +1215,6 @@ export default function SettingsModal() {
                 Browse
               </button>
             </div>
-            {getProviderModelOptions(synthProvider).length > 0 && (
-              <datalist id={`provider-models-synth-${synthProvider}`}>
-                {getProviderModelOptions(synthProvider).slice(0, 200).map((modelId) => (
-                  <option key={modelId} value={modelId} />
-                ))}
-              </datalist>
-            )}
           </div>
 
           <div className="settings-section">
@@ -1222,8 +1239,23 @@ export default function SettingsModal() {
                 placeholder={convProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={convModel}
                 onChange={e => setConvModel(e.target.value)}
+                onFocus={() => {
+                  convEditingRef.current = true;
+                }}
+                onBlur={(e) => {
+                  convEditingRef.current = false;
+                  const nextValue = normalizeModelForProvider(convProvider, e.target.value) || e.target.value.trim();
+                  if (nextValue !== convergenceModel) {
+                    dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: nextValue });
+                  }
+                }}
                 title={getModelStatsTitle(normalizedConvergenceValue)}
-                list={getProviderModelOptions(convProvider).length > 0 ? `provider-models-conv-${convProvider}` : undefined}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-form-type="other"
+                data-lpignore="true"
               />
               <button
                 className="model-browse-btn"
@@ -1232,13 +1264,6 @@ export default function SettingsModal() {
                 Browse
               </button>
             </div>
-            {getProviderModelOptions(convProvider).length > 0 && (
-              <datalist id={`provider-models-conv-${convProvider}`}>
-                {getProviderModelOptions(convProvider).slice(0, 200).map((modelId) => (
-                  <option key={modelId} value={modelId} />
-                ))}
-              </datalist>
-            )}
             <p className="settings-hint">
               A fast model used to check if debaters have reached consensus between rounds.
             </p>
@@ -1266,6 +1291,16 @@ export default function SettingsModal() {
                 placeholder={searchProvider === 'openrouter' ? 'openrouter-model' : 'model-name'}
                 value={searchModel}
                 onChange={e => setSearchModel(e.target.value)}
+                onFocus={() => {
+                  searchEditingRef.current = true;
+                }}
+                onBlur={(e) => {
+                  searchEditingRef.current = false;
+                  const nextValue = normalizeModelForProvider(searchProvider, e.target.value) || e.target.value.trim();
+                  if (nextValue !== webSearchModel) {
+                    dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: nextValue });
+                  }
+                }}
                 title={getModelStatsTitle(normalizedSearchValue)}
                 list={getProviderModelOptions(searchProvider).length > 0 ? `provider-models-search-${searchProvider}` : undefined}
               />

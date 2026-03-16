@@ -311,6 +311,8 @@ export function markConversationSummaryPending(conversation, pendingTurnCount, e
 }
 
 export function buildConversationListItem(conversation) {
+  const turns = Array.isArray(conversation?.turns) ? conversation.turns : [];
+  const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
   const sidebarData = conversation?.sidebarData || { headerSections: [], turnEntries: [] };
   return {
     id: conversation?.id,
@@ -318,7 +320,8 @@ export function buildConversationListItem(conversation) {
     description: conversation?.description || '',
     updatedAt: conversation?.updatedAt || conversation?.createdAt || 0,
     createdAt: conversation?.createdAt || 0,
-    turnCount: Array.isArray(conversation?.turns) ? conversation.turns.length : 0,
+    turnCount: turns.length,
+    lastTurnTimestamp: lastTurn?.timestamp || lastTurn?.createdAt || 0,
     sidebarData,
   };
 }

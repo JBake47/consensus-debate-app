@@ -1570,24 +1570,38 @@ export function DebateProvider({ children }) {
       dispatch({ type: 'SET_MODELS', payload: nextSelected });
     }
 
-    const pickSingle = (current, fallbackList) => {
-      if (availableSet.has(current)) return current;
+    const pickSingle = (current, fallbackList, { allowCustom = false } = {}) => {
+      const normalizedCurrent = String(current || '').trim();
+      if (availableSet.has(normalizedCurrent)) return normalizedCurrent;
+      if (allowCustom && normalizedCurrent) return normalizedCurrent;
       const fallback = fallbackList.find((model) => availableSet.has(model));
       if (fallback) return fallback;
-      return availableIds[0] || current;
+      return availableIds[0] || normalizedCurrent;
     };
 
-    const nextSynth = pickSingle(state.synthesizerModel, [DEFAULT_SYNTHESIZER_MODEL, ...nextSelected]);
+    const nextSynth = pickSingle(
+      state.synthesizerModel,
+      [DEFAULT_SYNTHESIZER_MODEL, ...nextSelected],
+      { allowCustom: true }
+    );
     if (nextSynth !== state.synthesizerModel) {
       dispatch({ type: 'SET_SYNTHESIZER', payload: nextSynth });
     }
 
-    const nextConv = pickSingle(state.convergenceModel, [DEFAULT_CONVERGENCE_MODEL, ...nextSelected]);
+    const nextConv = pickSingle(
+      state.convergenceModel,
+      [DEFAULT_CONVERGENCE_MODEL, ...nextSelected],
+      { allowCustom: true }
+    );
     if (nextConv !== state.convergenceModel) {
       dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: nextConv });
     }
 
-    const nextSearch = pickSingle(state.webSearchModel, [DEFAULT_WEB_SEARCH_MODEL, ...nextSelected]);
+    const nextSearch = pickSingle(
+      state.webSearchModel,
+      [DEFAULT_WEB_SEARCH_MODEL, ...nextSelected],
+      { allowCustom: true }
+    );
     if (nextSearch !== state.webSearchModel) {
       dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: nextSearch });
     }

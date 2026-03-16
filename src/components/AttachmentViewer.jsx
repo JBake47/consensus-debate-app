@@ -15,6 +15,7 @@ import MarkdownRenderer from './MarkdownRenderer';
 import './AttachmentViewer.css';
 
 const MAX_INLINE_PDF_CANVAS_PAGES = 250;
+let pdfjsPromise;
 
 function isLikelyMarkdown(name) {
   return /\.mdx?$/i.test(name || '');
@@ -42,6 +43,68 @@ function withTimeout(promise, ms, message, onTimeout = null) {
       }
     );
   });
+}
+
+function waitForNextPaint() {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      resolve();
+      return;
+    }
+
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function scheduleAfterPaint(callback) {
+  if (typeof window === 'undefined') {
+    const timeoutId = setTimeout(callback, 0);
+    return () => clearTimeout(timeoutId);
+  }
+
+  let idleId = null;
+  const rafId = window.requestAnimationFrame(() => {
+    if (typeof window.requestIdleCallback === 'function') {
+      idleId = window.requestIdleCallback(callback, { timeout: 1_000 });
+      return;
+    }
+
+    idleId = window.setTimeout(callback, 0);
+  });
+
+  return () => {
+    window.cancelAnimationFrame(rafId);
+    if (idleId === null) return;
+    if (typeof window.cancelIdleCallback === 'function') {
+      window.cancelIdleCallback(idleId);
+      return;
+    }
+    window.clearTimeout(idleId);
+  };
+}
+
+async function createObjectUrlFromDataUrl(dataUrl) {
+  const response = await fetch(dataUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to prepare PDF preview (${response.status}).`);
+  }
+
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+async function loadPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ]).then(([pdfjsLib, workerUrl]) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.default || workerUrl;
+      return pdfjsLib;
+    });
+  }
+
+  return pdfjsPromise;
 }
 
 function formatAssetLoadError(error, fallback) {
@@ -178,7 +241,9 @@ function PdfPageCanvas({
 }
 
 export default function AttachmentViewer({ attachment, onClose }) {
-  const [objectUrl, setObjectUrl] = useState(null);
+  const [textObjectUrl, setTextObjectUrl] = useState(null);
+  const [pdfObjectUrl, setPdfObjectUrl] = useState(null);
+  const [preparingPdfSource, setPreparingPdfSource] = useState(false);
   const [previewMode, setPreviewMode] = useState('details');
   const [previewNotice, setPreviewNotice] = useState('');
   const [pdfDoc, setPdfDoc] = useState(null);
@@ -194,29 +259,21 @@ export default function AttachmentViewer({ attachment, onClose }) {
   const previewPlan = useMemo(() => getAttachmentPreviewPlan(attachment), [attachment]);
   const detailRows = useMemo(() => buildDetailRows(attachment), [attachment]);
   const isMarkdown = useMemo(() => isLikelyMarkdown(attachment?.name), [attachment?.name]);
-  const sourceUrl = attachment?.downloadUrl || attachment?.dataUrl || objectUrl || null;
-  const canDownload = Boolean(sourceUrl);
   const previewModes = previewPlan.modes || ['details'];
+  const hasLocalPdfDataUrl = previewPlan.kind === 'pdf'
+    && !attachment?.downloadUrl
+    && String(attachment?.dataUrl || '').startsWith('data:application/pdf;');
+  const pdfSourceUrl = attachment?.downloadUrl || pdfObjectUrl || null;
+  const sourceUrl = previewPlan.kind === 'pdf'
+    ? pdfSourceUrl
+    : (attachment?.downloadUrl || attachment?.dataUrl || textObjectUrl || null);
+  const downloadUrl = attachment?.downloadUrl || attachment?.dataUrl || pdfObjectUrl || textObjectUrl || null;
+  const canDownload = Boolean(downloadUrl);
+  const pdfSourcePending = previewPlan.kind === 'pdf' && previewMode === 'pdfjs' && !pdfSourceUrl && hasLocalPdfDataUrl;
   const textPreview = useMemo(
     () => getAttachmentTextPreview(attachment?.content, MAX_INLINE_TEXT_PREVIEW_CHARS),
     [attachment?.content]
   );
-
-  const loadPdfjs = useMemo(() => {
-    let pdfjsPromise;
-    return async () => {
-      if (!pdfjsPromise) {
-        pdfjsPromise = Promise.all([
-          import('pdfjs-dist'),
-          import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
-        ]).then(([pdfjsLib, workerUrl]) => {
-          pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.default || workerUrl;
-          return pdfjsLib;
-        });
-      }
-      return pdfjsPromise;
-    };
-  }, []);
 
   const resetPdfState = useCallback(() => {
     setPdfDoc(null);
@@ -289,12 +346,81 @@ export default function AttachmentViewer({ attachment, onClose }) {
     if (!attachment.dataUrl && attachment.content && attachment.category === 'text') {
       const blob = new Blob([attachment.content], { type: attachment.type || 'text/plain' });
       const url = URL.createObjectURL(blob);
-      setObjectUrl(url);
+      setTextObjectUrl(url);
       return () => URL.revokeObjectURL(url);
     }
-    setObjectUrl(null);
+    setTextObjectUrl(null);
     return undefined;
   }, [attachment]);
+
+  useEffect(() => {
+    if (!hasLocalPdfDataUrl) {
+      setPdfObjectUrl(null);
+      setPreparingPdfSource(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let nextUrl = null;
+    setPdfObjectUrl(null);
+    setPreparingPdfSource(true);
+
+    (async () => {
+      try {
+        nextUrl = await createObjectUrlFromDataUrl(attachment.dataUrl);
+        if (cancelled) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
+        setPdfObjectUrl(nextUrl);
+      } catch {
+        if (!cancelled) {
+          setPdfObjectUrl(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setPreparingPdfSource(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (nextUrl) {
+        URL.revokeObjectURL(nextUrl);
+      }
+    };
+  }, [attachment?.dataUrl, hasLocalPdfDataUrl]);
+
+  useEffect(() => {
+    if (previewPlan.kind !== 'pdf' || !previewModes.includes('pdfjs')) {
+      return undefined;
+    }
+
+    return scheduleAfterPaint(() => {
+      void loadPdfjs().catch(() => {});
+    });
+  }, [previewModes, previewPlan.kind]);
+
+  useEffect(() => {
+    if (previewPlan.kind !== 'pdf' || previewMode !== 'pdfjs' || !hasLocalPdfDataUrl) {
+      return undefined;
+    }
+
+    if (preparingPdfSource || pdfSourceUrl) {
+      return undefined;
+    }
+
+    handlePdfFallback('Unable to prepare a stable local PDF preview.');
+    return undefined;
+  }, [
+    handlePdfFallback,
+    hasLocalPdfDataUrl,
+    pdfSourceUrl,
+    preparingPdfSource,
+    previewMode,
+    previewPlan.kind,
+  ]);
 
   useEffect(() => {
     setPreviewMode(previewPlan.initialMode || 'details');
@@ -337,7 +463,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
       !attachment ||
       previewPlan.kind !== 'pdf' ||
       previewMode !== 'pdfjs' ||
-      !sourceUrl
+      !pdfSourceUrl
     ) {
       resetPdfState();
       return undefined;
@@ -352,8 +478,9 @@ export default function AttachmentViewer({ attachment, onClose }) {
 
     (async () => {
       try {
+        await waitForNextPaint();
         const pdfjsLib = await loadPdfjs();
-        loadingTask = pdfjsLib.getDocument(sourceUrl);
+        loadingTask = pdfjsLib.getDocument(pdfSourceUrl);
         const doc = await withTimeout(
           loadingTask.promise,
           PDF_PREVIEW_LOAD_TIMEOUT_MS,
@@ -380,22 +507,11 @@ export default function AttachmentViewer({ attachment, onClose }) {
           return;
         }
 
-        const firstPage = await withTimeout(
-          doc.getPage(1),
-          PDF_PREVIEW_LOAD_TIMEOUT_MS,
-          'PDF preview took too long to prepare.'
-        );
-        const firstViewport = firstPage.getViewport({ scale: 1 });
-        firstPage.cleanup?.();
-
         setPdfDoc(doc);
         setPdfPages(doc.numPages || 0);
         setPdfPage(1);
         setPdfScale(1);
-        setPdfPageSize({
-          width: firstViewport.width,
-          height: firstViewport.height,
-        });
+        setPdfPageSize(null);
         setPdfLoading(false);
       } catch (error) {
         if (cancelled) return;
@@ -415,13 +531,12 @@ export default function AttachmentViewer({ attachment, onClose }) {
   }, [
     attachment,
     handlePdfFallback,
-    loadPdfjs,
     previewMode,
     previewPlan.kind,
     previewPlan.modes,
     previewPlan.pdfFallbackMode,
+    pdfSourceUrl,
     resetPdfState,
-    sourceUrl,
   ]);
 
   useEffect(() => () => {
@@ -523,6 +638,26 @@ export default function AttachmentViewer({ attachment, onClose }) {
 
     if (previewMode === 'pdfjs') {
       if (!sourceUrl) {
+        if (pdfSourcePending || preparingPdfSource) {
+          return (
+            <div className="attachment-viewer-pdf">
+              <div className="attachment-viewer-pdf-controls">
+                <button type="button" disabled>Prev</button>
+                <span>Page - / -</span>
+                <button type="button" disabled>Next</button>
+                <div className="attachment-viewer-pdf-spacer" />
+                <button type="button" disabled>-</button>
+                <span>100%</span>
+                <button type="button" disabled>+</button>
+                <button type="button" disabled>Reset</button>
+              </div>
+              <div className="attachment-viewer-pdf-stage">
+                <div className="attachment-viewer-message">Preparing PDF preview...</div>
+              </div>
+            </div>
+          );
+        }
+
         return textPreview.text
           ? renderTextDocument(false)
           : renderDetails();
@@ -534,7 +669,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
             <button
               type="button"
               onClick={() => setPdfPage((current) => Math.max(1, current - 1))}
-              disabled={pdfPage <= 1 || pdfLoading}
+              disabled={pdfPage <= 1 || pdfLoading || pdfSourcePending}
             >
               Prev
             </button>
@@ -542,7 +677,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
             <button
               type="button"
               onClick={() => setPdfPage((current) => Math.min(pdfPages || current, current + 1))}
-              disabled={pdfPages === 0 || pdfPage >= pdfPages || pdfLoading}
+              disabled={pdfPages === 0 || pdfPage >= pdfPages || pdfLoading || pdfSourcePending}
             >
               Next
             </button>
@@ -550,7 +685,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
             <button
               type="button"
               onClick={() => setPdfScale((scale) => Math.max(0.5, Number((scale - 0.1).toFixed(2))))}
-              disabled={pdfLoading}
+              disabled={pdfLoading || pdfSourcePending}
             >
               -
             </button>
@@ -558,18 +693,18 @@ export default function AttachmentViewer({ attachment, onClose }) {
             <button
               type="button"
               onClick={() => setPdfScale((scale) => Math.min(3, Number((scale + 0.1).toFixed(2))))}
-              disabled={pdfLoading}
+              disabled={pdfLoading || pdfSourcePending}
             >
               +
             </button>
-            <button type="button" onClick={() => setPdfScale(1)} disabled={pdfLoading}>Reset</button>
+            <button type="button" onClick={() => setPdfScale(1)} disabled={pdfLoading || pdfSourcePending}>Reset</button>
           </div>
           <div className="attachment-viewer-pdf-stage">
-            {pdfLoading && <div className="attachment-viewer-message">Loading PDF...</div>}
-            {!pdfLoading && pdfPages === 0 && (
+            {(pdfLoading || pdfSourcePending) && <div className="attachment-viewer-message">Loading PDF...</div>}
+            {!pdfLoading && !pdfSourcePending && pdfPages === 0 && (
               <div className="attachment-viewer-message">No PDF pages are available for preview.</div>
             )}
-            {!pdfLoading && pdfPages > 0 && (
+            {!pdfLoading && !pdfSourcePending && pdfPages > 0 && (
               <>
                 <div className="attachment-viewer-pdf-page-label">Page {pdfPage}</div>
                 <PdfPageCanvas
@@ -603,7 +738,7 @@ export default function AttachmentViewer({ attachment, onClose }) {
           </div>
           <div className="attachment-viewer-actions">
             {canDownload && (
-              <a className="attachment-viewer-download" href={sourceUrl} download={attachment.name}>
+              <a className="attachment-viewer-download" href={downloadUrl} download={attachment.name}>
                 <Download size={14} />
                 <span>Download</span>
               </a>

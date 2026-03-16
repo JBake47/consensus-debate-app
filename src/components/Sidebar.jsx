@@ -4,6 +4,7 @@ import { useDebateActions, useDebateConversationList } from '../context/DebateCo
 import { formatRelativeDate } from '../lib/formatDate';
 import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
 import { exportConversationReport } from '../lib/reportExport';
+import { sortSidebarConversations } from '../lib/sidebarOrdering';
 import './Sidebar.css';
 
 const SIDEBAR_PAGE_SIZE = 150;
@@ -27,8 +28,11 @@ export default function Sidebar({ open, onClose }) {
   const editTitleRef = useRef(null);
 
   const sortedConversations = useMemo(
-    () => [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
-    [conversations]
+    () => sortSidebarConversations(
+      conversations,
+      (conversationId) => Boolean(isConversationInProgress?.(conversationId)),
+    ),
+    [conversations, isConversationInProgress]
   );
 
   const [searchQuery, setSearchQuery] = useState('');
