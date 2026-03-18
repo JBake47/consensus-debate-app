@@ -1,4 +1,5 @@
-import { rankModels } from './modelRanking.js';
+import { getCatalogModelLookupId } from './modelStats.js';
+import { rankModels, rerankModelsForDiversity } from './modelRanking.js';
 
 function getProviderKey(modelId) {
   const id = String(modelId || '').toLowerCase();
@@ -221,6 +222,9 @@ export function getReplacementModelChoices({
   metrics = null,
   rankingMode = 'balanced',
   rankingPreferences = null,
+  capabilityRegistry = null,
+  taskRequirements = null,
+  workloadProfile = null,
 } = {}) {
   if (!currentModel || !modelCatalog || Object.keys(modelCatalog).length === 0) {
     return [];
@@ -232,27 +236,32 @@ export function getReplacementModelChoices({
     preferredMode: rankingMode,
     limit: 48,
     rankingPreferences,
+    capabilityRegistry,
+    taskRequirements,
+    workloadProfile,
   });
 
+  const currentCatalogId = getCatalogModelLookupId(currentModel) || currentModel;
   const excluded = new Set(
-    Array.isArray(roundModels)
-      ? roundModels.filter(Boolean)
-      : []
+    (Array.isArray(roundModels) ? roundModels : [])
+      .map((modelId) => getCatalogModelLookupId(modelId) || modelId)
+      .filter(Boolean)
   );
   const currentProvider = getProviderKey(currentModel);
-  const candidates = ranked
-    .filter((entry) => entry.modelId !== currentModel)
+  const reranked = rerankModelsForDiversity({
+    rankedModels: ranked,
+    selectedModelIds: roundModels,
+    currentModelId: currentModel,
+  });
+
+  const candidates = reranked
+    .filter((entry) => entry.normalizedModelId !== currentCatalogId)
     .map((entry) => ({
       ...entry,
       sameProvider: getProviderKey(entry.modelId) === currentProvider,
-      alreadyUsedInRound: excluded.has(entry.modelId),
+      alreadyUsedInRound: excluded.has(entry.normalizedModelId),
     }))
-    .sort((left, right) => {
-      const leftBucket = left.alreadyUsedInRound ? 2 : (left.sameProvider ? 1 : 0);
-      const rightBucket = right.alreadyUsedInRound ? 2 : (right.sameProvider ? 1 : 0);
-      if (leftBucket !== rightBucket) return leftBucket - rightBucket;
-      return right.score - left.score;
-    });
+    .sort((left, right) => right.adjustedScore - left.adjustedScore || right.score - left.score);
   if (candidates.length === 0) {
     return [];
   }

@@ -7,15 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-03-18
+
 ### Added
 - Sidebar ordering helpers and regression coverage so in-progress conversations can sort by their current turn start time instead of live `updatedAt` churn
+- Smart-ranking benchmark priors sourced from a dated 2026 leaderboard snapshot, plus workload and quality telemetry helpers for model-level scoring
+- Regression coverage for ranking freshness, multimodal weighting, current 2026 benchmark leaders, and normalized catalog benchmark inputs
 
 ### Changed
 - Attachment viewer PDF handling now prepares stable object URLs for local data uploads, warms the pdf.js worker after paint, and keeps preview/download behavior consistent across local and remote files
+- Smart ranking now blends per-model latency, reliability, cache, workload-aware cost, current benchmark priors, and ensemble judge feedback when choosing debate and replacement models
+- Settings and replacement-model pickers now show ranking reasons, telemetry summaries, and diversity-aware fit scores instead of only raw model ids
 
 ### Fixed
 - Synthesizer, convergence-check, and web-search model fields can now be fully cleared and retyped without live validation snapping them back to catalog defaults mid-edit
 - Running conversations now keep a steadier sidebar position while responses stream instead of reordering on every status update
+- Stale rolling benchmark suites no longer influence ranking priors, and already-normalized catalog benchmark scores are preserved without being re-normalized against raw suite ranges
 
 ## [0.3.25] - 2026-03-15
 

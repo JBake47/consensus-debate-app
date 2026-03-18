@@ -55,6 +55,10 @@ import {
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
+import { buildRankingTaskRequirements } from '../lib/modelRanking.js';
+import { buildEnsembleQualityObservations } from '../lib/modelQualityTelemetry.js';
+import { getCatalogModelLookupId } from '../lib/modelStats';
+import { buildModelWorkloadProfile } from '../lib/modelWorkload.js';
 import {
   createRunId,
   deriveRoundStatusFromStreams,
@@ -97,8 +101,95 @@ function createDefaultMetrics() {
     successfulTokenTotal: 0,
     firstAnswerTimes: [],
     failureByProvider: {},
+    modelStats: {},
     lastUpdated: Date.now(),
   };
+}
+
+function createDefaultModelMetricEntry() {
+  return {
+    requestCount: 0,
+    networkCallCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    retryAttempts: 0,
+    retryRecovered: 0,
+    cacheHits: 0,
+    successfulTokenTotal: 0,
+    qualityVoteCount: 0,
+    judgeSignalWeightTotal: 0,
+    judgeRelativeWeightTotal: 0,
+    judgeTopPlacementWeight: 0,
+    judgeOutlierWeight: 0,
+    firstTokenLatencies: [],
+    durations: [],
+    lastSeenAt: 0,
+  };
+}
+
+function normalizeModelMetricEntry(raw) {
+  const base = createDefaultModelMetricEntry();
+  if (!raw || typeof raw !== 'object') return base;
+  const firstTokenLatencies = Array.isArray(raw.firstTokenLatencies)
+    ? raw.firstTokenLatencies
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .slice(-METRICS_SAMPLE_LIMIT)
+    : [];
+  const durations = Array.isArray(raw.durations)
+    ? raw.durations
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .slice(-METRICS_SAMPLE_LIMIT)
+    : [];
+  return {
+    ...base,
+    requestCount: Number.isFinite(Number(raw.requestCount)) ? Math.max(0, Math.floor(Number(raw.requestCount))) : 0,
+    networkCallCount: Number.isFinite(Number(raw.networkCallCount)) ? Math.max(0, Math.floor(Number(raw.networkCallCount))) : 0,
+    successCount: Number.isFinite(Number(raw.successCount)) ? Math.max(0, Math.floor(Number(raw.successCount))) : 0,
+    failureCount: Number.isFinite(Number(raw.failureCount)) ? Math.max(0, Math.floor(Number(raw.failureCount))) : 0,
+    retryAttempts: Number.isFinite(Number(raw.retryAttempts)) ? Math.max(0, Math.floor(Number(raw.retryAttempts))) : 0,
+    retryRecovered: Number.isFinite(Number(raw.retryRecovered)) ? Math.max(0, Math.floor(Number(raw.retryRecovered))) : 0,
+    cacheHits: Number.isFinite(Number(raw.cacheHits)) ? Math.max(0, Math.floor(Number(raw.cacheHits))) : 0,
+    successfulTokenTotal: Number.isFinite(Number(raw.successfulTokenTotal))
+      ? Math.max(0, Math.floor(Number(raw.successfulTokenTotal)))
+      : 0,
+    qualityVoteCount: Number.isFinite(Number(raw.qualityVoteCount)) ? Math.max(0, Math.floor(Number(raw.qualityVoteCount))) : 0,
+    judgeSignalWeightTotal: Number.isFinite(Number(raw.judgeSignalWeightTotal))
+      ? Math.max(0, Number(raw.judgeSignalWeightTotal))
+      : 0,
+    judgeRelativeWeightTotal: Number.isFinite(Number(raw.judgeRelativeWeightTotal))
+      ? Math.max(0, Number(raw.judgeRelativeWeightTotal))
+      : 0,
+    judgeTopPlacementWeight: Number.isFinite(Number(raw.judgeTopPlacementWeight))
+      ? Math.max(0, Number(raw.judgeTopPlacementWeight))
+      : 0,
+    judgeOutlierWeight: Number.isFinite(Number(raw.judgeOutlierWeight))
+      ? Math.max(0, Number(raw.judgeOutlierWeight))
+      : 0,
+    firstTokenLatencies,
+    durations,
+    lastSeenAt: Number.isFinite(Number(raw.lastSeenAt)) ? Math.max(0, Math.floor(Number(raw.lastSeenAt))) : 0,
+  };
+}
+
+function normalizeModelStats(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw)
+      .map(([modelId, value]) => {
+        const key = getCatalogModelLookupId(modelId) || String(modelId || '').trim();
+        return [key, normalizeModelMetricEntry(value)];
+      })
+      .filter(([modelId, entry]) => modelId && (
+        entry.requestCount > 0
+        || entry.networkCallCount > 0
+        || entry.retryAttempts > 0
+        || entry.cacheHits > 0
+        || entry.qualityVoteCount > 0
+        || entry.judgeSignalWeightTotal > 0
+      ))
+  );
 }
 
 function normalizeMetrics(raw) {
@@ -118,6 +209,7 @@ function normalizeMetrics(raw) {
       }).filter(([, value]) => value > 0)
     )
     : {};
+  const modelStats = normalizeModelStats(raw.modelStats);
   return {
     ...base,
     callCount: Number.isFinite(Number(raw.callCount)) ? Math.max(0, Math.floor(Number(raw.callCount))) : 0,
@@ -130,6 +222,7 @@ function normalizeMetrics(raw) {
       : 0,
     firstAnswerTimes,
     failureByProvider,
+    modelStats,
     lastUpdated: Number.isFinite(Number(raw.lastUpdated)) ? Number(raw.lastUpdated) : Date.now(),
   };
 }
@@ -676,6 +769,16 @@ function clampNumber(value, min, max) {
 function trimSample(values, limit = METRICS_SAMPLE_LIMIT) {
   if (!Array.isArray(values)) return [];
   return values.slice(-limit);
+}
+
+function getTelemetryModelId(modelId) {
+  return getCatalogModelLookupId(modelId) || String(modelId || '').trim();
+}
+
+function appendMetricSample(values, nextValue, limit = METRICS_SAMPLE_LIMIT) {
+  const parsed = Number(nextValue);
+  if (!Number.isFinite(parsed) || parsed < 0) return trimSample(values, limit);
+  return trimSample([...(Array.isArray(values) ? values : []), Math.round(parsed)], limit);
 }
 
 function computeWordSetSimilarity(a, b) {
@@ -1502,12 +1605,48 @@ export function DebateProvider({ children }) {
       ...current,
       firstAnswerTimes: [...current.firstAnswerTimes],
       failureByProvider: { ...current.failureByProvider },
+      modelStats: { ...current.modelStats },
     });
     const next = normalizeMetrics(nextDraft || current);
     next.lastUpdated = Date.now();
     metricsRef.current = next;
     dispatch({ type: 'SET_METRICS', payload: next });
   }, [dispatch]);
+
+  const updateModelMetrics = useCallback((modelId, updater) => {
+    const telemetryModelId = getTelemetryModelId(modelId);
+    if (!telemetryModelId) return;
+    updateMetrics((prev) => {
+      const nextModelStats = { ...prev.modelStats };
+      const currentEntry = normalizeModelMetricEntry(nextModelStats[telemetryModelId]);
+      const nextEntryDraft = updater({
+        ...currentEntry,
+        firstTokenLatencies: [...currentEntry.firstTokenLatencies],
+        durations: [...currentEntry.durations],
+      });
+      const nextEntry = normalizeModelMetricEntry(nextEntryDraft || currentEntry);
+      nextEntry.lastSeenAt = Date.now();
+      nextModelStats[telemetryModelId] = nextEntry;
+      return {
+        ...prev,
+        modelStats: nextModelStats,
+      };
+    });
+  }, [updateMetrics]);
+
+  const recordEnsembleQualityTelemetry = useCallback((completedStreams, voteAnalysis) => {
+    const observations = buildEnsembleQualityObservations({ completedStreams, voteAnalysis });
+    for (const [modelId, observation] of Object.entries(observations)) {
+      updateModelMetrics(modelId, (prev) => ({
+        ...prev,
+        qualityVoteCount: prev.qualityVoteCount + (observation.qualityVoteCountDelta || 0),
+        judgeSignalWeightTotal: prev.judgeSignalWeightTotal + (observation.judgeSignalWeightDelta || 0),
+        judgeRelativeWeightTotal: prev.judgeRelativeWeightTotal + (observation.judgeRelativeWeightDelta || 0),
+        judgeTopPlacementWeight: prev.judgeTopPlacementWeight + (observation.judgeTopPlacementDelta || 0),
+        judgeOutlierWeight: prev.judgeOutlierWeight + (observation.judgeOutlierDelta || 0),
+      }));
+    }
+  }, [updateModelMetrics]);
 
   const addFailureByProvider = useCallback((providerId) => {
     const provider = providerId || 'unknown';
@@ -2348,6 +2487,12 @@ export function DebateProvider({ children }) {
       if (cached) {
         if (cached.content) onChunk?.(cached.content, cached.content);
         if (cached.reasoning) onReasoning?.(cached.reasoning);
+        updateModelMetrics(model, (prev) => ({
+          ...prev,
+          requestCount: prev.requestCount + 1,
+          successCount: prev.successCount + 1,
+          cacheHits: prev.cacheHits + 1,
+        }));
         return { ...cached, fromCache: true, retryCount: 0 };
       }
     }
@@ -2355,9 +2500,21 @@ export function DebateProvider({ children }) {
     let lastError = null;
     for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
       let result = null;
+      let firstTokenLatencyMs = null;
+      const attemptStartedAt = performance.now();
+      const handleChunk = (delta, accumulated) => {
+        if (firstTokenLatencyMs == null && typeof accumulated === 'string' && accumulated.length > 0) {
+          firstTokenLatencyMs = Math.round(performance.now() - attemptStartedAt);
+        }
+        onChunk?.(delta, accumulated);
+      };
       try {
         updateMetrics((prev) => ({ ...prev, callCount: prev.callCount + 1 }));
-        result = await streamChat({ model, messages, apiKey, signal, onChunk, onReasoning, nativeWebSearch });
+        updateModelMetrics(model, (prev) => ({
+          ...prev,
+          networkCallCount: prev.networkCallCount + 1,
+        }));
+        result = await streamChat({ model, messages, apiKey, signal, onChunk: handleChunk, onReasoning, nativeWebSearch });
       } catch (streamErr) {
         lastError = streamErr;
         if (signal?.aborted) throw streamErr;
@@ -2365,8 +2522,15 @@ export function DebateProvider({ children }) {
         if (isAbortLikeError(streamErr)) {
           try {
             updateMetrics((prev) => ({ ...prev, callCount: prev.callCount + 1 }));
+            updateModelMetrics(model, (prev) => ({
+              ...prev,
+              networkCallCount: prev.networkCallCount + 1,
+            }));
             const fallbackResult = await chatCompletion({ model, messages, apiKey, signal, nativeWebSearch });
-            if (fallbackResult?.content) onChunk?.(fallbackResult.content, fallbackResult.content);
+            if (fallbackResult?.content) {
+              firstTokenLatencyMs = firstTokenLatencyMs ?? Math.round(Number(fallbackResult.durationMs || 0));
+              onChunk?.(fallbackResult.content, fallbackResult.content);
+            }
             if (fallbackResult?.reasoning) onReasoning?.(fallbackResult.reasoning);
             result = fallbackResult;
           } catch (completionErr) {
@@ -2385,6 +2549,19 @@ export function DebateProvider({ children }) {
           successfulTokenTotal: prev.successfulTokenTotal + (Number.isFinite(usedTokens) ? Math.max(0, Math.floor(usedTokens)) : 0),
           retryRecovered: prev.retryRecovered + (attempt > 1 ? 1 : 0),
         }));
+        updateModelMetrics(model, (prev) => ({
+          ...prev,
+          requestCount: prev.requestCount + 1,
+          successCount: prev.successCount + 1,
+          retryRecovered: prev.retryRecovered + (attempt > 1 ? 1 : 0),
+          successfulTokenTotal: prev.successfulTokenTotal + (Number.isFinite(usedTokens) ? Math.max(0, Math.floor(usedTokens)) : 0),
+          firstTokenLatencies: firstTokenLatencyMs != null
+            ? appendMetricSample(prev.firstTokenLatencies, firstTokenLatencyMs)
+            : trimSample(prev.firstTokenLatencies),
+          durations: Number.isFinite(Number(result?.durationMs))
+            ? appendMetricSample(prev.durations, Number(result.durationMs))
+            : trimSample(prev.durations),
+        }));
         const finalized = { ...result, fromCache: false, retryCount: attempt - 1 };
         if (cacheAllowed && finalized.content) {
           setCachedResponse(cacheKey, finalized, cacheTtlMs);
@@ -2399,9 +2576,18 @@ export function DebateProvider({ children }) {
         onRetryProgress?.(null);
         addFailureByProvider(providerId);
         updateMetrics((prev) => ({ ...prev, failureCount: prev.failureCount + 1 }));
+        updateModelMetrics(model, (prev) => ({
+          ...prev,
+          requestCount: prev.requestCount + 1,
+          failureCount: prev.failureCount + 1,
+        }));
         throw err;
       }
       updateMetrics((prev) => ({ ...prev, retryAttempts: prev.retryAttempts + 1 }));
+      updateModelMetrics(model, (prev) => ({
+        ...prev,
+        retryAttempts: prev.retryAttempts + 1,
+      }));
       const delayMs = getRetryDelayMs(attempt, retryPolicy);
       onRetryProgress?.({
         active: true,
@@ -2417,6 +2603,11 @@ export function DebateProvider({ children }) {
     onRetryProgress?.(null);
     addFailureByProvider(providerId);
     updateMetrics((prev) => ({ ...prev, failureCount: prev.failureCount + 1 }));
+    updateModelMetrics(model, (prev) => ({
+      ...prev,
+      requestCount: prev.requestCount + 1,
+      failureCount: prev.failureCount + 1,
+    }));
     throw terminalError;
   };
 
@@ -3235,6 +3426,7 @@ export function DebateProvider({ children }) {
       });
 
       voteAnalysis = parseEnsembleVoteResponse(voteContent);
+      recordEnsembleQualityTelemetry(completedStreams, voteAnalysis);
 
       dispatchTurnAction('SET_ENSEMBLE_RESULT', {
         ensembleResult: {
@@ -5309,10 +5501,26 @@ export function DebateProvider({ children }) {
     const round = Array.isArray(lastTurn.rounds) ? lastTurn.rounds[roundIndex] : null;
     const stream = round?.streams?.[streamIndex];
     if (!stream?.model) return null;
+    const roundModels = (round?.streams || []).map((item) => item.model).filter(Boolean);
+    const totalRounds = lastTurn.mode === 'debate'
+      ? Math.max(roundIndex + 1, Number(lastTurn?.debateMetadata?.totalRounds || state.maxDebateRounds || 1))
+      : 1;
+    const taskRequirements = buildRankingTaskRequirements({
+      currentModel: stream.model,
+      modelCatalog: state.modelCatalog,
+      attachments: Array.isArray(lastTurn.attachments) ? lastTurn.attachments : [],
+      webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
+    });
+    const workloadProfile = buildModelWorkloadProfile({
+      turnMode: lastTurn.mode || 'debate',
+      selectedModelCount: Math.max(1, roundModels.length || state.selectedModels.length || 1),
+      maxDebateRounds: totalRounds,
+      startRound: Number.isFinite(Number(roundIndex)) ? roundIndex + 1 : 1,
+    });
 
     return selectReplacementModel({
       currentModel: stream.model,
-      roundModels: (round.streams || []).map((item) => item.model),
+      roundModels,
       modelCatalog: state.modelCatalog,
       metrics: state.metrics,
       rankingMode: state.smartRankingMode,
@@ -5321,11 +5529,17 @@ export function DebateProvider({ children }) {
         preferNew: state.smartRankingPreferNew,
         allowPreview: state.smartRankingAllowPreview,
       },
+      capabilityRegistry: state.capabilityRegistry,
+      taskRequirements,
+      workloadProfile,
     });
   }, [
     activeConversation,
+    state.capabilityRegistry,
     state.modelCatalog,
     state.metrics,
+    state.maxDebateRounds,
+    state.selectedModels,
     state.smartRankingMode,
     state.smartRankingPreferFlagship,
     state.smartRankingPreferNew,

@@ -192,11 +192,25 @@
   color: var(--text-secondary);
 }
 
+.replacement-picker-highlights {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
 .replacement-picker-description {
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-tertiary);
   line-height: 1.5;
+}
+
+.replacement-picker-telemetry {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.45;
 }
 
 .replacement-picker-stats {

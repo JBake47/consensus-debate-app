@@ -11,7 +11,7 @@ import {
   getProviderName,
 } from '../lib/openrouter';
 import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
-import { rankModels } from '../lib/modelRanking';
+import { rankModels, selectDiverseModels } from '../lib/modelRanking';
 import {
   buildModelStatsTitle,
   getModelStatRows,
@@ -19,6 +19,7 @@ import {
   resolveModelCatalogEntry,
 } from '../lib/modelStats';
 import { DEFAULT_THEME_MODE } from '../lib/theme';
+import { buildModelWorkloadProfile } from '../lib/modelWorkload';
 import ModelPickerModal from './ModelPickerModal';
 import './SettingsModal.css';
 
@@ -31,7 +32,34 @@ function formatDurationCompact(ms) {
   return `${Math.round(ms)}ms`;
 }
 
-function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, children }) {
+function formatRankingTelemetrySummary(item) {
+  const requestCount = Number(item?.telemetry?.requestCount || 0);
+  const qualityVotes = Number(item?.qualityBreakdown?.feedback?.voteCount || 0);
+  const feedbackSummary = String(item?.qualityBreakdown?.feedback?.summary || '').trim();
+  const benchmarkLabel = String(item?.qualityBreakdown?.benchmark?.label || '').trim();
+  const parts = [];
+
+  if (qualityVotes > 0 && feedbackSummary) {
+    parts.push(`Judge ${feedbackSummary}`);
+  } else if (benchmarkLabel) {
+    parts.push(benchmarkLabel);
+  }
+
+  if (requestCount > 0) {
+    const successRate = Number(item?.telemetry?.successRatePct || 0);
+    const p50FirstToken = formatDurationCompact(item?.telemetry?.p50FirstTokenMs);
+    const cacheHitRate = Number(item?.telemetry?.cacheHitRatePct || 0);
+    parts.push(`Success ${successRate}% across ${requestCount} run${requestCount === 1 ? '' : 's'}`);
+    parts.push(`p50 ${p50FirstToken}`);
+    parts.push(`cache ${cacheHitRate}%`);
+  } else if (parts.length === 0) {
+    parts.push('No direct telemetry yet. Ranking is using benchmark priors and catalog metadata.');
+  }
+
+  return parts.join(' · ');
+}
+
+function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, children, focusable = true }) {
   const { catalogId, model } = resolveModelCatalogEntry(modelCatalog, modelId);
   const statRows = getModelStatRows(model);
   const displayName = model?.name || getModelDisplayName(modelId);
@@ -42,7 +70,11 @@ function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, childr
 
   return (
     <div className="model-hover-card">
-      <div className="model-hover-trigger" tabIndex={0} aria-label={helperText}>
+      <div
+        className="model-hover-trigger"
+        tabIndex={focusable ? 0 : undefined}
+        aria-label={focusable ? helperText : undefined}
+      >
         {children}
       </div>
       <div className="model-hover-tooltip">
@@ -135,7 +167,7 @@ export default function SettingsModal() {
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
     cachePersistenceEnabled, themeMode, cacheHitCount, cacheEntryCount,
-    rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics,
+    rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, capabilityRegistry,
   } = useDebateSettings();
   const { showSettings } = useDebateUi();
   const { clearResponseCache, resetDiagnostics, dispatch } = useDebateActions();
@@ -309,6 +341,12 @@ export default function SettingsModal() {
     modelCatalog,
     modelCatalogStatus,
   });
+  const rankingWorkloadProfile = useMemo(() => buildModelWorkloadProfile({
+    turnMode: 'debate',
+    selectedModelCount: Math.max(1, models.length || selectedModels.length || 1),
+    maxDebateRounds: maxRounds,
+    startRound: 1,
+  }), [models.length, selectedModels.length, maxRounds]);
   const rankedModels = useMemo(
     () => rankModels({
       modelCatalog,
@@ -319,9 +357,11 @@ export default function SettingsModal() {
         preferNew: rankingPreferNew,
         allowPreview: rankingAllowPreview,
       },
+      capabilityRegistry,
+      workloadProfile: rankingWorkloadProfile,
       limit: 8,
     }),
-    [modelCatalog, metrics, rankingMode, rankingPreferFlagship, rankingPreferNew, rankingAllowPreview]
+    [modelCatalog, metrics, rankingMode, rankingPreferFlagship, rankingPreferNew, rankingAllowPreview, capabilityRegistry, rankingWorkloadProfile]
   );
   const currentPresetSnapshot = useMemo(() => ({
     models,
@@ -476,7 +516,10 @@ export default function SettingsModal() {
 
   const applyRankedTopModels = (count = 3) => {
     if (!Array.isArray(rankedModels) || rankedModels.length === 0) return;
-    const top = rankedModels.slice(0, Math.max(1, count)).map((entry) => entry.modelId);
+    const top = selectDiverseModels({
+      rankedModels,
+      count: Math.max(1, count),
+    }).map((entry) => entry.modelId);
     if (top.length > 0) {
       setModels(top);
     }
@@ -1130,7 +1173,7 @@ export default function SettingsModal() {
                     checked={rankingPreferNew}
                     onChange={e => setRankingPreferNew(e.target.checked)}
                   />
-                  <span>Boost newly released/discovered models</span>
+                  <span>Boost newly released models</span>
                 </label>
                 <label className="settings-checkbox">
                   <input
@@ -1147,16 +1190,38 @@ export default function SettingsModal() {
               {rankedModels.length > 0 && (
                 <div className="settings-ranked-list">
                   {rankedModels.slice(0, 6).map((item) => (
-                    <button
+                    <ModelStatsHoverCard
                       key={item.modelId}
-                      className="settings-ranked-item"
-                      onClick={() => addModelId(item.modelId)}
-                      disabled={models.includes(item.modelId)}
-                      title={models.includes(item.modelId) ? 'Already selected' : `Score ${item.score}`}
+                      modelId={item.modelId}
+                      modelCatalog={modelCatalog}
+                      modelCatalogStatus={modelCatalogStatus}
+                      focusable={false}
                     >
-                      <span>{item.modelId}</span>
-                      <span>{item.score}</span>
-                    </button>
+                      <button
+                        className="settings-ranked-item"
+                        onClick={() => addModelId(item.modelId)}
+                        disabled={models.includes(item.modelId)}
+                        aria-label={
+                          models.includes(item.modelId)
+                            ? `${item.modelId} already selected`
+                            : `Add ${item.modelId} with score ${item.score}`
+                        }
+                        type="button"
+                      >
+                        <span className="settings-ranked-header">
+                          <span className="settings-ranked-model">{item.modelId}</span>
+                          <span className="settings-ranked-score">Score {item.score}</span>
+                        </span>
+                        {item.highlights?.length > 0 && (
+                          <span className="settings-ranked-reasons">
+                            {item.highlights.join(' · ')}
+                          </span>
+                        )}
+                        <span className="settings-ranked-meta">
+                          {formatRankingTelemetrySummary(item)}
+                        </span>
+                      </button>
+                    </ModelStatsHoverCard>
                   ))}
                 </div>
               )}
@@ -1407,7 +1472,7 @@ export default function SettingsModal() {
               <span>Diagnostics</span>
             </label>
             <p className="settings-hint">
-              Global browser-level telemetry for provider failures and retry behavior. Useful for debugging routes and outages, not for judging answer quality.
+              Global route telemetry for failures and retry behavior. Ranking cards above also blend public benchmark priors with per-model ensemble judge feedback when available.
             </p>
             {diagnosticsSummary.hasData ? (
               <>

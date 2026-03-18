@@ -413,14 +413,15 @@
   background: rgba(255, 255, 255, 0.03);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  padding: 6px 8px;
+  padding: 8px 10px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: var(--space-xs);
   font-size: 11px;
-  font-family: var(--font-mono);
   cursor: pointer;
+  text-align: left;
 }
 
 .settings-ranked-item:hover:not(:disabled) {
@@ -431,6 +432,36 @@
 .settings-ranked-item:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.settings-ranked-header {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.settings-ranked-model {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.settings-ranked-score {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.settings-ranked-reasons {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.settings-ranked-meta {
+  color: var(--text-tertiary);
+  line-height: 1.4;
 }
 
 .settings-cache-row {

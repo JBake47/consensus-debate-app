@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, Sparkles, X } from 'lucide-react';
-import { useDebateSettings } from '../context/DebateContext';
+import { useDebateConversations, useDebateSettings } from '../context/DebateContext';
 import { getModelDisplayName, getProviderName } from '../lib/openrouter';
+import { buildRankingTaskRequirements } from '../lib/modelRanking';
 import { getModelStatRows, resolveModelCatalogEntry } from '../lib/modelStats';
+import { buildModelWorkloadProfile } from '../lib/modelWorkload';
 import { getReplacementModelChoices, getRetryScopeDescription } from '../lib/retryState';
 import './ReplacementModelPickerModal.css';
 
@@ -22,6 +24,37 @@ function buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel) {
   return parts.length > 1 ? parts.slice(1).join('. ') : scopeDescription;
 }
 
+function formatDurationCompact(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '--';
+  if (ms >= 10000) return `${Math.round(ms / 1000)}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function formatChoiceTelemetry(choice) {
+  const requestCount = Number(choice?.telemetry?.requestCount || 0);
+  const qualityVotes = Number(choice?.qualityBreakdown?.feedback?.voteCount || 0);
+  const feedbackSummary = String(choice?.qualityBreakdown?.feedback?.summary || '').trim();
+  const benchmarkLabel = String(choice?.qualityBreakdown?.benchmark?.label || '').trim();
+  const parts = [];
+
+  if (qualityVotes > 0 && feedbackSummary) {
+    parts.push(`Judge ${feedbackSummary}`);
+  } else if (benchmarkLabel) {
+    parts.push(benchmarkLabel);
+  }
+
+  if (requestCount > 0) {
+    parts.push(`Success ${choice.telemetry.successRatePct}% across ${requestCount} run${requestCount === 1 ? '' : 's'}`);
+    parts.push(`p50 ${formatDurationCompact(choice.telemetry.p50FirstTokenMs)}`);
+    parts.push(`cache ${choice.telemetry.cacheHitRatePct}%`);
+  } else if (parts.length === 0) {
+    parts.push('No direct telemetry yet. Ranked from benchmark priors and catalog metadata.');
+  }
+
+  return parts.join(' · ');
+}
+
 export default function ReplacementModelPickerModal({
   open,
   onClose,
@@ -38,11 +71,13 @@ export default function ReplacementModelPickerModal({
     modelCatalogStatus,
     modelCatalogError,
     metrics,
+    capabilityRegistry,
     smartRankingMode,
     smartRankingPreferFlagship,
     smartRankingPreferNew,
     smartRankingAllowPreview,
   } = useDebateSettings();
+  const { activeConversation } = useDebateConversations();
   const [query, setQuery] = useState('');
   const [forceRefresh, setForceRefresh] = useState(Boolean(initialForceRefresh));
 
@@ -71,6 +106,21 @@ export default function ReplacementModelPickerModal({
     setForceRefresh(Boolean(initialForceRefresh));
   }, [open, initialForceRefresh, currentModel]);
 
+  const currentTurn = activeConversation?.turns?.[activeConversation.turns.length - 1] || null;
+  const taskRequirements = useMemo(() => buildRankingTaskRequirements({
+    currentModel,
+    modelCatalog,
+    attachments: Array.isArray(currentTurn?.attachments) ? currentTurn.attachments : [],
+    webSearchEnabled: Boolean(currentTurn?.webSearchEnabled),
+  }), [currentModel, currentTurn?.attachments, currentTurn?.webSearchEnabled, modelCatalog]);
+
+  const workloadProfile = useMemo(() => buildModelWorkloadProfile({
+    turnMode,
+    selectedModelCount: Math.max(1, roundModels.length || 1),
+    maxDebateRounds: Math.max(1, totalRounds || 1),
+    startRound: Number.isFinite(Number(roundNumber)) ? Number(roundNumber) : 1,
+  }), [turnMode, roundModels.length, totalRounds, roundNumber]);
+
   const allChoices = useMemo(() => {
     if (!open || modelCatalogStatus !== 'ready') return [];
     return getReplacementModelChoices({
@@ -84,6 +134,9 @@ export default function ReplacementModelPickerModal({
         preferNew: smartRankingPreferNew,
         allowPreview: smartRankingAllowPreview,
       },
+      capabilityRegistry,
+      taskRequirements,
+      workloadProfile,
     });
   }, [
     open,
@@ -92,6 +145,9 @@ export default function ReplacementModelPickerModal({
     modelCatalog,
     modelCatalogStatus,
     metrics,
+    capabilityRegistry,
+    taskRequirements,
+    workloadProfile,
     smartRankingMode,
     smartRankingPreferFlagship,
     smartRankingPreferNew,
@@ -211,7 +267,9 @@ export default function ReplacementModelPickerModal({
                     <div className="replacement-picker-info">
                       <div className="replacement-picker-row">
                         <span className="replacement-picker-provider">{providerName}</span>
-                        <span className="replacement-picker-score">Score {choice.score}</span>
+                        <span className="replacement-picker-score" title={`Base score ${choice.score}`}>
+                          Fit {choice.adjustedScore ?? choice.score}
+                        </span>
                         {choice.recommended && (
                           <span className="replacement-picker-badge recommended">
                             <Sparkles size={11} />
@@ -227,7 +285,15 @@ export default function ReplacementModelPickerModal({
                       </div>
                       <div className="replacement-picker-name">{choice.modelId}</div>
                       <div className="replacement-picker-display-name">{displayName}</div>
+                      {choice.highlights?.length > 0 && (
+                        <div className="replacement-picker-highlights">
+                          {choice.highlights.join(' · ')}
+                        </div>
+                      )}
                       {description && <div className="replacement-picker-description">{description}</div>}
+                      <div className="replacement-picker-telemetry">
+                        {formatChoiceTelemetry(choice)}
+                      </div>
                       <div className="replacement-picker-stats">
                         <div className="replacement-picker-stat" title={statMap.contextLength?.detail || 'Unavailable'}>
                           <span>Context</span>
