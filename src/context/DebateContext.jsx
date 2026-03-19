@@ -65,6 +65,13 @@ import {
   getRoundRepairStreamIndices,
   selectReplacementModel,
 } from '../lib/retryState';
+import {
+  getLiveConversationRunScopes,
+  getResumeRecoveryConversationIds,
+  isLiveStatus,
+  recoverInterruptedTurnState,
+  resolveInitialActiveConversationId,
+} from '../lib/conversationRecovery';
 
 const DebateActionContext = createContext(null);
 const DebateSettingsContext = createContext(null);
@@ -76,6 +83,7 @@ const RESPONSE_CACHE_TTL_MS = 2 * 60 * 1000;
 const RESPONSE_CACHE_MAX_ENTRIES = 250;
 const METRICS_SAMPLE_LIMIT = 120;
 const CONVERSATIONS_STORAGE_KEY = 'debate_conversations';
+const ACTIVE_CONVERSATION_STORAGE_KEY = 'active_conversation_id';
 const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v2';
 const WEB_SEARCH_ENABLED_STORAGE_KEY = 'web_search_enabled';
 const LEGACY_RESPONSE_CACHE_STORAGE_KEYS = ['response_cache_store_v1'];
@@ -83,9 +91,12 @@ const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
 const TITLE_SOURCE_USER = 'user';
 const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
+const LIVE_CONVERSATION_PERSIST_INTERVAL_MS = 1500;
+const LIVE_RUN_HEARTBEAT_INTERVAL_MS = 5000;
+const LIVE_RUN_TICK_INTERVAL_MS = 1000;
+const IDLE_CONVERSATION_PERSIST_DELAY_MS = 1200;
+const RESUME_RECOVERY_MIN_STALE_MS = 15000;
 const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
-const STALE_RUN_ERROR_MESSAGE = 'Run interrupted before completion.';
-const STALE_CONVERGENCE_REASON = 'Convergence check interrupted before completion.';
 
 function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
@@ -236,6 +247,15 @@ function loadFromStorage(key, defaultValue) {
   }
 }
 
+function loadOptionalFromStorage(key) {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored == null ? undefined : JSON.parse(stored);
+  } catch {
+    return undefined;
+  }
+}
+
 function saveToStorage(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -347,126 +367,16 @@ function migrateTurn(turn) {
   };
 }
 
-function recoverInterruptedTurnState(turn) {
-  if (!turn || typeof turn !== 'object') {
-    return { turn, changed: false };
-  }
 
-  let changed = false;
-  let nextTurn = turn;
-
-  if (turn.webSearchResult && isLiveStatus(turn.webSearchResult.status)) {
-    nextTurn = {
-      ...nextTurn,
-      webSearchResult: {
-        ...turn.webSearchResult,
-        status: 'error',
-        error: turn.webSearchResult.error || STALE_RUN_ERROR_MESSAGE,
-      },
-    };
-    changed = true;
-  }
-
-  if (turn.ensembleResult && isLiveStatus(turn.ensembleResult.status)) {
-    if (nextTurn === turn) nextTurn = { ...turn };
-    nextTurn.ensembleResult = {
-      ...turn.ensembleResult,
-      status: 'error',
-      error: turn.ensembleResult.error || STALE_RUN_ERROR_MESSAGE,
-    };
-    changed = true;
-  }
-
-  const synthesisStatus = turn.synthesis?.status;
-  const isPendingWarmup = synthesisStatus === 'pending'
-    && (!Array.isArray(turn.rounds) || turn.rounds.length === 0);
-  if (
-    turn.synthesis
-    && (synthesisStatus === 'streaming' || synthesisStatus === 'searching' || synthesisStatus === 'analyzing' || isPendingWarmup)
-  ) {
-    if (nextTurn === turn) nextTurn = { ...turn };
-    nextTurn.synthesis = {
-      ...turn.synthesis,
-      status: 'error',
-      error: turn.synthesis.error || STALE_RUN_ERROR_MESSAGE,
-      retryProgress: null,
-    };
-    changed = true;
-  }
-
-  if (Array.isArray(turn.rounds) && turn.rounds.length > 0) {
-    let roundChanged = false;
-    const nextRounds = turn.rounds.map((round) => {
-      if (!round || typeof round !== 'object') return round;
-
-      let nextRound = round;
-
-      if (isLiveStatus(round.status)) {
-        nextRound = { ...nextRound, status: 'error' };
-      }
-
-      if (Array.isArray(round.streams) && round.streams.length > 0) {
-        let streamChanged = false;
-        const nextStreams = round.streams.map((stream) => {
-          if (!stream || typeof stream !== 'object') return stream;
-          if (!isLiveStatus(stream.status)) return stream;
-          streamChanged = true;
-          const hasContent = typeof stream.content === 'string' && stream.content.trim().length > 0;
-          return {
-            ...stream,
-            status: hasContent ? 'complete' : 'error',
-            error: stream.error || STALE_RUN_ERROR_MESSAGE,
-            errorKind: stream.errorKind || 'failed',
-            outcome: hasContent ? 'using_previous_response' : (stream.outcome || null),
-            retryProgress: null,
-          };
-        });
-        if (streamChanged) {
-          if (nextRound === round) nextRound = { ...round };
-          nextRound.streams = nextStreams;
-        }
-      }
-
-      if (nextRound.convergenceCheck && nextRound.convergenceCheck.converged == null) {
-        if (nextRound === round) nextRound = { ...round };
-        nextRound.convergenceCheck = {
-          ...nextRound.convergenceCheck,
-          converged: false,
-          reason: nextRound.convergenceCheck.reason || STALE_CONVERGENCE_REASON,
-        };
-      }
-
-      if (nextRound !== round) {
-        roundChanged = true;
-      }
-      return nextRound;
-    });
-
-    if (roundChanged) {
-      if (nextTurn === turn) nextTurn = { ...turn };
-      nextTurn.rounds = nextRounds;
-      changed = true;
-    }
-  }
-
-  if (
-    changed
-    && turn.debateMetadata
-    && (turn.debateMetadata.terminationReason == null || turn.debateMetadata.terminationReason === '')
-  ) {
-    if (nextTurn === turn) nextTurn = { ...turn };
-    nextTurn.debateMetadata = {
-      ...turn.debateMetadata,
-      terminationReason: 'interrupted',
-    };
-  }
-
-  return { turn: nextTurn, changed };
-}
-
-function migrateConversations(conversations) {
+function migrateConversations(conversations, options = {}) {
+  const targetConversationIds = Array.isArray(options.conversationIds) && options.conversationIds.length > 0
+    ? new Set(options.conversationIds.filter(Boolean))
+    : null;
   let migrated = false;
   const result = conversations.map(conv => {
+    if (targetConversationIds && !targetConversationIds.has(conv.id)) {
+      return conv;
+    }
     const rawTurns = Array.isArray(conv.turns) ? conv.turns : [];
     if (!Array.isArray(conv.turns)) {
       migrated = true;
@@ -536,6 +446,14 @@ const { conversations: migratedConversations, migrated } = migrateConversations(
 if (migrated) {
   persistConversationsSnapshot(localStorage, CONVERSATIONS_STORAGE_KEY, migratedConversations);
 }
+const storedActiveConversationId = loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
+const initialActiveConversationId = resolveInitialActiveConversationId(
+  migratedConversations,
+  storedActiveConversationId,
+);
+if (storedActiveConversationId !== initialActiveConversationId) {
+  saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, initialActiveConversationId);
+}
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
 const loadedRetryPolicy = normalizeRetryPolicy(loadFromStorage('retry_policy', DEFAULT_RETRY_POLICY));
@@ -597,14 +515,19 @@ const initialState = {
   providerStatusError: null,
   metrics: loadedMetrics,
   conversations: migratedConversations,
-  activeConversationId: null,
+  activeConversationId: initialActiveConversationId,
   debateInProgress: false,
   showSettings: false,
   editingTurn: null,
 };
 
 function updateLastTurn(conversations, conversationId, updater, options = {}) {
-  const { turnId = null, runId = null } = options || {};
+  const {
+    turnId = null,
+    runId = null,
+    touchRunActivity = false,
+    activityAt = Date.now(),
+  } = options || {};
   let changed = false;
 
   const nextConversations = conversations.map(c => {
@@ -617,6 +540,9 @@ function updateLastTurn(conversations, conversationId, updater, options = {}) {
     if (runId && lastTurn.activeRunId !== runId) return c;
 
     updater(lastTurn);
+    if (touchRunActivity) {
+      lastTurn.lastRunActivityAt = activityAt;
+    }
     turns[turns.length - 1] = lastTurn;
     changed = true;
     return updateConversationLastTurnDerivedData({ ...c, turns, updatedAt: Date.now() });
@@ -796,49 +722,6 @@ function computeWordSetSimilarity(a, b) {
     if (bSet.has(token)) overlap += 1;
   }
   return overlap / Math.max(aSet.size, bSet.size);
-}
-
-function isLiveStatus(status) {
-  return status === 'streaming' || status === 'pending' || status === 'searching' || status === 'analyzing';
-}
-
-function isTurnActivelyRunning(turn) {
-  if (!turn || typeof turn !== 'object') return false;
-
-  const webSearchStatus = turn.webSearchResult?.status;
-  if (isLiveStatus(webSearchStatus)) return true;
-
-  const ensembleStatus = turn.ensembleResult?.status;
-  if (isLiveStatus(ensembleStatus)) return true;
-
-  const synthesisStatus = turn.synthesis?.status;
-  if (synthesisStatus === 'streaming') return true;
-
-  const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
-  if (rounds.length > 0) {
-    for (const round of rounds) {
-      if (isLiveStatus(round?.status)) return true;
-      const streams = Array.isArray(round?.streams) ? round.streams : [];
-      for (const stream of streams) {
-        if (isLiveStatus(stream?.status)) return true;
-      }
-    }
-  }
-
-  // Warm-up window before the first round stream begins.
-  if (synthesisStatus === 'pending' && rounds.length === 0) {
-    return true;
-  }
-
-  return false;
-}
-
-function isConversationActivelyRunning(conversation) {
-  if (!conversation || !Array.isArray(conversation.turns) || conversation.turns.length === 0) {
-    return false;
-  }
-  const lastTurn = conversation.turns[conversation.turns.length - 1];
-  return isTurnActivelyRunning(lastTurn);
 }
 
 function reducer(state, action) {
@@ -1050,7 +933,7 @@ function reducer(state, action) {
       const { conversationId, turnId, runId, result } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.webSearchResult = result;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_MODEL_CATALOG': {
@@ -1081,6 +964,7 @@ function reducer(state, action) {
       return { ...state, metrics };
     }
     case 'SET_ACTIVE_CONVERSATION': {
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, action.payload ?? null);
       return { ...state, activeConversationId: action.payload };
     }
     case 'NEW_CONVERSATION': {
@@ -1095,6 +979,7 @@ function reducer(state, action) {
         turns: [],
       });
       const conversations = [conv, ...state.conversations];
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, conv.id);
       return { ...state, conversations, activeConversationId: conv.id };
     }
     case 'ADD_TURN': {
@@ -1117,14 +1002,24 @@ function reducer(state, action) {
       }
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.activeRunId = runId;
-      }, { turnId });
+      }, { turnId, touchRunActivity: true });
+      return conversations === state.conversations ? state : { ...state, conversations };
+    }
+    case 'TOUCH_TURN_RUN': {
+      const { conversationId, turnId, runId, activityAt } = action.payload || {};
+      if (!conversationId || !turnId || !runId) {
+        return state;
+      }
+      const conversations = updateLastTurn(state.conversations, conversationId, () => {
+        // Heartbeat-only state touch so live runs can be recovered after resume.
+      }, { turnId, runId, touchRunActivity: true, activityAt });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'ADD_ROUND': {
       const { conversationId, turnId, runId, round } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = [...(lastTurn.rounds || []), round];
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'UPDATE_ROUND_STREAM': {
@@ -1181,7 +1076,7 @@ function reducer(state, action) {
         round.status = deriveRoundStatusFromStreams(streams, round.status);
         rounds[roundIndex] = round;
         lastTurn.rounds = rounds;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'UPDATE_ROUND_STATUS': {
@@ -1194,7 +1089,7 @@ function reducer(state, action) {
           : status;
         rounds[roundIndex] = round;
         lastTurn.rounds = rounds;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_CONVERGENCE': {
@@ -1203,21 +1098,21 @@ function reducer(state, action) {
         const rounds = [...lastTurn.rounds];
         rounds[roundIndex] = { ...rounds[roundIndex], convergenceCheck };
         lastTurn.rounds = rounds;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_DEBATE_METADATA': {
       const { conversationId, turnId, runId, metadata } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.debateMetadata = metadata;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_ENSEMBLE_RESULT': {
       const { conversationId, turnId, runId, ensembleResult } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.ensembleResult = ensembleResult;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_RUNNING_SUMMARY': {
@@ -1272,7 +1167,7 @@ function reducer(state, action) {
         if (durationMs !== undefined) synth.durationMs = durationMs;
         if (retryProgress !== undefined) synth.retryProgress = retryProgress;
         lastTurn.synthesis = synth;
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'SET_CONVERSATION_TITLE': {
@@ -1363,6 +1258,7 @@ function reducer(state, action) {
       const activeConversationId = state.activeConversationId === action.payload
         ? null
         : state.activeConversationId;
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, activeConversationId);
       return { ...state, conversations, activeConversationId };
     }
     case 'IMPORT_CONVERSATIONS': {
@@ -1375,7 +1271,10 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'RECOVER_INTERRUPTED_RUNS': {
-      const { conversations, migrated } = migrateConversations(state.conversations);
+      const conversationIds = Array.isArray(action.payload?.conversationIds)
+        ? action.payload.conversationIds
+        : undefined;
+      const { conversations, migrated } = migrateConversations(state.conversations, { conversationIds });
       if (!migrated) return state;
       return { ...state, conversations };
     }
@@ -1399,6 +1298,8 @@ function reducer(state, action) {
         ...sourceLastTurn,
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         timestamp: Date.now(),
+        activeRunId: null,
+        lastRunActivityAt: Date.now(),
         rounds: branchedRounds,
         synthesis: {
           model: state.synthesizerModel || sourceLastTurn.synthesis?.model || '',
@@ -1433,6 +1334,7 @@ function reducer(state, action) {
       });
 
       const conversations = [branchConversation, ...state.conversations];
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, branchConversationId);
       return { ...state, conversations, activeConversationId: branchConversationId };
     }
     case 'SET_DEBATE_IN_PROGRESS': {
@@ -1460,14 +1362,14 @@ function reducer(state, action) {
       const { conversationId, turnId, runId, keepCount } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.rounds = lastTurn.rounds.slice(0, keepCount);
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     case 'RESET_SYNTHESIS': {
       const { conversationId, turnId, runId, model, preserveContent = false } = action.payload;
       const conversations = updateLastTurn(state.conversations, conversationId, (lastTurn) => {
         lastTurn.synthesis = buildResetSynthesisState(lastTurn.synthesis, model, { preserveContent });
-      }, { turnId, runId });
+      }, { turnId, runId, touchRunActivity: true });
       return conversations === state.conversations ? state : { ...state, conversations };
     }
     default:
@@ -1481,6 +1383,9 @@ export function DebateProvider({ children }) {
   const responseCacheRef = useRef(loadedResponseCache);
   const providerCircuitRef = useRef({});
   const conversationsRef = useRef(state.conversations);
+  const liveRunScopesRef = useRef([]);
+  const lastConversationPersistAtRef = useRef(0);
+  const lastRunHeartbeatAtRef = useRef(0);
   const metricsRef = useRef(state.metrics);
   const cacheStatsRef = useRef({
     cacheHitCount: state.cacheHitCount,
@@ -1495,6 +1400,14 @@ export function DebateProvider({ children }) {
       }),
     });
   }, [dispatch]);
+  const liveRunScopes = useMemo(
+    () => getLiveConversationRunScopes(state.conversations),
+    [state.conversations],
+  );
+  const liveRunScopesKey = useMemo(
+    () => liveRunScopes.map((scope) => `${scope.conversationId}:${scope.turnId}:${scope.runId}`).join('|'),
+    [liveRunScopes],
+  );
 
   useEffect(() => {
     applyThemeMode(state.themeMode);
@@ -1509,6 +1422,10 @@ export function DebateProvider({ children }) {
   }, [state.conversations]);
 
   useEffect(() => {
+    liveRunScopesRef.current = liveRunScopes;
+  }, [liveRunScopes]);
+
+  useEffect(() => {
     metricsRef.current = state.metrics;
   }, [state.metrics]);
 
@@ -1519,48 +1436,17 @@ export function DebateProvider({ children }) {
     };
   }, [state.cacheHitCount, state.cacheEntryCount]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    if (state.conversations.some((conversation) => isConversationActivelyRunning(conversation))) {
-      return undefined;
+  const persistConversationsNow = useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    const result = persistConversationsSnapshot(
+      window.localStorage,
+      CONVERSATIONS_STORAGE_KEY,
+      conversationsRef.current,
+    );
+    if (result.ok) {
+      lastConversationPersistAtRef.current = Date.now();
     }
-
-    let timeoutId = 0;
-    let idleId = 0;
-    const flushSnapshot = () => {
-      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, conversationsRef.current);
-    };
-
-    timeoutId = window.setTimeout(() => {
-      if (typeof window.requestIdleCallback === 'function') {
-        idleId = window.requestIdleCallback(flushSnapshot, { timeout: 2000 });
-      } else {
-        flushSnapshot();
-      }
-    }, 1200);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      if (idleId && typeof window.cancelIdleCallback === 'function') {
-        window.cancelIdleCallback(idleId);
-      }
-    };
-  }, [state.conversations]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    const flushConversations = () => {
-      persistConversationsSnapshot(window.localStorage, CONVERSATIONS_STORAGE_KEY, conversationsRef.current);
-    };
-
-    window.addEventListener('pagehide', flushConversations);
-    window.addEventListener('beforeunload', flushConversations);
-
-    return () => {
-      window.removeEventListener('pagehide', flushConversations);
-      window.removeEventListener('beforeunload', flushConversations);
-    };
+    return result.ok;
   }, []);
 
   useEffect(() => {
@@ -1589,6 +1475,127 @@ export function DebateProvider({ children }) {
     }
     abortControllersRef.current.delete(conversationId);
   }, []);
+
+  useEffect(() => {
+    if (!liveRunScopesKey) {
+      lastRunHeartbeatAtRef.current = 0;
+      return;
+    }
+    lastRunHeartbeatAtRef.current = Date.now();
+    persistConversationsNow();
+  }, [liveRunScopesKey, persistConversationsNow]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const tickLiveRuns = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+
+      const scopes = liveRunScopesRef.current;
+      if (!Array.isArray(scopes) || scopes.length === 0) {
+        return;
+      }
+
+      const now = Date.now();
+      const heartbeatGapMs = lastRunHeartbeatAtRef.current > 0
+        ? now - lastRunHeartbeatAtRef.current
+        : 0;
+
+      if (heartbeatGapMs >= RESUME_RECOVERY_MIN_STALE_MS) {
+        const staleConversationIds = getResumeRecoveryConversationIds(conversationsRef.current, {
+          hiddenAt: now - heartbeatGapMs,
+          resumedAt: now,
+          minHiddenMs: RESUME_RECOVERY_MIN_STALE_MS,
+          maxRunInactivityMs: RESUME_RECOVERY_MIN_STALE_MS,
+        });
+        for (const conversationId of staleConversationIds) {
+          abortConversationRun(conversationId);
+        }
+        if (staleConversationIds.length > 0) {
+          dispatch({
+            type: 'RECOVER_INTERRUPTED_RUNS',
+            payload: { conversationIds: staleConversationIds },
+          });
+          lastConversationPersistAtRef.current = 0;
+        }
+        lastRunHeartbeatAtRef.current = now;
+        return;
+      }
+
+      if (heartbeatGapMs >= LIVE_RUN_HEARTBEAT_INTERVAL_MS) {
+        lastRunHeartbeatAtRef.current = now;
+        for (const scope of scopes) {
+          dispatch({
+            type: 'TOUCH_TURN_RUN',
+            payload: {
+              ...scope,
+              activityAt: now,
+            },
+          });
+        }
+      }
+
+      if ((now - lastConversationPersistAtRef.current) >= LIVE_CONVERSATION_PERSIST_INTERVAL_MS) {
+        persistConversationsNow();
+      }
+    };
+
+    const intervalId = window.setInterval(tickLiveRuns, LIVE_RUN_TICK_INTERVAL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [abortConversationRun, dispatch, persistConversationsNow]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    if (liveRunScopes.length > 0) {
+      return undefined;
+    }
+
+    let timeoutId = 0;
+    let idleId = 0;
+    timeoutId = window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(() => {
+          persistConversationsNow();
+        }, { timeout: 2000 });
+      } else {
+        persistConversationsNow();
+      }
+    }, IDLE_CONVERSATION_PERSIST_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (idleId && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+    };
+  }, [liveRunScopes.length, persistConversationsNow, state.conversations]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const flushConversations = () => {
+      persistConversationsNow();
+    };
+    const flushWhenHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        flushConversations();
+      }
+    };
+
+    document.addEventListener('visibilitychange', flushWhenHidden);
+    window.addEventListener('pagehide', flushConversations);
+    window.addEventListener('beforeunload', flushConversations);
+    document.addEventListener('freeze', flushConversations);
+
+    return () => {
+      document.removeEventListener('visibilitychange', flushWhenHidden);
+      window.removeEventListener('pagehide', flushConversations);
+      window.removeEventListener('beforeunload', flushConversations);
+      document.removeEventListener('freeze', flushConversations);
+    };
+  }, [persistConversationsNow]);
 
   const syncCacheStats = useCallback((partial = {}) => {
     const next = {
@@ -1787,14 +1794,8 @@ export function DebateProvider({ children }) {
     c => c.id === state.activeConversationId
   );
   const runningConversationIds = useMemo(() => {
-    const ids = new Set();
-    for (const conversation of state.conversations) {
-      if (isConversationActivelyRunning(conversation)) {
-        ids.add(conversation.id);
-      }
-    }
-    return ids;
-  }, [state.conversations]);
+    return new Set(liveRunScopes.map((scope) => scope.conversationId).filter(Boolean));
+  }, [liveRunScopes]);
   const activeConversationInProgress = Boolean(
     activeConversation?.id && runningConversationIds.has(activeConversation.id)
   );
@@ -2845,6 +2846,7 @@ export function DebateProvider({ children }) {
     const turn = {
       id: turnId,
       activeRunId: runId,
+      lastRunActivityAt: Date.now(),
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -3553,6 +3555,7 @@ export function DebateProvider({ children }) {
     const turn = {
       id: turnId,
       activeRunId: runId,
+      lastRunActivityAt: Date.now(),
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,
@@ -3833,6 +3836,7 @@ export function DebateProvider({ children }) {
     const turn = {
       id: turnId,
       activeRunId: runId,
+      lastRunActivityAt: Date.now(),
       userPrompt,
       timestamp: Date.now(),
       attachments: attachments || null,

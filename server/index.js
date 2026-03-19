@@ -19,6 +19,7 @@ import {
 } from 'docx';
 import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
 import { buildOpenRouterPlugins } from './openrouterPayload.js';
+import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateManager.js';
 
 dotenv.config();
 
@@ -2639,6 +2640,34 @@ app.get('/api/providers', (_req, res) => {
     openai: Boolean(process.env.OPENAI_API_KEY),
     gemini: Boolean(process.env.GEMINI_API_KEY),
   });
+});
+
+app.get('/api/update/status', async (req, res) => {
+  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+  try {
+    const status = await getAppUpdateStatus({ refresh });
+    res.json(status);
+  } catch (error) {
+    const status = error instanceof AppUpdateError ? error.status : 500;
+    res.status(status).json({
+      error: error?.message || 'Failed to inspect app update status.',
+      code: error instanceof AppUpdateError ? error.code : 'update_status_failed',
+    });
+  }
+});
+
+app.post('/api/update/apply', async (_req, res) => {
+  try {
+    const result = await applyAppUpdate();
+    res.json(result);
+  } catch (error) {
+    const status = error instanceof AppUpdateError ? error.status : 500;
+    res.status(status).json({
+      error: error?.message || 'Failed to apply app update.',
+      code: error instanceof AppUpdateError ? error.code : 'update_apply_failed',
+    });
+  }
 });
 
 app.get('/api/health', (_req, res) => {

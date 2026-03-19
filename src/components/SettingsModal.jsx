@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, MoreHorizontal, Sun } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, Sun, Download } from 'lucide-react';
 import { useDebateActions, useDebateSettings, useDebateUi } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
@@ -10,6 +10,7 @@ import {
   getModelDisplayName,
   getProviderName,
 } from '../lib/openrouter';
+import { applyAppUpdate as requestAppUpdate, fetchAppUpdateStatus } from '../lib/appUpdate';
 import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
 import { rankModels, selectDiverseModels } from '../lib/modelRanking';
 import {
@@ -159,6 +160,19 @@ function retryPoliciesEqual(left, right) {
   );
 }
 
+function formatFilePreview(items, limit = 4) {
+  const entries = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      return String(item?.path || '').trim();
+    })
+    .filter(Boolean);
+
+  if (entries.length === 0) return '';
+  if (entries.length <= limit) return entries.join(', ');
+  return `${entries.slice(0, limit).join(', ')}, +${entries.length - limit} more`;
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
@@ -201,16 +215,23 @@ export default function SettingsModal() {
   const [newModelProvider, setNewModelProvider] = useState('openrouter');
   const [pickerOpen, setPickerOpen] = useState(null);
   const [selectedPresetId, setSelectedPresetId] = useState('');
+  const [presetNameInput, setPresetNameInput] = useState('');
   const [presetSheet, setPresetSheet] = useState(null);
   const [presetSheetValue, setPresetSheetValue] = useState('');
   const [synthProvider, setSynthProvider] = useState('openrouter');
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
+  const [appUpdateStatus, setAppUpdateStatus] = useState(null);
+  const [appUpdateState, setAppUpdateState] = useState('idle');
+  const [appUpdateError, setAppUpdateError] = useState('');
+  const [appUpdateResult, setAppUpdateResult] = useState(null);
   const presetSheetInputRef = useRef(null);
+  const presetEditorScopeRef = useRef('');
   const liveApplyReadyRef = useRef(false);
   const synthEditingRef = useRef(false);
   const convEditingRef = useRef(false);
   const searchEditingRef = useRef(false);
+  const appUpdateRequestIdRef = useRef(0);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -382,6 +403,34 @@ export default function SettingsModal() {
     () => (selectedPreset ? !presetMatchesDraft(selectedPreset, currentPresetSnapshot) : false),
     [selectedPreset, currentPresetSnapshot]
   );
+  const trimmedPresetNameInput = String(presetNameInput || '').trim();
+  const selectedPresetNameChanged = selectedPreset
+    ? trimmedPresetNameInput !== String(selectedPreset.name || '').trim()
+    : false;
+  const selectedPresetHasUnsavedChanges = Boolean(
+    selectedPreset && (selectedPresetIsModified || selectedPresetNameChanged)
+  );
+  const canCreatePreset = !selectedPreset && Boolean(trimmedPresetNameInput);
+  const canSaveSelectedPreset = Boolean(selectedPreset && trimmedPresetNameInput && selectedPresetHasUnsavedChanges);
+  const presetStatusClassName = selectedPreset
+    ? selectedPresetHasUnsavedChanges
+      ? 'is-modified'
+      : 'is-match'
+    : 'is-custom';
+  const presetStatusLabel = selectedPreset ? 'Editing Saved Preset' : 'Custom Draft';
+  let presetStatusMessage = 'This configuration is not saved as a preset yet.';
+  if (selectedPreset && selectedPresetHasUnsavedChanges) {
+    if (selectedPresetIsModified && activePresetMatch && activePresetMatch.id !== selectedPreset.id) {
+      presetStatusMessage = `Current settings match "${activePresetMatch.name}" instead of "${selectedPreset.name}".`;
+    } else if (selectedPresetNameChanged && !selectedPresetIsModified) {
+      presetStatusMessage = `Rename "${selectedPreset.name}" and save when you're ready.`;
+    } else {
+      presetStatusMessage = `Adjustments to "${selectedPreset.name}" are ready to save.`;
+    }
+  } else if (selectedPreset) {
+    presetStatusMessage = `"${selectedPreset.name}" is in sync with the current settings.`;
+  }
+  const presetDraftSummary = `${models.length} model${models.length === 1 ? '' : 's'}, ${maxRounds} round${Number(maxRounds) === 1 ? '' : 's'}`;
   const diagnosticsSummary = useMemo(() => {
     const callCount = Number(metrics?.callCount || 0);
     const successCount = Number(metrics?.successCount || 0);
@@ -405,6 +454,62 @@ export default function SettingsModal() {
       topProviderFailure: providerFailures[0] || null,
     };
   }, [metrics]);
+  const dirtyFilePreview = useMemo(
+    () => formatFilePreview(appUpdateStatus?.dirtyEntries || []),
+    [appUpdateStatus],
+  );
+  const updatedFilePreview = useMemo(
+    () => formatFilePreview(appUpdateResult?.changedFiles || []),
+    [appUpdateResult],
+  );
+
+  const loadAppUpdateStatus = useCallback(async ({ refresh = true, clearResult = false } = {}) => {
+    const requestId = appUpdateRequestIdRef.current + 1;
+    appUpdateRequestIdRef.current = requestId;
+    setAppUpdateState('loading');
+    setAppUpdateError('');
+    if (clearResult) {
+      setAppUpdateResult(null);
+    }
+
+    try {
+      const status = await fetchAppUpdateStatus({ refresh });
+      if (appUpdateRequestIdRef.current !== requestId) return null;
+      setAppUpdateStatus(status);
+      setAppUpdateState('ready');
+      return status;
+    } catch (error) {
+      if (appUpdateRequestIdRef.current !== requestId) return null;
+      setAppUpdateError(error?.message || 'Unable to check for app updates.');
+      setAppUpdateState('error');
+      return null;
+    }
+  }, []);
+
+  const handleApplyAppUpdate = useCallback(async () => {
+    appUpdateRequestIdRef.current += 1;
+    setAppUpdateState('updating');
+    setAppUpdateError('');
+    setAppUpdateResult(null);
+
+    try {
+      const result = await requestAppUpdate();
+      setAppUpdateResult(result);
+      if (result?.status) {
+        setAppUpdateStatus(result.status);
+      }
+      setAppUpdateState('ready');
+    } catch (error) {
+      setAppUpdateError(error?.message || 'Unable to apply the app update.');
+      setAppUpdateState('error');
+      try {
+        const fallbackStatus = await fetchAppUpdateStatus({ refresh: false });
+        setAppUpdateStatus(fallbackStatus);
+      } catch {
+        // keep the original updater error visible
+      }
+    }
+  }, []);
 
   const getDirectProviderFromValue = (value) => {
     if (!value) return 'openrouter';
@@ -431,6 +536,16 @@ export default function SettingsModal() {
   }, [showSettings]);
 
   useEffect(() => {
+    if (!showSettings) return undefined;
+
+    loadAppUpdateStatus({ refresh: true, clearResult: true });
+
+    return () => {
+      appUpdateRequestIdRef.current += 1;
+    };
+  }, [showSettings, loadAppUpdateStatus]);
+
+  useEffect(() => {
     if (!providerOptions.find(p => p.id === newModelProvider) && providerOptions.length > 0) {
       setNewModelProvider(providerOptions[0].id);
     }
@@ -451,6 +566,31 @@ export default function SettingsModal() {
     if (selectedPresetId === activePresetMatch.id) return;
     setSelectedPresetId(activePresetMatch.id);
   }, [showSettings, activePresetMatch, selectedPreset, selectedPresetIsModified, selectedPresetId]);
+
+  useEffect(() => {
+    if (!showSettings) {
+      presetEditorScopeRef.current = '';
+      return;
+    }
+
+    const scopeKey = selectedPreset
+      ? `preset:${selectedPreset.id}:${selectedPreset.name}`
+      : `custom:${activePresetMatch?.id || 'none'}`;
+
+    if (presetEditorScopeRef.current === scopeKey) return;
+    presetEditorScopeRef.current = scopeKey;
+
+    if (selectedPreset) {
+      setPresetNameInput(selectedPreset.name);
+      return;
+    }
+
+    setPresetNameInput(
+      activePresetMatch?.name
+        ? buildUniquePresetName(`${activePresetMatch.name} Copy`, modelPresets)
+        : buildUniquePresetName('New Preset', modelPresets)
+    );
+  }, [showSettings, selectedPreset, activePresetMatch, modelPresets]);
 
   useEffect(() => {
     if (!presetSheet?.requiresValue) return;
@@ -525,15 +665,6 @@ export default function SettingsModal() {
     }
   };
 
-  const buildPayloadFromPreset = (preset, nameValue) => ({
-    name: String(nameValue || preset?.name || '').trim(),
-    models: Array.isArray(preset?.models) ? [...preset.models] : [],
-    synthesizerModel: preset?.synthesizerModel || '',
-    convergenceModel: preset?.convergenceModel || '',
-    maxDebateRounds: Number.isFinite(Number(preset?.maxDebateRounds)) ? Number(preset.maxDebateRounds) : 0,
-    webSearchModel: preset?.webSearchModel || '',
-  });
-
   const closePresetSheet = () => {
     setPresetSheet(null);
     setPresetSheetValue('');
@@ -570,55 +701,72 @@ export default function SettingsModal() {
     }
   };
 
-  const openSaveAsPresetSheet = () => {
-    const baseName = selectedPreset?.name
-      ? `${selectedPreset.name} Copy`
-      : activePresetMatch?.name
-        ? `${activePresetMatch.name} Copy`
-        : 'New Preset';
-    setPresetSheet({
-      mode: 'save-as',
-      title: 'Save As Preset',
-      confirmLabel: 'Save Preset',
-      description: 'Create a new preset from the current draft.',
-      requiresValue: true,
-    });
-    setPresetSheetValue(buildUniquePresetName(baseName, modelPresets));
+  const suggestPresetCopyName = () => {
+    if (selectedPreset) {
+      if (trimmedPresetNameInput && trimmedPresetNameInput.toLowerCase() !== String(selectedPreset.name || '').trim().toLowerCase()) {
+        return buildUniquePresetName(trimmedPresetNameInput, modelPresets);
+      }
+      return buildUniquePresetName(`${selectedPreset.name} Copy`, modelPresets);
+    }
+    if (trimmedPresetNameInput) return buildUniquePresetName(trimmedPresetNameInput, modelPresets);
+    if (activePresetMatch?.name) return buildUniquePresetName(`${activePresetMatch.name} Copy`, modelPresets);
+    return buildUniquePresetName('New Preset', modelPresets);
   };
 
-  const handleUpdatePreset = () => {
-    if (!selectedPreset) return;
+  const resetPresetNameDraft = () => {
+    if (selectedPreset) {
+      setPresetNameInput(selectedPreset.name);
+      return;
+    }
+    setPresetNameInput(suggestPresetCopyName());
+  };
+
+  const handleCreatePreset = () => {
+    if (!trimmedPresetNameInput) return;
+    const payload = buildPresetPayload(buildUniquePresetName(trimmedPresetNameInput, modelPresets));
+    if (!payload) return;
+    const nextId = createPresetId();
+    dispatch({
+      type: 'ADD_MODEL_PRESET',
+      payload: {
+        id: nextId,
+        ...payload,
+      },
+    });
+    setSelectedPresetId(nextId);
+  };
+
+  const handleSavePresetEdits = () => {
+    if (!selectedPreset || !trimmedPresetNameInput) return;
+    const payload = buildPresetPayload(buildUniquePresetName(trimmedPresetNameInput, modelPresets, selectedPreset.id));
+    if (!payload) return;
     dispatch({
       type: 'UPDATE_MODEL_PRESET',
       payload: {
         id: selectedPreset.id,
-        ...buildPresetPayload(selectedPreset.name),
+        ...payload,
       },
     });
   };
 
-  const openRenamePresetSheet = () => {
-    if (!selectedPreset) return;
-    setPresetSheet({
-      mode: 'rename',
-      title: 'Rename Preset',
-      confirmLabel: 'Rename',
-      description: `Rename "${selectedPreset.name}".`,
-      requiresValue: true,
-    });
-    setPresetSheetValue(selectedPreset.name);
+  const handleRevertPreset = () => {
+    if (!selectedPreset) {
+      resetPresetNameDraft();
+      return;
+    }
+    loadPresetValues(selectedPreset);
+    setPresetNameInput(selectedPreset.name);
   };
 
-  const openDuplicatePresetSheet = () => {
-    if (!selectedPreset) return;
+  const openSaveAsPresetSheet = () => {
     setPresetSheet({
-      mode: 'duplicate',
-      title: 'Duplicate Preset',
-      confirmLabel: 'Duplicate',
-      description: `Create a copy of "${selectedPreset.name}".`,
+      mode: 'save-as',
+      title: 'Save Copy',
+      confirmLabel: 'Save Copy',
+      description: 'Create a new preset from the current settings.',
       requiresValue: true,
     });
-    setPresetSheetValue(buildUniquePresetName(`${selectedPreset.name} Copy`, modelPresets));
+    setPresetSheetValue(suggestPresetCopyName());
   };
 
   const openDeletePresetSheet = () => {
@@ -640,47 +788,14 @@ export default function SettingsModal() {
     if (presetSheet.mode === 'save-as') {
       const trimmedName = String(presetSheetValue || '').trim();
       if (!trimmedName) return;
+      const payload = buildPresetPayload(buildUniquePresetName(trimmedName, modelPresets));
+      if (!payload) return;
       const nextId = createPresetId();
       dispatch({
         type: 'ADD_MODEL_PRESET',
         payload: {
           id: nextId,
-          ...buildPresetPayload(buildUniquePresetName(trimmedName, modelPresets)),
-        },
-      });
-      setSelectedPresetId(nextId);
-      closePresetSheet();
-      return;
-    }
-
-    if (presetSheet.mode === 'rename') {
-      if (!selectedPreset) return;
-      const trimmedName = String(presetSheetValue || '').trim();
-      if (!trimmedName) return;
-      dispatch({
-        type: 'UPDATE_MODEL_PRESET',
-        payload: {
-          id: selectedPreset.id,
-          ...buildPayloadFromPreset(
-            selectedPreset,
-            buildUniquePresetName(trimmedName, modelPresets, selectedPreset.id)
-          ),
-        },
-      });
-      closePresetSheet();
-      return;
-    }
-
-    if (presetSheet.mode === 'duplicate') {
-      if (!selectedPreset) return;
-      const trimmedName = String(presetSheetValue || '').trim();
-      if (!trimmedName) return;
-      const nextId = createPresetId();
-      dispatch({
-        type: 'ADD_MODEL_PRESET',
-        payload: {
-          id: nextId,
-          ...buildPayloadFromPreset(selectedPreset, buildUniquePresetName(trimmedName, modelPresets)),
+          ...payload,
         },
       });
       setSelectedPresetId(nextId);
@@ -751,6 +866,7 @@ export default function SettingsModal() {
     setThemeSelection(themeMode || DEFAULT_THEME_MODE);
     setRememberKey(rememberApiKey);
     setDebouncedKeyInput(apiKey.trim());
+    setPresetNameInput('');
     closePresetSheet();
     setSelectedPresetId('');
     if (!synthEditingRef.current) setSynthProvider(getDirectProviderFromValue(synthesizerModel));
@@ -784,6 +900,18 @@ export default function SettingsModal() {
     themeMode,
     rememberApiKey,
   ]);
+
+  const handlePresetNameKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (selectedPreset) {
+      if (canSaveSelectedPreset) handleSavePresetEdits();
+      return;
+    }
+    if (canCreatePreset) {
+      handleCreatePreset();
+    }
+  };
 
   useEffect(() => {
     if (!showSettings || !liveApplyReadyRef.current) return;
@@ -960,94 +1088,186 @@ export default function SettingsModal() {
 
           <div className="settings-section">
             <label className="settings-label">
+              <Download size={14} />
+              <span>App Updates</span>
+            </label>
+            <div className="settings-update-card">
+              <div className="settings-update-grid">
+                <div className="settings-update-item">
+                  <span className="settings-update-item-label">Version</span>
+                  <strong className="settings-update-item-value">{appUpdateStatus?.currentVersion || '--'}</strong>
+                </div>
+                <div className="settings-update-item">
+                  <span className="settings-update-item-label">Branch</span>
+                  <code className="settings-update-code">{appUpdateStatus?.branch || '--'}</code>
+                </div>
+                <div className="settings-update-item">
+                  <span className="settings-update-item-label">Commit</span>
+                  <code className="settings-update-code">{appUpdateStatus?.currentCommitShort || '--'}</code>
+                </div>
+                <div className="settings-update-item">
+                  <span className="settings-update-item-label">Remote</span>
+                  <code className="settings-update-code">{appUpdateStatus?.upstream || 'Not configured'}</code>
+                </div>
+              </div>
+
+              <p className="settings-hint">
+                {appUpdateResult?.summary || appUpdateStatus?.statusMessage || 'Check this clone against its upstream branch.'}
+              </p>
+
+              {appUpdateStatus?.checkError && (
+                <p className="settings-update-alert">
+                  Remote check warning: {appUpdateStatus.checkError}
+                </p>
+              )}
+
+              {appUpdateError && (
+                <p className="settings-update-alert is-error">{appUpdateError}</p>
+              )}
+
+              {dirtyFilePreview && (
+                <p className="settings-hint">
+                  Local changes: <code>{dirtyFilePreview}</code>
+                </p>
+              )}
+
+              {updatedFilePreview && (
+                <p className="settings-hint">
+                  Updated files: <code>{updatedFilePreview}</code>
+                </p>
+              )}
+
+              <div className="settings-update-actions">
+                <button
+                  className="settings-btn-secondary"
+                  type="button"
+                  onClick={() => loadAppUpdateStatus({ refresh: true, clearResult: true })}
+                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating'}
+                >
+                  {appUpdateState === 'loading' ? 'Checking...' : 'Check for Updates'}
+                </button>
+                <button
+                  className="settings-btn-primary"
+                  type="button"
+                  onClick={handleApplyAppUpdate}
+                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating' || !appUpdateStatus?.canUpdate}
+                >
+                  {appUpdateState === 'updating' ? 'Updating...' : 'Update Now'}
+                </button>
+              </div>
+
+              <p className="settings-hint">
+                Runs <code>git pull --ff-only</code> and refreshes dependencies when package manifests change. Updates are blocked while this clone has uncommitted edits.
+              </p>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
               <span>Model Presets</span>
             </label>
             <div className="preset-selector-card">
-              <div className="preset-compact-row">
-                <select
-                  className="settings-input settings-select preset-selector-input"
-                  value={selectedPresetId}
-                  onChange={handlePresetSelection}
-                >
-                  <option value="">Custom</option>
-                  {modelPresets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
-                {selectedPreset && selectedPresetIsModified && (
-                  <button
-                    type="button"
-                    className="settings-btn-secondary"
-                    onClick={handleUpdatePreset}
+              <div className="preset-picker-row">
+                <label className="preset-inline-field">
+                  <span className="settings-sub-label">Loaded preset</span>
+                  <select
+                    className="settings-input settings-select preset-selector-input"
+                    value={selectedPresetId}
+                    onChange={handlePresetSelection}
                   >
-                    Update Preset
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="model-add-btn"
-                  onClick={openSaveAsPresetSheet}
-                >
-                  <Plus size={14} />
-                  Save As...
-                </button>
-                {selectedPreset && (
-                  <details className="preset-menu">
-                    <summary className="preset-menu-trigger" title="Preset Actions">
-                      <MoreHorizontal size={16} />
-                    </summary>
-                    <div className="preset-menu-popover">
+                    <option value="">Unsaved Draft</option>
+                    {modelPresets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className={`preset-status ${presetStatusClassName}`}>
+                  <span className="preset-status-label">{presetStatusLabel}</span>
+                  <span className="preset-status-text">{presetStatusMessage}</span>
+                </div>
+              </div>
+
+              <div className="preset-editor-card">
+                <div className="preset-editor-header">
+                  <div className="preset-editor-copy">
+                    <span className="settings-sub-label">{selectedPreset ? 'Edit Preset' : 'Create Preset'}</span>
+                    <strong>{selectedPreset ? selectedPreset.name : 'Save the current configuration'}</strong>
+                  </div>
+                  <span className="preset-editor-summary">{presetDraftSummary}</span>
+                </div>
+
+                <label className="preset-inline-field">
+                  <span className="settings-sub-label">Preset name</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={presetNameInput}
+                    onChange={(event) => setPresetNameInput(event.target.value)}
+                    onKeyDown={handlePresetNameKeyDown}
+                    placeholder="Preset name"
+                  />
+                </label>
+
+                <div className="preset-action-row">
+                  {selectedPreset ? (
+                    <>
                       <button
                         type="button"
-                        className="preset-menu-item"
-                        onClick={(event) => {
-                          event.currentTarget.closest('details')?.removeAttribute('open');
-                          openRenamePresetSheet();
-                        }}
+                        className="settings-btn-primary"
+                        onClick={handleSavePresetEdits}
+                        disabled={!canSaveSelectedPreset}
                       >
-                        Rename
+                        Save Changes
                       </button>
                       <button
                         type="button"
-                        className="preset-menu-item"
-                        onClick={(event) => {
-                          event.currentTarget.closest('details')?.removeAttribute('open');
-                          openDuplicatePresetSheet();
-                        }}
+                        className="settings-btn-secondary"
+                        onClick={handleRevertPreset}
+                        disabled={!selectedPresetHasUnsavedChanges}
                       >
-                        Duplicate
+                        Reset to Saved
                       </button>
                       <button
                         type="button"
-                        className="preset-menu-item danger"
-                        onClick={(event) => {
-                          event.currentTarget.closest('details')?.removeAttribute('open');
-                          openDeletePresetSheet();
-                        }}
+                        className="settings-btn-secondary"
+                        onClick={openSaveAsPresetSheet}
+                      >
+                        Save Copy...
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-btn-danger"
+                        onClick={openDeletePresetSheet}
                       >
                         Delete
                       </button>
-                    </div>
-                  </details>
-                )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="settings-btn-primary"
+                        onClick={handleCreatePreset}
+                        disabled={!canCreatePreset}
+                      >
+                        Create Preset
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-btn-secondary"
+                        onClick={resetPresetNameDraft}
+                      >
+                        Suggest Name
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className={`preset-status ${activePresetMatch ? 'is-match' : selectedPreset ? 'is-modified' : 'is-custom'}`}>
-                {activePresetMatch ? (
-                  <>
-                    Preset: <strong>{activePresetMatch.name}</strong>
-                  </>
-                ) : selectedPreset ? (
-                  <>
-                    Modified from <strong>{selectedPreset.name}</strong>
-                  </>
-                ) : (
-                  'Custom configuration'
-                )}
-              </div>
+
               <p className="settings-hint">
-                Choosing a preset applies it immediately. Settings update live while this panel is open.
+                Choosing a preset applies it immediately. Tweak the settings below, then save here when you want those changes written back to your preset library.
               </p>
             </div>
           </div>

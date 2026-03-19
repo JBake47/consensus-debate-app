@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-03-19
+
+### Added
+- In-app app update status and apply flows, including guarded fast-forward pulls, dependency refresh handling, and dedicated server/client regression coverage
+- Conversation recovery helpers and tests for restoring interrupted runs after the app is suspended or resumed
+
+### Changed
+- Settings now provides a fuller preset editor with inline save, reset, copy, rename, and draft naming controls
+- Conversation persistence now tracks the last active chat and snapshots live runs more aggressively so recovery has current state to work from
+- Setup docs now describe the in-app updater and its safeguards around local uncommitted changes
+
+### Fixed
+- Interrupted live turns now recover to explicit error states instead of leaving stale streaming/searching placeholders behind after reload
+- Launch now restores the previously active conversation when it still exists in local storage
+
 ## [0.3.26] - 2026-03-18
 
 ### Added

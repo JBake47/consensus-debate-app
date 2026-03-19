@@ -1,0 +1,170 @@
+import assert from 'node:assert/strict';
+import { prepareConversationsForPersistence } from './conversationPersistence.js';
+import {
+  getLiveConversationRunScopes,
+  getResumeRecoveryConversationIds,
+  recoverInterruptedTurnState,
+  resolveInitialActiveConversationId,
+} from './conversationRecovery.js';
+
+function runTest(name, fn) {
+  try {
+    fn();
+    // eslint-disable-next-line no-console
+    console.log(`PASS: ${name}`);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`FAIL: ${name}`);
+    throw error;
+  }
+}
+
+function createConversationFixture() {
+  return [
+    {
+      id: 'conv-live',
+      title: 'Live run',
+      turns: [
+        {
+          id: 'turn-live',
+          userPrompt: 'Keep working while I close the lid.',
+          timestamp: 1_000,
+          activeRunId: 'run-live',
+          lastRunActivityAt: 5_000,
+          webSearchResult: {
+            status: 'searching',
+            content: '',
+          },
+          rounds: [
+            {
+              roundNumber: 1,
+              status: 'streaming',
+              streams: [
+                {
+                  model: 'openai/test',
+                  content: 'Partial answer',
+                  status: 'streaming',
+                  error: null,
+                },
+              ],
+              convergenceCheck: {
+                converged: null,
+                reason: 'Checking...',
+              },
+            },
+          ],
+          synthesis: {
+            model: 'openai/test',
+            content: '',
+            status: 'streaming',
+            error: null,
+          },
+          debateMetadata: {
+            totalRounds: 1,
+            converged: false,
+            terminationReason: null,
+          },
+        },
+      ],
+    },
+    {
+      id: 'conv-complete',
+      title: 'Done run',
+      turns: [
+        {
+          id: 'turn-complete',
+          userPrompt: 'All done',
+          timestamp: 2_000,
+          activeRunId: null,
+          rounds: [
+            {
+              roundNumber: 1,
+              status: 'complete',
+              streams: [
+                {
+                  model: 'openai/test',
+                  content: 'Final answer',
+                  status: 'complete',
+                  error: null,
+                },
+              ],
+            },
+          ],
+          synthesis: {
+            model: 'openai/test',
+            content: 'Final answer',
+            status: 'complete',
+            error: null,
+          },
+          debateMetadata: {
+            totalRounds: 1,
+            converged: false,
+            terminationReason: 'max_rounds_reached',
+          },
+        },
+      ],
+    },
+  ];
+}
+
+runTest('interrupted snapshot roundtrip restores the active conversation and recovers the live turn', () => {
+  const prepared = prepareConversationsForPersistence(createConversationFixture(), 'balanced');
+  const persisted = JSON.parse(JSON.stringify(prepared));
+  const restored = persisted.map((conversation) => ({
+    ...conversation,
+    turns: conversation.turns.map((turn) => recoverInterruptedTurnState(turn).turn),
+  }));
+  const activeConversationId = resolveInitialActiveConversationId(restored, 'conv-live');
+  const recoveredTurn = restored[0].turns[0];
+
+  assert.equal(activeConversationId, 'conv-live');
+  assert.equal(recoveredTurn.activeRunId, null);
+  assert.equal(recoveredTurn.webSearchResult.status, 'error');
+  assert.equal(recoveredTurn.rounds[0].streams[0].status, 'complete');
+  assert.equal(recoveredTurn.rounds[0].streams[0].outcome, 'using_previous_response');
+  assert.equal(recoveredTurn.rounds[0].convergenceCheck.converged, false);
+  assert.equal(recoveredTurn.synthesis.status, 'error');
+  assert.equal(recoveredTurn.debateMetadata.terminationReason, 'interrupted');
+});
+
+runTest('getLiveConversationRunScopes only returns currently running last turns', () => {
+  const scopes = getLiveConversationRunScopes(createConversationFixture());
+
+  assert.deepEqual(scopes, [
+    {
+      conversationId: 'conv-live',
+      turnId: 'turn-live',
+      runId: 'run-live',
+    },
+  ]);
+});
+
+runTest('getResumeRecoveryConversationIds only flags runs that were inactive long enough to be stale', () => {
+  const fixture = createConversationFixture();
+  const staleIds = getResumeRecoveryConversationIds(fixture, {
+    hiddenAt: 10_000,
+    resumedAt: 30_000,
+    minHiddenMs: 15_000,
+    maxRunInactivityMs: 15_000,
+  });
+  const freshIds = getResumeRecoveryConversationIds([
+    {
+      ...fixture[0],
+      turns: [{
+        ...fixture[0].turns[0],
+        lastRunActivityAt: 28_500,
+      }],
+    },
+  ], {
+    hiddenAt: 10_000,
+    resumedAt: 30_000,
+    minHiddenMs: 15_000,
+    maxRunInactivityMs: 15_000,
+  });
+
+  assert.deepEqual(staleIds, ['conv-live']);
+  assert.deepEqual(freshIds, []);
+});
+
+// eslint-disable-next-line no-console
+console.log('Conversation recovery tests completed.');
