@@ -11,6 +11,7 @@ export default function ReplaceModelButton({
   roundNumber,
   totalRounds = 1,
   turnMode = 'debate',
+  branchesConversation = false,
   title = 'Choose a backup model. Shift starts with cache bypass enabled.',
   children,
 }) {
@@ -42,6 +43,7 @@ export default function ReplaceModelButton({
         roundNumber={roundNumber}
         totalRounds={totalRounds}
         turnMode={turnMode}
+        branchesConversation={branchesConversation}
         initialForceRefresh={initialForceRefresh}
         onSelect={(replacementModel, options = {}) => {
           replaceStreamModel(roundIndex, streamIndex, {

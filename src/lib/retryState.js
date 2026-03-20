@@ -166,7 +166,13 @@ export function getRetryScopeDescription({
   modelName = '',
   replacementModelName = '',
   hasFailures = false,
+  branchesConversation = false,
 } = {}) {
+  const withBranchBehavior = (description) => (
+    branchesConversation && description
+      ? `${description} This creates a new branch first.`
+      : description
+  );
   const hasRoundNumber = Number.isFinite(Number(roundNumber)) && Number(roundNumber) > 0;
   const safeRoundNumber = hasRoundNumber ? Math.floor(Number(roundNumber)) : null;
   const safeTotalRounds = Number.isFinite(Number(totalRounds)) && Number(totalRounds) >= safeRoundNumber
@@ -183,12 +189,12 @@ export function getRetryScopeDescription({
       : `Retry ${modelName || 'this model'} in ${roundLabel}.`;
 
     if (mode === 'parallel') {
-      return `${subject} This only refreshes this response.`;
+      return withBranchBehavior(`${subject} This only refreshes this response.`);
     }
     if (mode === 'direct') {
-      return `${subject} This refreshes the round and reruns the synthesized answer.`;
+      return withBranchBehavior(`${subject} This refreshes the round and reruns the synthesized answer.`);
     }
-    return `${subject} This rebuilds ${tailLabel} and refreshes the synthesized answer.`;
+    return withBranchBehavior(`${subject} This rebuilds ${tailLabel} and refreshes the synthesized answer.`);
   }
 
   if (scope === 'round') {
@@ -196,20 +202,20 @@ export function getRetryScopeDescription({
       ? `Retry the incomplete responses in ${roundLabel}.`
       : `Redo ${roundLabel}.`;
     if (mode === 'parallel') {
-      return `${subject} This only refreshes that round.`;
+      return withBranchBehavior(`${subject} This only refreshes that round.`);
     }
     if (mode === 'direct') {
-      return `${subject} This reruns the synthesized answer.`;
+      return withBranchBehavior(`${subject} This reruns the synthesized answer.`);
     }
-    return `${subject} This rebuilds ${tailLabel} and refreshes the synthesized answer.`;
+    return withBranchBehavior(`${subject} This rebuilds ${tailLabel} and refreshes the synthesized answer.`);
   }
 
   if (scope === 'synthesis') {
-    return 'Retry the synthesized answer using the latest completed round responses.';
+    return withBranchBehavior('Retry the synthesized answer using the latest completed round responses.');
   }
 
   if (scope === 'web_search') {
-    return 'Retry web search and rebuild from Round 1 with refreshed evidence.';
+    return withBranchBehavior('Retry web search and rebuild from Round 1 with refreshed evidence.');
   }
 
   return '';

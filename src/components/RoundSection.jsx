@@ -22,6 +22,7 @@ function RoundSection({
   allowStreamRetry = allowRetry,
   turnMode = 'debate',
   totalRounds = 1,
+  branchesConversation = false,
 }) {
   const { retryRound, branchFromRound } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
@@ -40,6 +41,7 @@ function RoundSection({
     roundNumber,
     totalRounds,
     hasFailures: hasIssueStreams,
+    branchesConversation,
   });
 
   const statusIcon = {
@@ -122,6 +124,7 @@ function RoundSection({
                 totalRounds={totalRounds}
                 roundNumber={roundNumber}
                 roundModels={streams.map((item) => item.model)}
+                branchesConversation={branchesConversation}
               />
             ))}
           </div>

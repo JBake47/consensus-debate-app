@@ -158,7 +158,15 @@ function DebateInternals({ rounds, debateMetadata }) {
   );
 }
 
-function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensembleResult, showInternals = true }) {
+function SynthesisView({
+  synthesis,
+  debateMetadata,
+  isLastTurn,
+  rounds,
+  ensembleResult,
+  showInternals = true,
+  branchesConversation = false,
+}) {
   const { retrySynthesis } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const { model, content, status, error } = synthesis;
@@ -174,7 +182,10 @@ function SynthesisView({ synthesis, debateMetadata, isLastTurn, rounds, ensemble
   const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
   const canExpandViewer = !viewerOpen && Boolean(content) && (status === 'streaming' || status === 'complete');
   const streamingLabel = getSynthesisStreamingLabel(synthesis);
-  const synthesisRetryScope = getRetryScopeDescription({ scope: 'synthesis' });
+  const synthesisRetryScope = getRetryScopeDescription({
+    scope: 'synthesis',
+    branchesConversation,
+  });
 
   useEffect(() => {
     const el = contentRef.current;

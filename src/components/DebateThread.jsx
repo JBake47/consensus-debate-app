@@ -22,7 +22,18 @@ import './DebateThread.css';
 
 const THREAD_VIRTUALIZATION_THRESHOLD = 18;
 
-function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTurn, allowRetry, turnMode, totalRounds, roundModels = [] }) {
+function ThreadMessage({
+  stream,
+  roundNumber,
+  roundIndex,
+  streamIndex,
+  isLastTurn,
+  allowRetry,
+  turnMode,
+  totalRounds,
+  roundModels = [],
+  branchesConversation = false,
+}) {
   const { retryStream } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const [reasoningOpen, setReasoningOpen] = useState(false);
@@ -70,6 +81,7 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
     roundNumber,
     totalRounds,
     modelName: displayName,
+    branchesConversation,
   });
   const showRetryScope = canRetry && (displayState.tone === 'warning' || displayState.tone === 'error');
 
@@ -126,7 +138,10 @@ function ThreadMessage({ stream, roundNumber, roundIndex, streamIndex, isLastTur
               roundNumber={roundNumber}
               totalRounds={totalRounds}
               turnMode={turnMode}
-              title={`Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`}
+              branchesConversation={branchesConversation}
+              title={branchesConversation
+                ? `Choose a replacement model for ${displayName} in a new branch. Shift starts with cache bypass enabled.`
+                : `Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`}
             >
               Replace
             </ReplaceModelButton>
@@ -291,7 +306,14 @@ function renderThreadItem(item, sharedProps) {
   );
 }
 
-function DebateThread({ rounds, isLastTurn = false, allowRetry = true, turnMode = 'debate', totalRounds = 1 }) {
+function DebateThread({
+  rounds,
+  isLastTurn = false,
+  allowRetry = true,
+  turnMode = 'debate',
+  totalRounds = 1,
+  branchesConversation = false,
+}) {
   const threadItems = useMemo(() => {
     if (!Array.isArray(rounds) || rounds.length === 0) return [];
 
@@ -334,6 +356,7 @@ function DebateThread({ rounds, isLastTurn = false, allowRetry = true, turnMode 
     allowRetry,
     turnMode,
     totalRounds,
+    branchesConversation,
   };
 
   if (threadItems.length <= THREAD_VIRTUALIZATION_THRESHOLD) {

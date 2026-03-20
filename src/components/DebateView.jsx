@@ -33,7 +33,7 @@ import {
 } from '../lib/formatTokens';
 import './DebateView.css';
 
-function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
+function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null, branchesConversation = false }) {
   const [collapsed, setCollapsed] = useState(true);
   const [viewerOpen, setViewerOpen] = useState(false);
   const previewPointerRef = useRef(null);
@@ -92,7 +92,7 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null }) {
                     event.stopPropagation();
                     onRetry?.({ forceRefresh: event.shiftKey });
                   }}
-                  title={`${getRetryScopeDescription({ scope: 'web_search' })} Shift bypasses cache.`}
+                  title={`${getRetryScopeDescription({ scope: 'web_search', branchesConversation })} Shift bypasses cache.`}
                 >
                   <RotateCcw size={12} />
                   <span>Retry</span>
@@ -131,6 +131,7 @@ function AttentionPanel({
   retryStream,
   totalRounds,
   turnMode,
+  branchesConversation = false,
 }) {
   const getErrorDiagnostics = (message) => {
     if (!message) return { summary: 'Unknown error', action: null };
@@ -203,7 +204,9 @@ function AttentionPanel({
           <button
             className="turn-error-retry-all-btn"
             onClick={(event) => retryAllFailed({ forceRefresh: event.shiftKey })}
-            title="Repair the earliest warning or failed round and rebuild forward. Shift bypasses cache."
+            title={branchesConversation
+              ? 'Repair the earliest warning or failed round in a new branch and rebuild forward. Shift bypasses cache.'
+              : 'Repair the earliest warning or failed round and rebuild forward. Shift bypasses cache.'}
           >
             <RotateCcw size={12} />
             <span>Repair Earliest Round</span>
@@ -222,6 +225,7 @@ function AttentionPanel({
             roundNumber: failure.roundNumber,
             totalRounds,
             modelName: getModelDisplayName(failure.model),
+            branchesConversation,
           });
 
           return (
@@ -253,7 +257,10 @@ function AttentionPanel({
                       roundNumber={failure.roundNumber}
                       totalRounds={totalRounds}
                       turnMode={turnMode}
-                      title={`Choose a replacement model for ${getModelDisplayName(failure.model)}. Shift starts with cache bypass enabled.`}
+                      branchesConversation={branchesConversation}
+                      title={branchesConversation
+                        ? `Choose a replacement model for ${getModelDisplayName(failure.model)} in a new branch. Shift starts with cache bypass enabled.`
+                        : `Choose a replacement model for ${getModelDisplayName(failure.model)}. Shift starts with cache bypass enabled.`}
                     >
                       <span>Replace</span>
                     </ReplaceModelButton>
@@ -306,8 +313,47 @@ function StageTabs({ tabs, activeTab, onChange, className = '' }) {
   );
 }
 
-function DebateView({ turn, isLastTurn }) {
+function normalizeViewMode(value) {
+  return value === 'thread' ? 'thread' : 'cards';
+}
+
+function normalizeRebuttalDisplayMode(value) {
+  return value === 'round' ? 'round' : 'sequential';
+}
+
+function getDefaultStageTab(turn) {
+  if (Array.isArray(turn?.rounds) && turn.rounds.length > 0) {
+    return 'initial-responses';
+  }
+  return turn?.webSearchResult ? 'web-search' : null;
+}
+
+function getPersistedTurnBreakdownState(turn) {
+  const persisted = turn?.uiState?.turnBreakdown;
+  return persisted && typeof persisted === 'object' ? persisted : null;
+}
+
+function getInitialTurnBreakdownState(turn, options = {}) {
+  const persisted = getPersistedTurnBreakdownState(turn);
+  const parsedActiveRebuttalRoundIndex = Number(persisted?.activeRebuttalRoundIndex);
+  return {
+    viewMode: normalizeViewMode(persisted?.viewMode),
+    activeStageTab: typeof persisted?.activeStageTab === 'string'
+      ? persisted.activeStageTab
+      : getDefaultStageTab(turn),
+    isTurnExplorerOpen: typeof persisted?.isTurnExplorerOpen === 'boolean'
+      ? persisted.isTurnExplorerOpen
+      : Boolean(options.defaultExplorerOpen),
+    rebuttalDisplayMode: normalizeRebuttalDisplayMode(persisted?.rebuttalDisplayMode),
+    activeRebuttalRoundIndex: Number.isFinite(parsedActiveRebuttalRoundIndex) && parsedActiveRebuttalRoundIndex >= 0
+      ? Math.floor(parsedActiveRebuttalRoundIndex)
+      : 0,
+  };
+}
+
+function DebateView({ turn, index, isLastTurn }) {
   const {
+    dispatch,
     editLastTurn,
     retryLastTurn,
     retryStream,
@@ -320,17 +366,11 @@ function DebateView({ turn, isLastTurn }) {
     modelCatalog,
     capabilityRegistry,
   } = useDebateSettings();
-  const { debateInProgress } = useDebateConversations();
-  const [viewMode, setViewMode] = useState('cards');
-  const [activeStageTab, setActiveStageTab] = useState(() => (
-    Array.isArray(turn.rounds) && turn.rounds.length > 0
-      ? 'initial-responses'
-      : (turn.webSearchResult ? 'web-search' : null)
-  ));
-  const [isTurnExplorerOpen, setIsTurnExplorerOpen] = useState(false);
-  const [rebuttalDisplayMode, setRebuttalDisplayMode] = useState('sequential');
-  const [activeRebuttalRoundIndex, setActiveRebuttalRoundIndex] = useState(0);
-  const [viewerAttachment, setViewerAttachment] = useState(null);
+  const {
+    activeConversationId,
+    debateInProgress,
+    activeConversationIsMostRecent,
+  } = useDebateConversations();
   const hasRounds = turn.rounds && turn.rounds.length > 0;
   const isDirectMode = turn.mode === 'direct';
   const isParallelMode = turn.mode === 'parallel';
@@ -388,9 +428,22 @@ function DebateView({ turn, isLastTurn }) {
         .filter(Boolean)
     )
     : [];
+  const turnInstanceKey = `${activeConversationId || 'no-conv'}:${turn.id || 'turn'}:${Number.isInteger(index) ? index : 'na'}:${turn.timestamp || 0}`;
+  const persistedTurnBreakdownState = getPersistedTurnBreakdownState(turn);
+  const hasPersistedExplorerPreference = typeof persistedTurnBreakdownState?.isTurnExplorerOpen === 'boolean';
+  const initialTurnBreakdownState = getInitialTurnBreakdownState(turn, {
+    defaultExplorerOpen: attentionStreams.length > 0,
+  });
+  const [viewMode, setViewMode] = useState(() => initialTurnBreakdownState.viewMode);
+  const [activeStageTab, setActiveStageTab] = useState(() => initialTurnBreakdownState.activeStageTab);
+  const [isTurnExplorerOpen, setIsTurnExplorerOpen] = useState(() => initialTurnBreakdownState.isTurnExplorerOpen);
+  const [rebuttalDisplayMode, setRebuttalDisplayMode] = useState(() => initialTurnBreakdownState.rebuttalDisplayMode);
+  const [activeRebuttalRoundIndex, setActiveRebuttalRoundIndex] = useState(() => initialTurnBreakdownState.activeRebuttalRoundIndex);
+  const [viewerAttachment, setViewerAttachment] = useState(null);
 
   const canRetryFailures = isLastTurn && !debateInProgress;
   const canRetryWebSearch = isLastTurn && !debateInProgress;
+  const branchesConversation = isLastTurn && !activeConversationIsMostRecent;
   const showTabbedStages = !isDirectMode && hasRounds;
   const initialRoundEntries = hasRounds
     ? [{ round: turn.rounds[0], roundIndex: 0 }]
@@ -422,6 +475,17 @@ function DebateView({ turn, isLastTurn }) {
   const stageTabsKey = stageTabs.map((tab) => tab.id).join('|');
 
   useEffect(() => {
+    const nextState = getInitialTurnBreakdownState(turn, {
+      defaultExplorerOpen: attentionStreams.length > 0,
+    });
+    setViewMode(nextState.viewMode);
+    setActiveStageTab(nextState.activeStageTab);
+    setIsTurnExplorerOpen(nextState.isTurnExplorerOpen);
+    setRebuttalDisplayMode(nextState.rebuttalDisplayMode);
+    setActiveRebuttalRoundIndex(nextState.activeRebuttalRoundIndex);
+  }, [turnInstanceKey]);
+
+  useEffect(() => {
     if (stageTabs.length === 0) {
       setActiveStageTab(null);
       return;
@@ -436,10 +500,10 @@ function DebateView({ turn, isLastTurn }) {
   }, [stageTabs.length, stageTabsKey]);
 
   useEffect(() => {
-    if (attentionStreams.length > 0) {
+    if (!hasPersistedExplorerPreference && attentionStreams.length > 0) {
       setIsTurnExplorerOpen(true);
     }
-  }, [attentionStreams.length]);
+  }, [attentionStreams.length, hasPersistedExplorerPreference]);
 
   useEffect(() => {
     if (rebuttalRoundEntries.length === 0) {
@@ -449,6 +513,62 @@ function DebateView({ turn, isLastTurn }) {
 
     setActiveRebuttalRoundIndex((current) => Math.min(current, rebuttalRoundEntries.length - 1));
   }, [rebuttalRoundEntries.length]);
+
+  const turnBreakdownUiState = useMemo(() => ({
+    isTurnExplorerOpen,
+    activeStageTab,
+    viewMode: normalizeViewMode(viewMode),
+    rebuttalDisplayMode: normalizeRebuttalDisplayMode(rebuttalDisplayMode),
+    activeRebuttalRoundIndex: Math.max(0, Math.floor(Number(activeRebuttalRoundIndex) || 0)),
+  }), [
+    isTurnExplorerOpen,
+    activeStageTab,
+    viewMode,
+    rebuttalDisplayMode,
+    activeRebuttalRoundIndex,
+  ]);
+
+  useEffect(() => {
+    if (!showTabbedStages || !activeConversationId) {
+      return;
+    }
+    if (!turn.id && !Number.isInteger(index)) {
+      return;
+    }
+
+    const persisted = persistedTurnBreakdownState || {};
+    const matchesPersistedState = (
+      persisted.isTurnExplorerOpen === turnBreakdownUiState.isTurnExplorerOpen
+      && persisted.activeStageTab === turnBreakdownUiState.activeStageTab
+      && persisted.viewMode === turnBreakdownUiState.viewMode
+      && persisted.rebuttalDisplayMode === turnBreakdownUiState.rebuttalDisplayMode
+      && Number(persisted.activeRebuttalRoundIndex || 0) === turnBreakdownUiState.activeRebuttalRoundIndex
+    );
+
+    if (matchesPersistedState) {
+      return;
+    }
+
+    dispatch({
+      type: 'UPDATE_TURN_UI_STATE',
+      payload: {
+        conversationId: activeConversationId,
+        turnId: turn.id || null,
+        turnIndex: Number.isInteger(index) ? index : null,
+        uiState: {
+          turnBreakdown: turnBreakdownUiState,
+        },
+      },
+    });
+  }, [
+    showTabbedStages,
+    activeConversationId,
+    turn.id,
+    index,
+    persistedTurnBreakdownState,
+    turnBreakdownUiState,
+    dispatch,
+  ]);
 
   const renderRoundEntries = (entries, emptyMessage) => {
     if (entries.length === 0) {
@@ -469,6 +589,7 @@ function DebateView({ turn, isLastTurn }) {
           allowRetry
           turnMode={turnMode}
           totalRounds={turn.rounds.length}
+          branchesConversation={branchesConversation}
         />
       );
     }
@@ -502,6 +623,7 @@ function DebateView({ turn, isLastTurn }) {
                   allowStreamRetry
                   turnMode={turnMode}
                   totalRounds={turn.rounds.length}
+                  branchesConversation={branchesConversation}
                 />
               </div>
             )}
@@ -519,6 +641,7 @@ function DebateView({ turn, isLastTurn }) {
               allowStreamRetry
               turnMode={turnMode}
               totalRounds={turn.rounds.length}
+              branchesConversation={branchesConversation}
             />
           ))
         )}
@@ -531,6 +654,7 @@ function DebateView({ turn, isLastTurn }) {
       webSearchResult={turn.webSearchResult}
       canRetry={canRetryWebSearch}
       onRetry={retryWebSearch}
+      branchesConversation={branchesConversation}
     />
   ) : null;
 
@@ -542,6 +666,7 @@ function DebateView({ turn, isLastTurn }) {
       retryStream={retryStream}
       totalRounds={turn.rounds?.length || 0}
       turnMode={turnMode}
+      branchesConversation={branchesConversation}
     />
   );
   const visibleRebuttalEntries = rebuttalDisplayMode === 'round'
@@ -559,7 +684,7 @@ function DebateView({ turn, isLastTurn }) {
                 <button
                   className="user-action-btn"
                   onClick={editLastTurn}
-                  title="Edit this message"
+                  title={branchesConversation ? 'Edit this message in a new branch' : 'Edit this message'}
                 >
                   <Pencil size={14} />
                 </button>
@@ -567,7 +692,9 @@ function DebateView({ turn, isLastTurn }) {
                   <button
                     className="user-action-btn"
                     onClick={(event) => retryLastTurn({ forceRefresh: event.shiftKey })}
-                    title="Retry this turn (Shift: bypass cache)"
+                    title={branchesConversation
+                      ? 'Retry this turn in a new branch (Shift: bypass cache)'
+                      : 'Retry this turn (Shift: bypass cache)'}
                   >
                     <RotateCcw size={14} />
                   </button>
@@ -743,6 +870,7 @@ function DebateView({ turn, isLastTurn }) {
               isLastTurn={isLastTurn}
               rounds={turn.rounds}
               showInternals={false}
+              branchesConversation={branchesConversation}
             />
           )}
 
@@ -775,6 +903,7 @@ function DebateView({ turn, isLastTurn }) {
                 isLastTurn={isLastTurn}
                 turnMode={turnMode}
                 totalRounds={turn.rounds.length}
+                branchesConversation={branchesConversation}
               />
 
               {turn.synthesis && turn.synthesis.status !== 'pending' && (
@@ -784,6 +913,7 @@ function DebateView({ turn, isLastTurn }) {
                   isLastTurn={isLastTurn}
                   rounds={turn.rounds}
                   ensembleResult={turn.ensembleResult}
+                  branchesConversation={branchesConversation}
                 />
               )}
 
@@ -815,6 +945,7 @@ function DebateView({ turn, isLastTurn }) {
                     totalRounds={turn.rounds.length}
                     roundNumber={1}
                     roundModels={(turn.rounds[0].streams || []).map((item) => item.model)}
+                    branchesConversation={branchesConversation}
                   />
                 )}
               </div>
@@ -833,7 +964,13 @@ function DebateView({ turn, isLastTurn }) {
           )}
 
           {!isDirectMode && !isParallelMode && turn.synthesis && turn.synthesis.status !== 'pending' && (
-            <SynthesisView synthesis={turn.synthesis} debateMetadata={turn.debateMetadata} isLastTurn={isLastTurn} rounds={turn.rounds} />
+            <SynthesisView
+              synthesis={turn.synthesis}
+              debateMetadata={turn.debateMetadata}
+              isLastTurn={isLastTurn}
+              rounds={turn.rounds}
+              branchesConversation={branchesConversation}
+            />
           )}
 
           {!isDirectMode && !isParallelMode && turn.synthesis?.status === 'complete' && turnCostLabel && (

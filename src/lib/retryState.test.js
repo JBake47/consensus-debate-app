@@ -118,6 +118,16 @@ runTest('getRetryScopeDescription explains debate round rebuild scope', () => {
   );
 });
 
+runTest('getRetryScopeDescription mentions branch behavior when retrying in an older chat', () => {
+  assert.equal(
+    getRetryScopeDescription({
+      scope: 'synthesis',
+      branchesConversation: true,
+    }),
+    'Retry the synthesized answer using the latest completed round responses. This creates a new branch first.',
+  );
+});
+
 runTest('getReplacementModelChoices prefers fresh cross-provider options before same-round duplicates', () => {
   const choices = getReplacementModelChoices({
     currentModel: 'anthropic/claude-4-sonnet',

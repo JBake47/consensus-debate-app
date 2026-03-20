@@ -54,11 +54,13 @@ import {
   shouldFallbackForMissingSearchEvidence,
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
+import { createConversationHistoryBranch } from '../lib/conversationBranching.js';
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
 import { buildRankingTaskRequirements } from '../lib/modelRanking.js';
 import { buildEnsembleQualityObservations } from '../lib/modelQualityTelemetry.js';
 import { getCatalogModelLookupId } from '../lib/modelStats';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload.js';
+import { isMostRecentConversation } from '../lib/sidebarOrdering.js';
 import {
   createRunId,
   deriveRoundStatusFromStreams,
@@ -100,6 +102,18 @@ const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE
 
 function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
+}
+
+function createConversationId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildConversationWithoutLastTurn(conversation) {
+  if (!conversation || typeof conversation !== 'object') return null;
+  return {
+    ...conversation,
+    turns: Array.isArray(conversation.turns) ? conversation.turns.slice(0, -1) : [],
+  };
 }
 
 function createDefaultMetrics() {
@@ -551,6 +565,43 @@ function updateLastTurn(conversations, conversationId, updater, options = {}) {
   return changed ? nextConversations : conversations;
 }
 
+function updateConversationTurn(conversations, conversationId, matcher, updater) {
+  const {
+    turnId = null,
+    turnIndex = null,
+  } = matcher || {};
+  let changed = false;
+
+  const nextConversations = conversations.map((conversation) => {
+    if (conversation.id !== conversationId) return conversation;
+
+    const turns = Array.isArray(conversation.turns) ? [...conversation.turns] : [];
+    if (turns.length === 0) return conversation;
+
+    const resolvedTurnIndex = turnId
+      ? turns.findIndex((turn) => turn?.id === turnId)
+      : (Number.isInteger(turnIndex) && turnIndex >= 0 && turnIndex < turns.length ? turnIndex : -1);
+
+    if (resolvedTurnIndex < 0) return conversation;
+
+    const previousTurn = turns[resolvedTurnIndex];
+    const nextTurn = { ...previousTurn };
+    const didUpdate = updater(nextTurn, previousTurn);
+    if (didUpdate === false) {
+      return conversation;
+    }
+
+    turns[resolvedTurnIndex] = nextTurn;
+    changed = true;
+    return {
+      ...conversation,
+      turns,
+    };
+  });
+
+  return changed ? nextConversations : conversations;
+}
+
 function buildScopedTurnPayload({ conversationId, turnId, runId, ...payload }) {
   return {
     conversationId,
@@ -967,6 +1018,63 @@ function reducer(state, action) {
       saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, action.payload ?? null);
       return { ...state, activeConversationId: action.payload };
     }
+    case 'UPDATE_TURN_UI_STATE': {
+      const {
+        conversationId,
+        turnId = null,
+        turnIndex = null,
+        uiState,
+      } = action.payload || {};
+
+      if (!conversationId || !uiState || typeof uiState !== 'object') {
+        return state;
+      }
+
+      const conversations = updateConversationTurn(
+        state.conversations,
+        conversationId,
+        { turnId, turnIndex },
+        (turn, previousTurn) => {
+          const previousUiState = previousTurn?.uiState && typeof previousTurn.uiState === 'object'
+            ? previousTurn.uiState
+            : {};
+          const previousTurnBreakdown = previousUiState.turnBreakdown && typeof previousUiState.turnBreakdown === 'object'
+            ? previousUiState.turnBreakdown
+            : {};
+          const nextTurnBreakdownPatch = uiState.turnBreakdown && typeof uiState.turnBreakdown === 'object'
+            ? uiState.turnBreakdown
+            : null;
+          const nextTurnBreakdown = nextTurnBreakdownPatch
+            ? {
+              ...previousTurnBreakdown,
+              ...nextTurnBreakdownPatch,
+            }
+            : previousTurnBreakdown;
+          const nextUiState = {
+            ...previousUiState,
+            ...uiState,
+          };
+
+          if (nextTurnBreakdownPatch) {
+            nextUiState.turnBreakdown = nextTurnBreakdown;
+          }
+
+          const isUnchanged = (
+            previousUiState === nextUiState
+            || JSON.stringify(previousUiState) === JSON.stringify(nextUiState)
+          );
+
+          if (isUnchanged) {
+            return false;
+          }
+
+          turn.uiState = nextUiState;
+          return true;
+        }
+      );
+
+      return conversations === state.conversations ? state : { ...state, conversations };
+    }
     case 'NEW_CONVERSATION': {
       const conv = enrichConversationDerivedData({
         id: action.payload.id,
@@ -981,6 +1089,21 @@ function reducer(state, action) {
       const conversations = [conv, ...state.conversations];
       saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, conv.id);
       return { ...state, conversations, activeConversationId: conv.id };
+    }
+    case 'ADD_CONVERSATION': {
+      const conversation = action.payload?.conversation
+        ? enrichConversationDerivedData(action.payload.conversation)
+        : null;
+      if (!conversation?.id) return state;
+      const conversations = [
+        conversation,
+        ...state.conversations.filter((existingConversation) => existingConversation.id !== conversation.id),
+      ];
+      if (action.payload?.setActive === false) {
+        return { ...state, conversations };
+      }
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, conversation.id);
+      return { ...state, conversations, activeConversationId: conversation.id };
     }
     case 'ADD_TURN': {
       const convId = action.payload.conversationId || state.activeConversationId;
@@ -1804,6 +1927,13 @@ export function DebateProvider({ children }) {
     (conversationId) => Boolean(conversationId && runningConversationIds.has(conversationId)),
     [runningConversationIds]
   );
+  const activeConversationIsMostRecent = useMemo(() => (
+    isMostRecentConversation(
+      state.conversations,
+      state.activeConversationId,
+      isConversationInProgress,
+    )
+  ), [isConversationInProgress, state.activeConversationId, state.conversations]);
   const requestAutoConversationTitle = useCallback(({
     conversationId,
     userPrompt,
@@ -1915,6 +2045,45 @@ export function DebateProvider({ children }) {
 
     return contextPlan.messages;
   }, [dispatch, state.conversations]);
+
+  const prepareConversationForHistoryMutation = useCallback((conversationId, {
+    titleLabel = 'Branch',
+    branchKind = 'branch',
+  } = {}) => {
+    const sourceConversation = state.conversations.find((conversation) => conversation.id === conversationId) || null;
+    if (!sourceConversation) {
+      return {
+        conversationId: null,
+        conversationSnapshot: null,
+        branched: false,
+      };
+    }
+
+    if (isMostRecentConversation(state.conversations, conversationId, isConversationInProgress)) {
+      return {
+        conversationId,
+        conversationSnapshot: sourceConversation,
+        branched: false,
+      };
+    }
+
+    const branchConversation = enrichConversationDerivedData(
+      createConversationHistoryBranch(sourceConversation, {
+        branchConversationId: createConversationId(),
+        createdAt: Date.now(),
+        titleLabel,
+        titleSource: TITLE_SOURCE_SEED,
+        branchKind,
+      })
+    );
+    dispatch({ type: 'ADD_CONVERSATION', payload: { conversation: branchConversation } });
+
+    return {
+      conversationId: branchConversation.id,
+      conversationSnapshot: branchConversation,
+      branched: true,
+    };
+  }, [dispatch, isConversationInProgress, state.conversations]);
 
   useEffect(() => {
     if (abortControllersRef.current.size === 0) return;
@@ -2816,6 +2985,9 @@ export function DebateProvider({ children }) {
     forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
+    conversationId: requestedConversationId = null,
+    conversationSnapshot = null,
+    skipAutoTitle = false,
   } = {}) => {
     const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
       ? modelOverrides
@@ -2829,13 +3001,13 @@ export function DebateProvider({ children }) {
     const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
 
     // Create new conversation if none active
-    let convId = state.activeConversationId;
+    let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
-    const existingConversation = state.conversations.find(c => c.id === convId);
+    const existingConversation = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
@@ -2888,7 +3060,7 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    const currentConv = state.conversations.find(c => c.id === convId);
+    const currentConv = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const contextMessages = prepareConversationHistory({
       conversationId: convId,
       conversation: currentConv,
@@ -3379,7 +3551,7 @@ export function DebateProvider({ children }) {
         durationMs: synthesisDurationMs,
         retryProgress: null,
       });
-      if (isFirstTurn) {
+      if (isFirstTurn && !skipAutoTitle) {
         requestAutoConversationTitle({
           conversationId: convId,
           userPrompt,
@@ -3526,6 +3698,9 @@ export function DebateProvider({ children }) {
     forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
+    conversationId: requestedConversationId = null,
+    conversationSnapshot = null,
+    skipAutoTitle = false,
   } = {}) => {
     const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
       ? modelOverrides
@@ -3539,13 +3714,13 @@ export function DebateProvider({ children }) {
     let firstAnswerRecorded = false;
 
     // Create new conversation if none active
-    let convId = state.activeConversationId;
+    let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
-    const existingConversation = state.conversations.find(c => c.id === convId);
+    const existingConversation = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
@@ -3593,7 +3768,7 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    const currentConv = state.conversations.find(c => c.id === convId);
+    const currentConv = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const contextMessages = prepareConversationHistory({
       conversationId: convId,
       conversation: currentConv,
@@ -3782,7 +3957,7 @@ export function DebateProvider({ children }) {
       metadata: { totalRounds: 1, converged: false, terminationReason: 'parallel_only' },
     });
 
-    if (isFirstTurn) {
+    if (isFirstTurn && !skipAutoTitle) {
       const titleSynthesisContent = buildTitleSynthesisContextFromStreams(completedStreams);
       if (titleSynthesisContent) {
         requestAutoConversationTitle({
@@ -3805,6 +3980,9 @@ export function DebateProvider({ children }) {
     forceLegacyWebSearch = false,
     modelOverrides,
     routeInfo = null,
+    conversationId: requestedConversationId = null,
+    conversationSnapshot = null,
+    skipAutoTitle = false,
   } = {}) => {
     const models = Array.isArray(modelOverrides) && modelOverrides.length > 0
       ? modelOverrides
@@ -3819,13 +3997,13 @@ export function DebateProvider({ children }) {
     let firstAnswerRecorded = false;
 
     // Create new conversation if none active
-    let convId = state.activeConversationId;
+    let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
       convId = Date.now().toString();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
-    const existingConversation = state.conversations.find(c => c.id === convId);
+    const existingConversation = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const isFirstTurn = !existingConversation || existingConversation.turns.length === 0;
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
@@ -3879,7 +4057,7 @@ export function DebateProvider({ children }) {
       forceLegacy: forceLegacyWebSearch,
     });
 
-    const currentConv = state.conversations.find(c => c.id === convId);
+    const currentConv = conversationSnapshot || state.conversations.find(c => c.id === convId);
     const contextMessages = prepareConversationHistory({
       conversationId: convId,
       conversation: currentConv,
@@ -4070,7 +4248,7 @@ export function DebateProvider({ children }) {
       convId, turnId, runId, userPrompt, completedStreams, conversationHistory,
       synthModel, convergenceModel, apiKey, abortController, focused, forceRefresh,
     });
-    if (synthesisContent && isFirstTurn) {
+    if (synthesisContent && isFirstTurn && !skipAutoTitle) {
       requestAutoConversationTitle({
         conversationId: convId,
         userPrompt,
@@ -4192,7 +4370,16 @@ export function DebateProvider({ children }) {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
     const forceLegacyWebSearch = Boolean(options.forceLegacyWebSearch);
-    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    const {
+      conversationId: targetConversationId,
+      conversationSnapshot,
+    } = prepareConversationForHistoryMutation(activeConversation.id, {
+      titleLabel: 'Retry',
+      branchKind: 'retry',
+    });
+    const targetConversation = conversationSnapshot || activeConversation;
+    const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
+    if (!targetConversationId || !lastTurn) return;
     const prompt = lastTurn.userPrompt;
     const turnAttachments = lastTurn.attachments;
     const turnMode = lastTurn.mode;
@@ -4202,7 +4389,8 @@ export function DebateProvider({ children }) {
     const focusedOverride = typeof lastTurn.focusedMode === 'boolean'
       ? lastTurn.focusedMode
       : state.focusedMode;
-    dispatch({ type: 'REMOVE_LAST_TURN', payload: activeConversation.id });
+    const conversationSnapshotAfterRemoval = buildConversationWithoutLastTurn(targetConversation);
+    dispatch({ type: 'REMOVE_LAST_TURN', payload: targetConversationId });
     const opts = {
       webSearch,
       attachments: turnAttachments || undefined,
@@ -4211,6 +4399,9 @@ export function DebateProvider({ children }) {
       forceLegacyWebSearch,
       modelOverrides: Array.isArray(lastTurn.modelOverrides) ? lastTurn.modelOverrides : undefined,
       routeInfo: lastTurn.routeInfo || undefined,
+      conversationId: targetConversationId,
+      conversationSnapshot: conversationSnapshotAfterRemoval,
+      skipAutoTitle: true,
     };
     if (turnMode === 'direct') {
       startDirect(prompt, opts);
@@ -4219,13 +4410,29 @@ export function DebateProvider({ children }) {
     } else {
       startDebate(prompt, opts);
     }
-  }, [activeConversation, startDebate, startDirect, startParallel, state.webSearchEnabled, state.focusedMode]);
+  }, [
+    activeConversation,
+    prepareConversationForHistoryMutation,
+    startDebate,
+    startDirect,
+    startParallel,
+    state.webSearchEnabled,
+    state.focusedMode,
+  ]);
 
   const retrySynthesis = useCallback(async (options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
-    const convId = activeConversation.id;
-    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    const {
+      conversationId: convId,
+      conversationSnapshot,
+    } = prepareConversationForHistoryMutation(activeConversation.id, {
+      titleLabel: 'Retry',
+      branchKind: 'retry',
+    });
+    const targetConversation = conversationSnapshot || activeConversation;
+    const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
+    if (!convId || !lastTurn) return;
     if (!lastTurn.rounds || lastTurn.rounds.length === 0) return;
 
     const userPrompt = lastTurn.userPrompt;
@@ -4255,12 +4462,12 @@ export function DebateProvider({ children }) {
     setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
-    const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
+    const convForContext = { ...targetConversation, turns: targetConversation.turns.slice(0, -1) };
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
-      runningSummary: activeConversation.runningSummary || null,
-      summarizedTurnCount: activeConversation.summarizedTurnCount || 0,
-      pendingSummaryUntilTurnCount: activeConversation.pendingSummaryUntilTurnCount || activeConversation.summarizedTurnCount || 0,
+      runningSummary: targetConversation.runningSummary || null,
+      summarizedTurnCount: targetConversation.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: targetConversation.pendingSummaryUntilTurnCount || targetConversation.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -4346,7 +4553,17 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.focusedMode, state.modelCatalog, state.capabilityRegistry, setAbortController]);
+  }, [
+    activeConversation,
+    prepareConversationForHistoryMutation,
+    state.apiKey,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.focusedMode,
+    state.modelCatalog,
+    state.capabilityRegistry,
+    setAbortController,
+  ]);
 
   const branchFromRound = useCallback((roundIndex) => {
     if (!activeConversation || !activeConversation.id) return;
@@ -4369,8 +4586,16 @@ export function DebateProvider({ children }) {
     const replacementModels = options.replacementModels && typeof options.replacementModels === 'object'
       ? options.replacementModels
       : null;
-    const convId = activeConversation.id;
-    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    const {
+      conversationId: convId,
+      conversationSnapshot,
+    } = prepareConversationForHistoryMutation(activeConversation.id, {
+      titleLabel: 'Retry',
+      branchKind: 'retry',
+    });
+    const targetConversation = conversationSnapshot || activeConversation;
+    const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
+    if (!convId || !lastTurn) return;
     if (!lastTurn.rounds || roundIndex >= lastTurn.rounds.length) return;
 
     const userPrompt = lastTurn.userPrompt;
@@ -4402,12 +4627,12 @@ export function DebateProvider({ children }) {
     setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
-    const convForContext = { ...activeConversation, turns: activeConversation.turns.slice(0, -1) };
+    const convForContext = { ...targetConversation, turns: targetConversation.turns.slice(0, -1) };
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
-      runningSummary: activeConversation.runningSummary || null,
-      summarizedTurnCount: activeConversation.summarizedTurnCount || 0,
-      pendingSummaryUntilTurnCount: activeConversation.pendingSummaryUntilTurnCount || activeConversation.summarizedTurnCount || 0,
+      runningSummary: targetConversation.runningSummary || null,
+      summarizedTurnCount: targetConversation.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: targetConversation.pendingSummaryUntilTurnCount || targetConversation.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -5448,7 +5673,22 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [activeConversation, state.apiKey, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.focusedMode, state.webSearchModel, state.strictWebSearch, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, setAbortController]);
+  }, [
+    activeConversation,
+    prepareConversationForHistoryMutation,
+    state.apiKey,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.convergenceOnFinalRound,
+    state.maxDebateRounds,
+    state.focusedMode,
+    state.webSearchModel,
+    state.strictWebSearch,
+    state.modelCatalog,
+    state.capabilityRegistry,
+    buildNativeWebSearchStrategy,
+    setAbortController,
+  ]);
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -5659,10 +5899,12 @@ export function DebateProvider({ children }) {
     activeConversation,
     debateInProgress: activeConversationInProgress,
     activeConversationInProgress,
+    activeConversationIsMostRecent,
   }), [
     state.activeConversationId,
     activeConversation,
     activeConversationInProgress,
+    activeConversationIsMostRecent,
   ]);
 
   const conversationListValue = useMemo(() => ({
@@ -5684,6 +5926,7 @@ export function DebateProvider({ children }) {
     startDebate,
     startDirect,
     startParallel,
+    prepareConversationForHistoryMutation,
     cancelDebate,
     editLastTurn,
     retryLastTurn,
@@ -5702,6 +5945,7 @@ export function DebateProvider({ children }) {
     startDebate,
     startDirect,
     startParallel,
+    prepareConversationForHistoryMutation,
     cancelDebate,
     editLastTurn,
     retryLastTurn,

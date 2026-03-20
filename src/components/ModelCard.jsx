@@ -34,6 +34,7 @@ function ModelCard({
   totalRounds = 1,
   roundNumber = null,
   roundModels = [],
+  branchesConversation = false,
 }) {
   const { retryStream } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
@@ -96,8 +97,11 @@ function ModelCard({
     roundNumber: effectiveRoundNumber,
     totalRounds,
     modelName: displayName,
+    branchesConversation,
   });
-  const replacePickerTitle = `Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`;
+  const replacePickerTitle = branchesConversation
+    ? `Choose a replacement model for ${displayName} in a new branch. Shift starts with cache bypass enabled.`
+    : `Choose a replacement model for ${displayName}. Shift starts with cache bypass enabled.`;
 
   // Auto-scroll while streaming, only if user is near the bottom
   useEffect(() => {
@@ -185,6 +189,7 @@ function ModelCard({
               roundNumber={effectiveRoundNumber}
               totalRounds={totalRounds}
               turnMode={turnMode}
+              branchesConversation={branchesConversation}
               title={replacePickerTitle}
             >
               Replace

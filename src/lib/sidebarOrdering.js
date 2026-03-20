@@ -45,3 +45,13 @@ export function sortSidebarConversations(conversations, isConversationInProgress
   return [...(Array.isArray(conversations) ? conversations : [])]
     .sort((a, b) => compareSidebarConversations(a, b, isConversationInProgress));
 }
+
+export function getMostRecentConversation(conversations, isConversationInProgress = () => false) {
+  const [latestConversation] = sortSidebarConversations(conversations, isConversationInProgress);
+  return latestConversation || null;
+}
+
+export function isMostRecentConversation(conversations, conversationId, isConversationInProgress = () => false) {
+  if (!conversationId) return false;
+  return getMostRecentConversation(conversations, isConversationInProgress)?.id === conversationId;
+}

@@ -11,7 +11,7 @@ import './ReplacementModelPickerModal.css';
 
 const DEFAULT_VISIBLE_CHOICES = 60;
 
-function buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel) {
+function buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel, branchesConversation = false) {
   const scopeDescription = getRetryScopeDescription({
     scope: 'stream',
     mode: turnMode,
@@ -19,6 +19,7 @@ function buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel) {
     totalRounds,
     modelName: getModelDisplayName(currentModel),
     replacementModelName: 'another model',
+    branchesConversation,
   });
   const parts = scopeDescription.split('. ');
   return parts.length > 1 ? parts.slice(1).join('. ') : scopeDescription;
@@ -64,6 +65,7 @@ export default function ReplacementModelPickerModal({
   roundNumber = null,
   totalRounds = 1,
   turnMode = 'debate',
+  branchesConversation = false,
   initialForceRefresh = false,
 }) {
   const {
@@ -178,7 +180,7 @@ export default function ReplacementModelPickerModal({
   if (!open) return null;
 
   const currentModelLabel = getModelDisplayName(currentModel);
-  const scopeSummary = buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel);
+  const scopeSummary = buildScopeSummary(turnMode, roundNumber, totalRounds, currentModel, branchesConversation);
   const portalTarget = typeof document !== 'undefined'
     ? document.getElementById('chat-window-overlay-root')
     : null;
@@ -260,6 +262,7 @@ export default function ReplacementModelPickerModal({
                   totalRounds,
                   modelName: currentModelLabel,
                   replacementModelName: getModelDisplayName(choice.modelId),
+                  branchesConversation,
                 });
 
                 return (

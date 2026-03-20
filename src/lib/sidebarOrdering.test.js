@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {
+  getMostRecentConversation,
+  isMostRecentConversation,
   getSidebarConversationSortTimestamp,
   sortSidebarConversations,
 } from './sidebarOrdering.js';
@@ -44,6 +46,25 @@ runTest('running conversations fall back to updatedAt when the turn start time i
   );
 
   assert.equal(sortTimestamp, 120);
+});
+
+runTest('getMostRecentConversation returns the same chat the sidebar would place first', () => {
+  const latest = getMostRecentConversation([
+    { id: 'older', updatedAt: 100, createdAt: 10, lastTurnTimestamp: 20 },
+    { id: 'newer', updatedAt: 200, createdAt: 20, lastTurnTimestamp: 30 },
+  ]);
+
+  assert.equal(latest?.id, 'newer');
+});
+
+runTest('isMostRecentConversation detects whether a chat is still the newest one', () => {
+  const conversations = [
+    { id: 'older', updatedAt: 100, createdAt: 10, lastTurnTimestamp: 20 },
+    { id: 'newer', updatedAt: 200, createdAt: 20, lastTurnTimestamp: 30 },
+  ];
+
+  assert.equal(isMostRecentConversation(conversations, 'newer'), true);
+  assert.equal(isMostRecentConversation(conversations, 'older'), false);
 });
 
 // eslint-disable-next-line no-console

@@ -94,8 +94,15 @@ function createPendingAttachment(file, uploadId) {
 }
 
 export default function ChatInput() {
-  const { startDebate, startDirect, startParallel, cancelDebate, dispatch } = useDebateActions();
-  const { debateInProgress, activeConversationId } = useDebateConversations();
+  const {
+    startDebate,
+    startDirect,
+    startParallel,
+    prepareConversationForHistoryMutation,
+    cancelDebate,
+    dispatch,
+  } = useDebateActions();
+  const { debateInProgress, activeConversationIsMostRecent } = useDebateConversations();
   const {
     apiKey,
     selectedModels,
@@ -290,8 +297,26 @@ export default function ChatInput() {
       routeInfo: payload?.routeInfo || undefined,
     };
     const prompt = trimmed || '(see attachments)';
-    if (editMeta?.conversationId && editMeta.conversationId === activeConversationId) {
-      dispatch({ type: 'REMOVE_LAST_TURN', payload: editMeta.conversationId });
+    if (editMeta?.conversationId) {
+      const {
+        conversationId: targetConversationId,
+        conversationSnapshot,
+      } = prepareConversationForHistoryMutation(editMeta.conversationId, {
+        titleLabel: 'Edit',
+        branchKind: 'edit',
+      });
+      if (!targetConversationId) return;
+      dispatch({ type: 'REMOVE_LAST_TURN', payload: targetConversationId });
+      opts.conversationId = targetConversationId;
+      opts.conversationSnapshot = conversationSnapshot
+        ? {
+          ...conversationSnapshot,
+          turns: Array.isArray(conversationSnapshot.turns)
+            ? conversationSnapshot.turns.slice(0, -1)
+            : [],
+        }
+        : null;
+      opts.skipAutoTitle = true;
       setEditMeta(null);
     }
     if (chatMode === 'direct') {
@@ -305,7 +330,7 @@ export default function ChatInput() {
     debateInProgress,
     webSearchEnabled,
     editMeta?.conversationId,
-    activeConversationId,
+    prepareConversationForHistoryMutation,
     dispatch,
     chatMode,
     startDebate,
@@ -553,7 +578,11 @@ export default function ChatInput() {
 
         {editMeta && (
           <div className="edit-mode-banner">
-            <span>Editing last message</span>
+            <span>
+              {activeConversationIsMostRecent
+                ? 'Editing last message'
+                : 'Editing last message. Sending will create a new branch.'}
+            </span>
           </div>
         )}
 
