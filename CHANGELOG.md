@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Tightened the `Turn Breakdown` accordion by collapsing progress, stage tabs, and the `Cards`/`Thread` toggle into a denser shared toolbar
 - Replaced the tall round timeline in the compact explorer header with inline status pills so debate progress stays readable without leaving a large empty band
+- In-app updates now auto-stash ordinary local edits, restore them after syncing, and prefer `npm ci` when a lockfile is present so dependency refreshes stay deterministic
+
+### Fixed
+- App updates no longer get stuck behind routine local `package-lock.json` drift from installation-only environments, while still blocking on unresolved merge conflicts and other unsafe git states
 
 ## [0.3.27] - 2026-03-19
 

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {
+  canAutoStashDirtyEntries,
+  getDependencyInstallMode,
+  isUnmergedGitStatus,
   needsAppRestart,
   needsDependencyInstall,
   needsPageReload,
@@ -38,10 +41,33 @@ runTest('parseGitStatusPorcelain captures tracked and untracked files', () => {
   });
 });
 
+runTest('unmerged git statuses are treated as hard blockers', () => {
+  assert.equal(isUnmergedGitStatus({ indexStatus: 'U', worktreeStatus: 'U' }), true);
+  assert.equal(isUnmergedGitStatus({ indexStatus: 'A', worktreeStatus: 'A' }), true);
+  assert.equal(isUnmergedGitStatus({ indexStatus: ' ', worktreeStatus: 'M' }), false);
+});
+
+runTest('auto-stash only allows ordinary dirty entries', () => {
+  assert.equal(canAutoStashDirtyEntries([]), false);
+  assert.equal(canAutoStashDirtyEntries([
+    { indexStatus: ' ', worktreeStatus: 'M', path: 'package-lock.json' },
+    { indexStatus: '?', worktreeStatus: '?', path: 'notes.txt' },
+  ]), true);
+  assert.equal(canAutoStashDirtyEntries([
+    { indexStatus: 'U', worktreeStatus: 'U', path: 'package-lock.json' },
+  ]), false);
+});
+
 runTest('dependency install only runs when manifests change', () => {
   assert.equal(needsDependencyInstall(['src/App.jsx']), false);
   assert.equal(needsDependencyInstall(['package.json']), true);
   assert.equal(needsDependencyInstall(['docs/readme.md', 'package-lock.json']), true);
+});
+
+runTest('dependency refresh prefers npm ci when a lockfile exists', () => {
+  assert.equal(getDependencyInstallMode({ hasPackageLock: true }), 'ci');
+  assert.equal(getDependencyInstallMode({ hasShrinkwrap: true }), 'ci');
+  assert.equal(getDependencyInstallMode({ hasPackageLock: false, hasShrinkwrap: false }), 'install');
 });
 
 runTest('restart detection catches backend and config changes', () => {

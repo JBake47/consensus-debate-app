@@ -8,12 +8,22 @@ const GIT_COMMAND = process.platform === 'win32' ? 'git.exe' : 'git';
 const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_BUFFER_BYTES = 1024 * 1024;
-
-const INSTALL_TRIGGER_FILES = new Set([
+const MANIFEST_FILES = [
   'package.json',
   'package-lock.json',
   'npm-shrinkwrap.json',
+];
+const UNMERGED_STATUS_CODES = new Set([
+  'DD',
+  'AU',
+  'UD',
+  'UA',
+  'DU',
+  'AA',
+  'UU',
 ]);
+
+const INSTALL_TRIGGER_FILES = new Set(MANIFEST_FILES);
 
 const RESTART_TRIGGER_FILES = new Set([
   'package.json',
@@ -124,14 +134,30 @@ function summarizePaths(entries, limit = 6) {
   ];
 }
 
+export function isUnmergedGitStatus(entry = {}) {
+  const indexStatus = String(entry?.indexStatus || ' ').slice(0, 1) || ' ';
+  const worktreeStatus = String(entry?.worktreeStatus || ' ').slice(0, 1) || ' ';
+  return UNMERGED_STATUS_CODES.has(`${indexStatus}${worktreeStatus}`);
+}
+
+export function canAutoStashDirtyEntries(entries = []) {
+  const normalizedEntries = Array.isArray(entries) ? entries : [];
+  return normalizedEntries.length > 0 && !normalizedEntries.some(isUnmergedGitStatus);
+}
+
+export function getDependencyInstallMode({ hasPackageLock = false, hasShrinkwrap = false } = {}) {
+  return hasPackageLock || hasShrinkwrap ? 'ci' : 'install';
+}
+
 function buildBlockedReason({ dirtyEntries, hasUpstream, aheadCount, behindCount, updateInProgress }) {
   if (updateInProgress) {
     return 'Another update is already running.';
   }
 
-  if (dirtyEntries.length > 0) {
-    const dirtySummary = summarizePaths(dirtyEntries).join(', ');
-    return `Update blocked because the working tree has uncommitted changes: ${dirtySummary}`;
+  const conflictingEntries = dirtyEntries.filter(isUnmergedGitStatus);
+  if (conflictingEntries.length > 0) {
+    const dirtySummary = summarizePaths(conflictingEntries).join(', ');
+    return `Update blocked because the working tree has unresolved conflicts: ${dirtySummary}`;
   }
 
   if (!hasUpstream) {
@@ -143,6 +169,23 @@ function buildBlockedReason({ dirtyEntries, hasUpstream, aheadCount, behindCount
   }
 
   return null;
+}
+
+function appendDirtyStatus(message, dirtyEntries, { autoStashEligible = false } = {}) {
+  if (dirtyEntries.length === 0) {
+    return message;
+  }
+
+  const dirtySummary = summarizePaths(dirtyEntries).join(', ');
+  if (!dirtySummary) {
+    return message;
+  }
+
+  if (autoStashEligible) {
+    return `${message} Local changes are present (${dirtySummary}) and will be stashed and restored automatically during updates.`;
+  }
+
+  return `${message} Local changes are present: ${dirtySummary}.`;
 }
 
 export function needsDependencyInstall(changedFiles = []) {
@@ -168,13 +211,28 @@ export function needsPageReload(changedFiles = []) {
 function buildUpdateSummary({
   updated,
   installRan,
+  installMode,
   restartRequired,
   reloadRecommended,
   previousCommitShort,
   currentCommitShort,
+  localChangesStashed,
+  localChangesRestored,
+  localChangesRequireManualRestore,
+  stashRef,
 }) {
   if (!updated) {
-    return 'App is already up to date.';
+    const messages = ['App is already up to date.'];
+    if (localChangesRestored) {
+      messages.push('Local changes were restored.');
+    } else if (localChangesStashed || localChangesRequireManualRestore) {
+      messages.push(
+        stashRef
+          ? `Local changes still need manual restoration from ${stashRef}.`
+          : 'Local changes still need manual restoration.',
+      );
+    }
+    return messages.join(' ');
   }
 
   const messages = [
@@ -182,7 +240,7 @@ function buildUpdateSummary({
   ];
 
   if (installRan) {
-    messages.push('Dependencies were refreshed.');
+    messages.push(`Dependencies were refreshed with npm ${installMode || 'install'}.`);
   }
 
   if (restartRequired) {
@@ -193,7 +251,119 @@ function buildUpdateSummary({
     messages.push('No restart should be required.');
   }
 
+  if (localChangesRestored) {
+    messages.push('Local changes were restored after the update.');
+  } else if (localChangesStashed || localChangesRequireManualRestore) {
+    messages.push(
+      stashRef
+        ? `Local changes still need manual restoration from ${stashRef}.`
+        : 'Local changes still need manual restoration.',
+    );
+  }
+
   return messages.join(' ');
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getDependencyInstallArgs(cwd) {
+  const [hasPackageLock, hasShrinkwrap] = await Promise.all([
+    pathExists(path.join(cwd, 'package-lock.json')),
+    pathExists(path.join(cwd, 'npm-shrinkwrap.json')),
+  ]);
+  const installMode = getDependencyInstallMode({ hasPackageLock, hasShrinkwrap });
+  return {
+    installMode,
+    args: [installMode, '--no-audit', '--no-fund'],
+  };
+}
+
+async function getManifestDrift(cwd) {
+  const statusResult = await runGit([
+    'status',
+    '--porcelain',
+    '--untracked-files=normal',
+    '--',
+    ...MANIFEST_FILES,
+  ], { cwd });
+  return parseGitStatusPorcelain(statusResult.stdout);
+}
+
+async function stashLocalChanges(cwd, dirtyEntries = []) {
+  if (!canAutoStashDirtyEntries(dirtyEntries)) {
+    return null;
+  }
+
+  const label = `app-update-autostash ${new Date().toISOString()} ${Math.random().toString(36).slice(2, 8)}`;
+  await runGit(['stash', 'push', '--include-untracked', '--message', label], { cwd });
+
+  const topStashResult = await runGit(['stash', 'list', '-1', '--format=%gd\t%gs'], { cwd, allowFailure: true });
+  const [stashRefRaw = 'stash@{0}'] = String(topStashResult.stdout || '').split('\t');
+  const stashRef = stashRefRaw.trim() || 'stash@{0}';
+
+  const statusAfterStash = await runGit(['status', '--porcelain', '--untracked-files=normal'], { cwd });
+  const remainingDirtyEntries = parseGitStatusPorcelain(statusAfterStash.stdout);
+  if (remainingDirtyEntries.length > 0) {
+    const dirtySummary = summarizePaths(remainingDirtyEntries).join(', ');
+    throw new AppUpdateError(
+      `Update blocked because local changes could not be stashed cleanly: ${dirtySummary}`,
+      409,
+      'update_stash_failed',
+    );
+  }
+
+  return {
+    ref: stashRef,
+    dirtyEntries,
+  };
+}
+
+async function stashRefExists(cwd, stashRef) {
+  if (!stashRef) {
+    return false;
+  }
+
+  const result = await runGit(['rev-parse', '--verify', '--quiet', stashRef], { cwd, allowFailure: true });
+  return !result.error;
+}
+
+async function restoreStashedChanges(cwd, stashContext) {
+  if (!stashContext?.ref) {
+    return {
+      attempted: false,
+      restored: false,
+      conflicted: false,
+      stashRef: null,
+      detail: '',
+    };
+  }
+
+  const popResult = await runGit(['stash', 'pop', stashContext.ref], { cwd, allowFailure: true });
+  if (!popResult.error) {
+    return {
+      attempted: true,
+      restored: true,
+      conflicted: false,
+      stashRef: null,
+      detail: popResult.stdout || popResult.stderr || '',
+    };
+  }
+
+  const stashStillExists = await stashRefExists(cwd, stashContext.ref);
+  return {
+    attempted: true,
+    restored: false,
+    conflicted: true,
+    stashRef: stashStillExists ? stashContext.ref : null,
+    detail: popResult.stderr || popResult.stdout || popResult.error?.message || 'git stash pop failed',
+  };
 }
 
 async function collectRepoStatus(cwd, { refresh = false, updateInProgressOverride = null } = {}) {
@@ -216,6 +386,7 @@ async function collectRepoStatus(cwd, { refresh = false, updateInProgressOverrid
   ]);
 
   const dirtyEntries = parseGitStatusPorcelain(statusResult.stdout);
+  const autoStashEligible = canAutoStashDirtyEntries(dirtyEntries);
   const upstream = upstreamResult.error ? '' : upstreamResult.stdout;
   let checkError = '';
 
@@ -273,13 +444,29 @@ async function collectRepoStatus(cwd, { refresh = false, updateInProgressOverrid
   if (blockedReason) {
     statusMessage = blockedReason;
   } else if (updateAvailable) {
-    statusMessage = `Update available: ${behindCount} ${pluralize(behindCount, 'commit')} behind ${upstream}.`;
+    statusMessage = appendDirtyStatus(
+      `Update available: ${behindCount} ${pluralize(behindCount, 'commit')} behind ${upstream}.`,
+      dirtyEntries,
+      { autoStashEligible },
+    );
   } else if (aheadCount > 0) {
-    statusMessage = `Local branch is ${aheadCount} ${pluralize(aheadCount, 'commit')} ahead of ${upstream}.`;
+    statusMessage = appendDirtyStatus(
+      `Local branch is ${aheadCount} ${pluralize(aheadCount, 'commit')} ahead of ${upstream}.`,
+      dirtyEntries,
+      { autoStashEligible },
+    );
   } else if (upstream) {
-    statusMessage = `App is up to date with ${upstream}.`;
+    statusMessage = appendDirtyStatus(
+      `App is up to date with ${upstream}.`,
+      dirtyEntries,
+      { autoStashEligible },
+    );
   } else {
-    statusMessage = 'Upstream branch information is unavailable.';
+    statusMessage = appendDirtyStatus(
+      'Upstream branch information is unavailable.',
+      dirtyEntries,
+      { autoStashEligible },
+    );
   }
 
   return {
@@ -292,6 +479,7 @@ async function collectRepoStatus(cwd, { refresh = false, updateInProgressOverrid
     remoteCommitShort,
     dirty: dirtyEntries.length > 0,
     dirtyEntries,
+    autoStashEligible,
     aheadCount,
     behindCount,
     updateAvailable,
@@ -323,81 +511,170 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
       throw new AppUpdateError(statusBefore.blockedReason, 409, 'update_blocked');
     }
 
-    if (!statusBefore.updateAvailable) {
+    let stashContext = null;
+    let restoreResult = {
+      attempted: false,
+      restored: false,
+      conflicted: false,
+      stashRef: null,
+      detail: '',
+    };
+
+    try {
+      if (statusBefore.autoStashEligible) {
+        stashContext = await stashLocalChanges(cwd, statusBefore.dirtyEntries);
+      }
+
+      if (!statusBefore.updateAvailable) {
+        restoreResult = await restoreStashedChanges(cwd, stashContext);
+        if (restoreResult.conflicted) {
+          throw new AppUpdateError(
+            restoreResult.stashRef
+              ? `App is already up to date, but local changes could not be restored cleanly. Resolve them manually from ${restoreResult.stashRef}.`
+              : 'App is already up to date, but local changes could not be restored cleanly.',
+            409,
+            'update_restore_conflict',
+          );
+        }
+
+        const finalStatus = await collectRepoStatus(cwd, {
+          refresh: false,
+          updateInProgressOverride: false,
+        });
+
+        return {
+          updated: false,
+          installRan: false,
+          installMode: null,
+          restartRequired: false,
+          reloadRecommended: false,
+          changedFiles: [],
+          localChangesStashed: Boolean(stashContext),
+          localChangesRestored: restoreResult.restored,
+          localChangesRequireManualRestore: restoreResult.conflicted,
+          stashRef: restoreResult.stashRef,
+          previousVersion: statusBefore.currentVersion,
+          currentVersion: statusBefore.currentVersion,
+          previousCommit: statusBefore.currentCommit,
+          previousCommitShort: statusBefore.currentCommitShort,
+          currentCommit: statusBefore.currentCommit,
+          currentCommitShort: statusBefore.currentCommitShort,
+          summary: buildUpdateSummary({
+            updated: false,
+            installRan: false,
+            installMode: null,
+            restartRequired: false,
+            reloadRecommended: false,
+            previousCommitShort: statusBefore.currentCommitShort,
+            currentCommitShort: statusBefore.currentCommitShort,
+            localChangesStashed: Boolean(stashContext),
+            localChangesRestored: restoreResult.restored,
+            localChangesRequireManualRestore: restoreResult.conflicted,
+            stashRef: restoreResult.stashRef,
+          }),
+          status: finalStatus,
+        };
+      }
+
+      await runGit(['pull', '--ff-only'], { cwd });
+
+      const [afterCommitResult, afterCommitShortResult] = await Promise.all([
+        runGit(['rev-parse', 'HEAD'], { cwd }),
+        runGit(['rev-parse', '--short', 'HEAD'], { cwd }),
+      ]);
+
+      const afterCommit = afterCommitResult.stdout || statusBefore.currentCommit;
+      const afterCommitShort = afterCommitShortResult.stdout || statusBefore.currentCommitShort;
+
+      const changedFilesResult = afterCommit && statusBefore.currentCommit && afterCommit !== statusBefore.currentCommit
+        ? await runGit(['diff', '--name-only', `${statusBefore.currentCommit}..${afterCommit}`], { cwd })
+        : { stdout: '' };
+
+      const changedFiles = String(changedFilesResult.stdout || '')
+        .split(/\r?\n/)
+        .map((file) => file.trim())
+        .filter(Boolean);
+
+      const installRan = needsDependencyInstall(changedFiles);
+      let installMode = null;
+      if (installRan) {
+        const installPlan = await getDependencyInstallArgs(cwd);
+        installMode = installPlan.installMode;
+        await runNpm(installPlan.args, { cwd });
+
+        const manifestDrift = await getManifestDrift(cwd);
+        if (manifestDrift.length > 0) {
+          const dirtySummary = summarizePaths(manifestDrift).join(', ');
+          throw new AppUpdateError(
+            `Dependency refresh modified tracked manifests unexpectedly: ${dirtySummary}. Align Node/npm versions, then rerun the update.`,
+            500,
+            'dependency_manifest_drift',
+          );
+        }
+      }
+
+      const currentVersion = await readPackageVersion(cwd);
+      const restartRequired = installRan || needsAppRestart(changedFiles);
+      const reloadRecommended = !restartRequired && needsPageReload(changedFiles);
+      const updated = afterCommit !== statusBefore.currentCommit;
+
+      restoreResult = await restoreStashedChanges(cwd, stashContext);
+
+      const statusAfter = await collectRepoStatus(cwd, {
+        refresh: false,
+        updateInProgressOverride: false,
+      });
+
       return {
-        updated: false,
-        installRan: false,
-        restartRequired: false,
-        reloadRecommended: false,
-        changedFiles: [],
+        updated,
+        installRan,
+        installMode,
+        restartRequired,
+        reloadRecommended,
+        changedFiles,
+        localChangesStashed: Boolean(stashContext),
+        localChangesRestored: restoreResult.restored,
+        localChangesRequireManualRestore: restoreResult.conflicted,
+        stashRef: restoreResult.stashRef,
         previousVersion: statusBefore.currentVersion,
-        currentVersion: statusBefore.currentVersion,
+        currentVersion,
         previousCommit: statusBefore.currentCommit,
         previousCommitShort: statusBefore.currentCommitShort,
-        currentCommit: statusBefore.currentCommit,
-        currentCommitShort: statusBefore.currentCommitShort,
-        summary: 'App is already up to date.',
-        status: statusBefore,
+        currentCommit: afterCommit,
+        currentCommitShort: afterCommitShort,
+        summary: buildUpdateSummary({
+          updated,
+          installRan,
+          installMode,
+          restartRequired,
+          reloadRecommended,
+          previousCommitShort: statusBefore.currentCommitShort,
+          currentCommitShort: afterCommitShort,
+          localChangesStashed: Boolean(stashContext),
+          localChangesRestored: restoreResult.restored,
+          localChangesRequireManualRestore: restoreResult.conflicted,
+          stashRef: restoreResult.stashRef,
+        }),
+        status: statusAfter,
       };
+    } catch (error) {
+      if (stashContext && !restoreResult.attempted) {
+        restoreResult = await restoreStashedChanges(cwd, stashContext);
+      }
+
+      if (restoreResult.conflicted) {
+        const message = error?.message || 'Failed to apply app update.';
+        throw new AppUpdateError(
+          restoreResult.stashRef
+            ? `${message} Local changes were preserved in ${restoreResult.stashRef} and need manual restoration.`
+            : `${message} Local changes could not be restored cleanly.`,
+          error instanceof AppUpdateError ? error.status : 500,
+          'update_restore_conflict',
+        );
+      }
+
+      throw error;
     }
-
-    await runGit(['pull', '--ff-only'], { cwd });
-
-    const [afterCommitResult, afterCommitShortResult] = await Promise.all([
-      runGit(['rev-parse', 'HEAD'], { cwd }),
-      runGit(['rev-parse', '--short', 'HEAD'], { cwd }),
-    ]);
-
-    const afterCommit = afterCommitResult.stdout || statusBefore.currentCommit;
-    const afterCommitShort = afterCommitShortResult.stdout || statusBefore.currentCommitShort;
-
-    const changedFilesResult = afterCommit && statusBefore.currentCommit && afterCommit !== statusBefore.currentCommit
-      ? await runGit(['diff', '--name-only', `${statusBefore.currentCommit}..${afterCommit}`], { cwd })
-      : { stdout: '' };
-
-    const changedFiles = String(changedFilesResult.stdout || '')
-      .split(/\r?\n/)
-      .map((file) => file.trim())
-      .filter(Boolean);
-
-    const installRan = needsDependencyInstall(changedFiles);
-    if (installRan) {
-      await runNpm(['install', '--no-audit', '--no-fund'], { cwd });
-    }
-
-    const currentVersion = await readPackageVersion(cwd);
-    const restartRequired = installRan || needsAppRestart(changedFiles);
-    const reloadRecommended = !restartRequired && needsPageReload(changedFiles);
-    const updated = afterCommit !== statusBefore.currentCommit;
-    const summary = buildUpdateSummary({
-      updated,
-      installRan,
-      restartRequired,
-      reloadRecommended,
-      previousCommitShort: statusBefore.currentCommitShort,
-      currentCommitShort: afterCommitShort,
-    });
-
-    const statusAfter = await collectRepoStatus(cwd, {
-      refresh: false,
-      updateInProgressOverride: false,
-    });
-
-    return {
-      updated,
-      installRan,
-      restartRequired,
-      reloadRecommended,
-      changedFiles,
-      previousVersion: statusBefore.currentVersion,
-      currentVersion,
-      previousCommit: statusBefore.currentCommit,
-      previousCommitShort: statusBefore.currentCommitShort,
-      currentCommit: afterCommit,
-      currentCommitShort: afterCommitShort,
-      summary,
-      status: statusAfter,
-    };
   })();
 
   activeUpdatePromise = updateTask.finally(() => {

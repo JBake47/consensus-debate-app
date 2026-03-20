@@ -85,7 +85,7 @@ npm test
 npm run build
 ```
 
-You can also use the in-app updater in **Settings > App Updates**. It runs `git pull --ff-only` and refreshes dependencies when `package.json` or `package-lock.json` changed. It refuses to run if the clone has local uncommitted edits.
+You can also use the in-app updater in **Settings > App Updates**. It runs `git pull --ff-only`, refreshes dependencies with `npm ci` when a lockfile is present, and auto-stashes ordinary local edits before restoring them after the update. It still refuses to run when the clone has unresolved merge conflicts or the branch needs manual reconciliation.
 
 If you have local uncommitted work first:
 
