@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useCallback, useRef, useEffect, useMemo } from 'react';
+import { createContext, useContext, useReducer, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import {
   streamChat,
   chatCompletion,
@@ -1540,11 +1540,11 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
   }, [dispatch]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     conversationsRef.current = state.conversations;
   }, [state.conversations]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     liveRunScopesRef.current = liveRunScopes;
   }, [liveRunScopes]);
 
@@ -1599,7 +1599,7 @@ export function DebateProvider({ children }) {
     abortControllersRef.current.delete(conversationId);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!liveRunScopesKey) {
       lastRunHeartbeatAtRef.current = 0;
       return;

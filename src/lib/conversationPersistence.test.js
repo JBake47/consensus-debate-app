@@ -69,6 +69,16 @@ function createConversationFixture() {
   }];
 }
 
+function createConversationWithOverrides(overrides = {}) {
+  const [baseConversation] = createConversationFixture();
+  const conversation = JSON.parse(JSON.stringify(baseConversation));
+  return {
+    ...conversation,
+    ...overrides,
+    turns: Array.isArray(overrides.turns) ? overrides.turns : conversation.turns,
+  };
+}
+
 runTest('prepareConversationsForPersistence trims bulky attachment and reasoning payloads', () => {
   const prepared = prepareConversationsForPersistence(createConversationFixture(), 'balanced');
   const turn = prepared[0].turns[0];
@@ -145,6 +155,80 @@ runTest('minimal persistence fallback keeps visible answers even after dropping 
   assert.equal(turn.synthesis.content, 'Final synthesized answer');
   assert.equal(turn.attachments[0].content, '');
   assert.equal(turn.attachments[1].dataUrl, null);
+});
+
+runTest('quota fallback prefers live and recent chats over older completed history', () => {
+  const oldConversation = createConversationWithOverrides({
+    id: 'conv-old',
+    title: 'Old chat',
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  const recentConversation = createConversationWithOverrides({
+    id: 'conv-recent',
+    title: 'Recent chat',
+    createdAt: 2_000,
+    updatedAt: 4_000,
+  });
+  const liveConversation = createConversationWithOverrides({
+    id: 'conv-live',
+    title: 'Interrupted chat',
+    createdAt: 3_000,
+    updatedAt: 3_000,
+    turns: [{
+      ...createConversationFixture()[0].turns[0],
+      id: 'turn-live',
+      activeRunId: 'run-live',
+      lastRunActivityAt: 5_000,
+      webSearchResult: {
+        status: 'searching',
+        content: '',
+      },
+      rounds: [{
+        roundNumber: 1,
+        status: 'streaming',
+        streams: [{
+          model: 'openai/test',
+          content: 'Partial answer',
+          status: 'streaming',
+          error: null,
+        }],
+      }],
+      synthesis: {
+        model: 'openai/test',
+        content: '',
+        status: 'pending',
+        error: null,
+      },
+    }],
+  });
+  const fixture = [oldConversation, recentConversation, liveConversation];
+  const keepIds = ['conv-recent', 'conv-live'];
+  const keepSubset = fixture.filter((conversation) => keepIds.includes(conversation.id));
+  const fullMinimalBytes = JSON.stringify(prepareConversationsForPersistence(fixture, 'minimal')).length;
+  const keepMinimalBytes = JSON.stringify(prepareConversationsForPersistence(keepSubset, 'minimal')).length;
+  const byteLimit = Math.floor((fullMinimalBytes + keepMinimalBytes) / 2);
+  let storedValue = '';
+
+  const storage = {
+    setItem(_key, value) {
+      if (value.length > byteLimit) {
+        const error = new Error('Quota exceeded');
+        error.name = 'QuotaExceededError';
+        throw error;
+      }
+      storedValue = value;
+    },
+  };
+
+  const result = persistConversationsSnapshot(storage, 'debate_conversations', fixture, { logger: null });
+  const parsed = JSON.parse(storedValue);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.strategy, 'minimal');
+  assert.equal(result.retainedConversationCount, 2);
+  assert.equal(result.droppedConversationCount, 1);
+  assert.deepEqual(parsed.map((conversation) => conversation.id), keepIds);
 });
 
 // eslint-disable-next-line no-console
