@@ -28,6 +28,13 @@ export function isTurnActivelyRunning(turn) {
 
   const synthesisStatus = turn.synthesis?.status;
   if (synthesisStatus === 'streaming') return true;
+  const synthesisContent = typeof turn.synthesis?.content === 'string'
+    ? turn.synthesis.content.trim()
+    : '';
+  const hasPendingSynthesisRun = synthesisStatus === 'pending'
+    && Boolean(turn.activeRunId)
+    && !synthesisContent;
+  if (hasPendingSynthesisRun) return true;
 
   const rounds = Array.isArray(turn.rounds) ? turn.rounds : [];
   if (rounds.length > 0) {
@@ -104,11 +111,23 @@ export function recoverInterruptedTurnState(turn) {
   }
 
   const synthesisStatus = turn.synthesis?.status;
+  const synthesisContent = typeof turn.synthesis?.content === 'string'
+    ? turn.synthesis.content.trim()
+    : '';
   const isPendingWarmup = synthesisStatus === 'pending'
     && (!Array.isArray(turn.rounds) || turn.rounds.length === 0);
+  const hasPendingSynthesisRun = synthesisStatus === 'pending'
+    && Boolean(turn.activeRunId)
+    && !synthesisContent;
   if (
     turn.synthesis
-    && (synthesisStatus === 'streaming' || synthesisStatus === 'searching' || synthesisStatus === 'analyzing' || isPendingWarmup)
+    && (
+      synthesisStatus === 'streaming'
+      || synthesisStatus === 'searching'
+      || synthesisStatus === 'analyzing'
+      || isPendingWarmup
+      || hasPendingSynthesisRun
+    )
   ) {
     if (nextTurn === turn) nextTurn = { ...turn };
     nextTurn.synthesis = {

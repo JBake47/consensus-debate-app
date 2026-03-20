@@ -166,5 +166,65 @@ runTest('getResumeRecoveryConversationIds only flags runs that were inactive lon
   assert.deepEqual(freshIds, []);
 });
 
+runTest('pending final synthesis stays recoverable after model rounds finish', () => {
+  const conversation = {
+    id: 'conv-synthesis',
+    title: 'Synthesis pending',
+    turns: [
+      {
+        id: 'turn-synthesis',
+        userPrompt: 'Finish the final synthesis.',
+        timestamp: 4_000,
+        activeRunId: 'run-synthesis',
+        lastRunActivityAt: 8_000,
+        rounds: [
+          {
+            roundNumber: 1,
+            status: 'complete',
+            streams: [
+              {
+                model: 'openai/test',
+                content: 'Model output',
+                status: 'complete',
+                error: null,
+              },
+            ],
+            convergenceCheck: {
+              converged: false,
+              reason: 'Need synthesis',
+            },
+          },
+        ],
+        synthesis: {
+          model: 'openai/test',
+          content: '',
+          status: 'pending',
+          error: null,
+        },
+        debateMetadata: {
+          totalRounds: 1,
+          converged: false,
+          terminationReason: null,
+        },
+      },
+    ],
+  };
+
+  assert.deepEqual(getLiveConversationRunScopes([conversation]), [
+    {
+      conversationId: 'conv-synthesis',
+      turnId: 'turn-synthesis',
+      runId: 'run-synthesis',
+    },
+  ]);
+
+  const recoveredTurn = recoverInterruptedTurnState(conversation.turns[0]).turn;
+
+  assert.equal(recoveredTurn.activeRunId, null);
+  assert.equal(recoveredTurn.synthesis.status, 'error');
+  assert.equal(recoveredTurn.synthesis.error, 'Run interrupted before completion.');
+  assert.equal(recoveredTurn.debateMetadata.terminationReason, 'interrupted');
+});
+
 // eslint-disable-next-line no-console
 console.log('Conversation recovery tests completed.');
