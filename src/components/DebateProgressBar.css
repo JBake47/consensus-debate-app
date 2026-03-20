@@ -7,10 +7,111 @@
   padding: var(--space-md) 0;
 }
 
+.debate-progress-bar.compact {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+}
+
+.progress-inline-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-inline-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-inline-separator {
+  width: 14px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.progress-inline-separator.active {
+  background: var(--round-active-accent);
+}
+
+.progress-inline-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+
+.progress-inline-step.complete {
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(34, 197, 94, 0.08);
+  color: var(--round-complete-accent);
+}
+
+.progress-inline-step.active {
+  border-color: rgba(79, 143, 247, 0.35);
+  background: rgba(79, 143, 247, 0.1);
+  color: var(--round-active-accent);
+}
+
+.progress-inline-step.warning {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.progress-inline-step.error {
+  border-color: rgba(239, 68, 68, 0.38);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--status-error);
+}
+
+.progress-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.progress-inline-label {
+  color: inherit;
+  white-space: nowrap;
+}
+
+.progress-inline-confidence {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-track-scroll {
   width: 100%;
   overflow-x: auto;
   padding-bottom: 2px;
+}
+
+.debate-progress-bar.compact .progress-track-scroll {
+  padding-bottom: 0;
 }
 
 .progress-track {
@@ -20,6 +121,11 @@
   gap: 0;
   min-width: max-content;
   margin: 0 auto;
+}
+
+.debate-progress-bar.compact .progress-track {
+  justify-content: flex-start;
+  margin: 0;
 }
 
 .progress-step-wrapper {
@@ -32,6 +138,12 @@
   width: clamp(82px, 18vw, 104px);
 }
 
+.debate-progress-bar.compact .progress-step-wrapper {
+  gap: 4px;
+  flex-basis: clamp(72px, 14vw, 88px);
+  width: clamp(72px, 14vw, 88px);
+}
+
 .progress-connector {
   position: absolute;
   top: 12px;
@@ -40,6 +152,12 @@
   height: 2px;
   background: var(--border-subtle);
   transition: background var(--transition-base);
+}
+
+.debate-progress-bar.compact .progress-connector {
+  top: 11px;
+  left: calc(-50% + 12px);
+  width: calc(100% - 24px);
 }
 
 .progress-connector.active {
@@ -58,6 +176,11 @@
   color: var(--text-muted);
   transition: all var(--transition-base);
   margin: 0;
+}
+
+.debate-progress-bar.compact .progress-step {
+  width: 24px;
+  height: 24px;
 }
 
 .progress-step.complete {
@@ -98,6 +221,11 @@
   text-align: center;
 }
 
+.debate-progress-bar.compact .progress-step-label {
+  min-height: 2.2em;
+  padding: 0 4px;
+}
+
 .progress-step-confidence {
   display: block;
   font-size: 10px;
@@ -106,7 +234,15 @@
   min-height: 1em;
 }
 
+.debate-progress-bar.compact .progress-step-confidence {
+  min-height: 0;
+}
+
 .progress-step-confidence.high {
+  color: var(--ensemble-confidence-high);
+}
+
+.progress-inline-confidence.high {
   color: var(--ensemble-confidence-high);
 }
 
@@ -114,7 +250,15 @@
   color: var(--ensemble-confidence-mid);
 }
 
+.progress-inline-confidence.mid {
+  color: var(--ensemble-confidence-mid);
+}
+
 .progress-step-confidence.low {
+  color: var(--ensemble-confidence-low);
+}
+
+.progress-inline-confidence.low {
   color: var(--ensemble-confidence-low);
 }
 
@@ -126,12 +270,23 @@
   gap: var(--space-md);
 }
 
+.debate-progress-bar.compact .progress-meta-row {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
 .progress-termination {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   padding: 2px 10px;
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.03);
+}
+
+.debate-progress-bar.compact .progress-termination {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
 }
 
 /* Consensus trend mini chart */

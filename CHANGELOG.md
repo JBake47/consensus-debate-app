@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Tightened the `Turn Breakdown` accordion by collapsing progress, stage tabs, and the `Cards`/`Thread` toggle into a denser shared toolbar
+- Replaced the tall round timeline in the compact explorer header with inline status pills so debate progress stays readable without leaving a large empty band
+
 ## [0.3.27] - 2026-03-19
 
 ### Added

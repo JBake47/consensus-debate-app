@@ -282,11 +282,11 @@ function AttentionPanel({
   );
 }
 
-function StageTabs({ tabs, activeTab, onChange }) {
+function StageTabs({ tabs, activeTab, onChange, className = '' }) {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="turn-stage-tabs" role="tablist" aria-label="Turn stages">
+    <div className={`turn-stage-tabs ${className}`.trim()} role="tablist" aria-label="Turn stages">
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -642,33 +642,30 @@ function DebateView({ turn, isLastTurn }) {
 
             {isTurnExplorerOpen && (
               <>
-                <div className="turn-explorer-header">
-                  <div className="turn-explorer-header-controls">
-                    <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} />
-                    {activeStageTab !== 'web-search' && (
-                      <div className="debate-view-toggle">
-                        <button
-                          className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
-                          onClick={() => setViewMode('cards')}
-                          title="Card view"
-                        >
-                          <LayoutGrid size={14} />
-                          <span>Cards</span>
-                        </button>
-                        <button
-                          className={`view-toggle-btn ${viewMode === 'thread' ? 'active' : ''}`}
-                          onClick={() => setViewMode('thread')}
-                          title="Debate thread view"
-                        >
-                          <MessageSquare size={14} />
-                          <span>Thread</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                <div className="turn-stage-toolbar">
+                  <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} compact />
+                  <StageTabs tabs={stageTabs} activeTab={activeStageTab} onChange={setActiveStageTab} />
+                  {activeStageTab !== 'web-search' && (
+                    <div className="debate-view-toggle">
+                      <button
+                        className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
+                        onClick={() => setViewMode('cards')}
+                        title="Card view"
+                      >
+                        <LayoutGrid size={14} />
+                        <span>Cards</span>
+                      </button>
+                      <button
+                        className={`view-toggle-btn ${viewMode === 'thread' ? 'active' : ''}`}
+                        onClick={() => setViewMode('thread')}
+                        title="Debate thread view"
+                      >
+                        <MessageSquare size={14} />
+                        <span>Thread</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-
-                <StageTabs tabs={stageTabs} activeTab={activeStageTab} onChange={setActiveStageTab} />
 
                 <div className="turn-stage-body">
                   {activeStageTab !== 'web-search' && activeStageTab !== 'rebuttal-rounds' && attentionStreams.length > 0 && attentionPanel}
