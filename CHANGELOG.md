@@ -7,13 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.28] - 2026-03-21
+
+### Added
+- Automatic conversation branching for edits, retries, repair actions, and replacement-model recovery started from older chats so reruns can preserve the original history in a new branch
+
 ### Changed
 - Tightened the `Turn Breakdown` accordion by collapsing progress, stage tabs, and the `Cards`/`Thread` toggle into a denser shared toolbar
 - Replaced the tall round timeline in the compact explorer header with inline status pills so debate progress stays readable without leaving a large empty band
 - In-app updates now auto-stash ordinary local edits, restore them after syncing, and prefer `npm ci` when a lockfile is present so dependency refreshes stay deterministic
+- `Turn Breakdown` now persists each turn's selected stage tab, `Cards`/`Thread` mode, explorer open state, and rebuttal layout across reloads and history branches
+- Retry, repair, replacement-model, and edit affordances now explain when working from an older conversation will create a new branch first
 
 ### Fixed
 - App updates no longer get stuck behind routine local `package-lock.json` drift from installation-only environments, while still blocking on unresolved merge conflicts and other unsafe git states
+- App update refresh/apply requests now require the local UI updater marker or `SERVER_AUTH_TOKEN`, and read-only status checks no longer use `GET` to trigger git refreshes
+- Interrupted runs waiting on the final synthesis now recover to an explicit interrupted error instead of appearing idle after reload
+- Conversation persistence under storage quota pressure now prioritizes actively running and recent chats over older completed history so interrupted sessions are less likely to disappear
+- File attachment type helpers are now split from the main file processor so the main-thread fallback stays code-split instead of being pulled into the primary app bundle
 
 ## [0.3.27] - 2026-03-19
 

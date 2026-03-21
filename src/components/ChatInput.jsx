@@ -15,7 +15,7 @@ import {
   buildAttachmentRoutingOverview,
 } from '../lib/attachmentRouting';
 import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
-import { IMAGE_TYPES, getFileCategory } from '../lib/fileProcessor';
+import { IMAGE_TYPES, getFileCategory } from '../lib/fileTypes';
 import './ChatInput.css';
 
 const FILE_INPUT_ACCEPT_PARTS = [

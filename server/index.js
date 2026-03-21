@@ -29,6 +29,8 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ALLOW_REMOTE_API = process.env.ALLOW_REMOTE_API === 'true';
 const SERVER_AUTH_TOKEN = process.env.SERVER_AUTH_TOKEN || '';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+const APP_UPDATE_REQUEST_HEADER = 'x-consensus-updater';
+const APP_UPDATE_REQUEST_HEADER_VALUE = '1';
 const OPENROUTER_WEB_PLUGIN_ID = process.env.OPENROUTER_WEB_PLUGIN_ID || 'web';
 const OPENROUTER_FILE_PLUGIN_ID = process.env.OPENROUTER_FILE_PLUGIN_ID || 'file-parser';
 const OPENROUTER_PDF_ENGINE = process.env.OPENROUTER_PDF_ENGINE || 'pdf-text';
@@ -135,6 +137,47 @@ function getTrustedClientIp(req) {
     }
   }
   return chain[0] || directIp;
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  return normalized === 'localhost' || isLoopbackIp(normalized);
+}
+
+function isTrustedLocalWebOrigin(value) {
+  if (!value) return false;
+  try {
+    const url = new URL(String(value));
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && isLoopbackHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function hasTrustedUpdateOrigin(req) {
+  const origin = req.get('origin');
+  if (isTrustedLocalWebOrigin(origin)) {
+    return true;
+  }
+  const referer = req.get('referer');
+  return isTrustedLocalWebOrigin(referer);
+}
+
+function requireTrustedUpdateRequest(req, res, next) {
+  if (hasValidServerToken(req)) {
+    next();
+    return;
+  }
+  const requestMarker = req.get(APP_UPDATE_REQUEST_HEADER);
+  if (requestMarker === APP_UPDATE_REQUEST_HEADER_VALUE && hasTrustedUpdateOrigin(req)) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    error: 'Update requests must come from the local app UI or include SERVER_AUTH_TOKEN.',
+    code: 'update_request_forbidden',
+  });
 }
 
 function createRequestAbortContext(req, res) {
@@ -2642,8 +2685,21 @@ app.get('/api/providers', (_req, res) => {
   });
 });
 
-app.get('/api/update/status', async (req, res) => {
-  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+app.get('/api/update/status', async (_req, res) => {
+  try {
+    const status = await getAppUpdateStatus({ refresh: false });
+    res.json(status);
+  } catch (error) {
+    const status = error instanceof AppUpdateError ? error.status : 500;
+    res.status(status).json({
+      error: error?.message || 'Failed to inspect app update status.',
+      code: error instanceof AppUpdateError ? error.code : 'update_status_failed',
+    });
+  }
+});
+
+app.post('/api/update/status', requireTrustedUpdateRequest, async (req, res) => {
+  const refresh = req.body?.refresh === true || req.body?.refresh === 'true';
 
   try {
     const status = await getAppUpdateStatus({ refresh });
@@ -2657,7 +2713,7 @@ app.get('/api/update/status', async (req, res) => {
   }
 });
 
-app.post('/api/update/apply', async (_req, res) => {
+app.post('/api/update/apply', requireTrustedUpdateRequest, async (_req, res) => {
   try {
     const result = await applyAppUpdate();
     res.json(result);

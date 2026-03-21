@@ -1,35 +1,9 @@
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
-export const TEXT_EXTENSIONS = [
-  '.txt', '.md', '.mdx', '.json', '.csv', '.xml', '.html', '.htm', '.css', '.js', '.jsx',
-  '.ts', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.rb',
-  '.php', '.sh', '.bash', '.zsh', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
-  '.log', '.sql', '.r', '.swift', '.kt', '.scala', '.lua', '.pl', '.m', '.env',
-  '.gitignore', '.dockerfile', '.makefile', '.rtf', '.csv', '.tsv',
-];
-export const BINARY_EXTENSIONS = ['.doc', '.docm', '.ppt', '.pptx', '.odp', '.odt', '.ods', '.pages', '.numbers', '.key'];
+import { getFileCategory } from './fileTypes.js';
+
+export { BINARY_EXTENSIONS, IMAGE_TYPES, TEXT_EXTENSIONS, getFileCategory } from './fileTypes.js';
 export const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 export const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
 export const DEFAULT_MAX_ATTACHMENTS = 16;
-
-/**
- * Determine the category of a file.
- */
-export function getFileCategory(file) {
-  if (IMAGE_TYPES.includes(file.type)) return 'image';
-  const ext = getExtension(file.name);
-  if (['.xlsx', '.xls', '.xlsm'].includes(ext)) return 'excel';
-  if (['.docx'].includes(ext)) return 'word';
-  if (['.pdf'].includes(ext)) return 'pdf';
-  if (BINARY_EXTENSIONS.includes(ext)) return 'binary';
-  if (TEXT_EXTENSIONS.includes(ext) || file.type.startsWith('text/')) return 'text';
-  // Fallback: try to read as text
-  return 'text';
-}
-
-function getExtension(filename) {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx).toLowerCase() : '';
-}
 
 /**
  * Process a file and return a structured attachment object.

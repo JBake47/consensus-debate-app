@@ -223,6 +223,54 @@ await withServer({
     });
     assert.equal(tokenResponse.status, 200);
   });
+
+  await runTest('updater mutations require the local UI marker or the server token', async () => {
+    const bareStatusResponse = await fetch(`${baseUrl}/api/update/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refresh: false }),
+    });
+    assert.equal(bareStatusResponse.status, 403);
+
+    const remoteOriginStatusResponse = await fetch(`${baseUrl}/api/update/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://evil.example',
+        'x-consensus-updater': '1',
+      },
+      body: JSON.stringify({ refresh: false }),
+    });
+    assert.equal(remoteOriginStatusResponse.status, 403);
+
+    const localUiStatusResponse = await fetch(`${baseUrl}/api/update/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'http://localhost:5173',
+        'x-consensus-updater': '1',
+      },
+      body: JSON.stringify({ refresh: false }),
+    });
+    assert.equal(localUiStatusResponse.status, 200);
+
+    const tokenStatusResponse = await fetch(`${baseUrl}/api/update/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-server-auth-token': 'server-test-token',
+      },
+      body: JSON.stringify({ refresh: false }),
+    });
+    assert.equal(tokenStatusResponse.status, 200);
+
+    const bareApplyResponse = await fetch(`${baseUrl}/api/update/apply`, {
+      method: 'POST',
+    });
+    assert.equal(bareApplyResponse.status, 403);
+  });
 });
 
 // eslint-disable-next-line no-console
