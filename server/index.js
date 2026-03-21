@@ -155,13 +155,16 @@ function isTrustedLocalWebOrigin(value) {
   }
 }
 
-function hasTrustedUpdateOrigin(req) {
+function hasOnlyTrustedUpdateOrigins(req) {
   const origin = req.get('origin');
-  if (isTrustedLocalWebOrigin(origin)) {
-    return true;
+  if (origin && !isTrustedLocalWebOrigin(origin)) {
+    return false;
   }
   const referer = req.get('referer');
-  return isTrustedLocalWebOrigin(referer);
+  if (referer && !isTrustedLocalWebOrigin(referer)) {
+    return false;
+  }
+  return true;
 }
 
 function requireTrustedUpdateRequest(req, res, next) {
@@ -169,8 +172,10 @@ function requireTrustedUpdateRequest(req, res, next) {
     next();
     return;
   }
+  const clientIp = getTrustedClientIp(req);
+  const localRequest = isLoopbackIp(clientIp);
   const requestMarker = req.get(APP_UPDATE_REQUEST_HEADER);
-  if (requestMarker === APP_UPDATE_REQUEST_HEADER_VALUE && hasTrustedUpdateOrigin(req)) {
+  if (localRequest && requestMarker === APP_UPDATE_REQUEST_HEADER_VALUE && hasOnlyTrustedUpdateOrigins(req)) {
     next();
     return;
   }

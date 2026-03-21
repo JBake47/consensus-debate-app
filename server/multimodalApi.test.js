@@ -245,6 +245,16 @@ await withServer({
     });
     assert.equal(remoteOriginStatusResponse.status, 403);
 
+    const localUiStatusWithoutOrigin = await fetch(`${baseUrl}/api/update/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-consensus-updater': '1',
+      },
+      body: JSON.stringify({ refresh: false }),
+    });
+    assert.equal(localUiStatusWithoutOrigin.status, 200);
+
     const localUiStatusResponse = await fetch(`${baseUrl}/api/update/status`, {
       method: 'POST',
       headers: {

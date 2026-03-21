@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.29] - 2026-03-21
+
+### Added
+- Regression coverage for updater status fallback behavior and localhost updater refresh requests that omit `Origin` or `Referer`
+
+### Fixed
+- App update status refreshes now fall back to the legacy `GET /api/update/status?refresh=1` flow when a newly updated frontend is still talking to an older server before restart
+- Local updater refresh requests no longer fail solely because the browser omitted `Origin` or `Referer`, while non-local origins remain blocked
+
 ## [0.3.28] - 2026-03-21
 
 ### Added
