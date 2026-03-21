@@ -28,7 +28,23 @@ const QUICK_STARTS = [
   },
 ];
 
-export default function WelcomeScreen({ onQuickStart }) {
+export default function WelcomeScreen({ loading = false, onQuickStart }) {
+  if (loading) {
+    return (
+      <div className="welcome-screen">
+        <div className="welcome-content">
+          <div className="welcome-icon">
+            <img src="/consensus.svg" alt="Consensus logo" />
+          </div>
+          <h1 className="welcome-title">Loading chats...</h1>
+          <p className="welcome-subtitle">
+            Restoring saved conversations, search indexes, and interrupted runs.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="welcome-screen">
       <div className="welcome-content">

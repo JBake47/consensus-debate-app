@@ -6,11 +6,18 @@
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: var(--space-xl);
   animation: turnFadeIn 400ms ease;
+  border-radius: var(--radius-lg);
+  scroll-margin-top: calc(var(--header-height) + 20px);
 }
 
 .debate-turn:last-child {
   border-bottom: none;
   margin-bottom: 0;
+}
+
+.debate-turn.search-target {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.45), 0 0 0 10px rgba(59, 130, 246, 0.08);
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.02));
 }
 
 @keyframes turnFadeIn {

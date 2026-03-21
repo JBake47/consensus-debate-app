@@ -225,6 +225,7 @@ export default function SettingsModal() {
   const [appUpdateState, setAppUpdateState] = useState('idle');
   const [appUpdateError, setAppUpdateError] = useState('');
   const [appUpdateResult, setAppUpdateResult] = useState(null);
+  const [activeSettingsPane, setActiveSettingsPane] = useState('general');
   const presetSheetInputRef = useRef(null);
   const presetEditorScopeRef = useRef('');
   const liveApplyReadyRef = useRef(false);
@@ -462,6 +463,41 @@ export default function SettingsModal() {
     () => formatFilePreview(appUpdateResult?.changedFiles || []),
     [appUpdateResult],
   );
+  const settingsPanes = useMemo(() => ([
+    { id: 'general', label: 'General' },
+    { id: 'models', label: 'Models' },
+    { id: 'reliability', label: 'Reliability' },
+    { id: 'budget', label: 'Budget' },
+    { id: 'performance', label: 'Performance' },
+  ]), []);
+  const appUpdateFollowUp = useMemo(() => {
+    if (!appUpdateResult) return null;
+    if (appUpdateResult.restartRequired) {
+      return {
+        tone: 'warning',
+        title: 'Restart Required',
+        description: 'The update changed backend code or dependencies. Restart this app or the local backend process on this machine to finish loading it.',
+        allowReload: false,
+      };
+    }
+    if (appUpdateResult.reloadRecommended) {
+      return {
+        tone: 'info',
+        title: 'Reload Recommended',
+        description: 'Frontend files changed. Reload the UI now if it does not refresh automatically.',
+        allowReload: true,
+      };
+    }
+    if (appUpdateResult.updated) {
+      return {
+        tone: 'success',
+        title: 'Update Complete',
+        description: 'The latest app version is installed and no restart should be required.',
+        allowReload: false,
+      };
+    }
+    return null;
+  }, [appUpdateResult]);
 
   const loadAppUpdateStatus = useCallback(async ({ refresh = true, clearResult = false } = {}) => {
     const requestId = appUpdateRequestIdRef.current + 1;
@@ -509,6 +545,11 @@ export default function SettingsModal() {
         // keep the original updater error visible
       }
     }
+  }, []);
+
+  const handleReloadUi = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.location.reload();
   }, []);
 
   const getDirectProviderFromValue = (value) => {
@@ -1039,6 +1080,23 @@ export default function SettingsModal() {
         </div>
 
         <div className="settings-body">
+          <div className="settings-pane-tabs" role="tablist" aria-label="Settings sections">
+            {settingsPanes.map((pane) => (
+              <button
+                key={pane.id}
+                type="button"
+                role="tab"
+                aria-selected={activeSettingsPane === pane.id}
+                className={`settings-pane-tab ${activeSettingsPane === pane.id ? 'active' : ''}`}
+                onClick={() => setActiveSettingsPane(pane.id)}
+              >
+                {pane.label}
+              </button>
+            ))}
+          </div>
+
+          {activeSettingsPane === 'general' && (
+            <>
           <div className="settings-section">
             <label className="settings-label">
               <Key size={14} />
@@ -1137,6 +1195,24 @@ export default function SettingsModal() {
                 </p>
               )}
 
+              {appUpdateFollowUp && (
+                <div className={`settings-update-followup ${appUpdateFollowUp.tone}`}>
+                  <div className="settings-update-followup-copy">
+                    <strong>{appUpdateFollowUp.title}</strong>
+                    <span>{appUpdateFollowUp.description}</span>
+                  </div>
+                  {appUpdateFollowUp.allowReload && (
+                    <button
+                      className="settings-btn-secondary"
+                      type="button"
+                      onClick={handleReloadUi}
+                    >
+                      Reload UI
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="settings-update-actions">
                 <button
                   className="settings-btn-secondary"
@@ -1162,6 +1238,11 @@ export default function SettingsModal() {
             </div>
           </div>
 
+            </>
+          )}
+
+          {activeSettingsPane === 'models' && (
+            <>
           <div className="settings-section">
             <label className="settings-label">
               <span>Model Presets</span>
@@ -1619,6 +1700,11 @@ export default function SettingsModal() {
             </p>
           </div>
 
+            </>
+          )}
+
+          {activeSettingsPane === 'reliability' && (
+            <>
           <div className="settings-section">
             <label className="settings-label">
               <Shield size={14} />
@@ -1739,6 +1825,11 @@ export default function SettingsModal() {
             )}
           </div>
 
+            </>
+          )}
+
+          {activeSettingsPane === 'budget' && (
+            <>
           <div className="settings-section">
             <label className="settings-label">
               <DollarSign size={14} />
@@ -1780,6 +1871,11 @@ export default function SettingsModal() {
             </div>
           </div>
 
+            </>
+          )}
+
+          {activeSettingsPane === 'performance' && (
+            <>
           <div className="settings-section">
             <label className="settings-label">
               <Gauge size={14} />
@@ -1834,6 +1930,11 @@ export default function SettingsModal() {
             </div>
           </div>
 
+            </>
+          )}
+
+          {activeSettingsPane === 'reliability' && (
+            <>
           <div className="settings-divider" />
 
           <div className="settings-section">
@@ -1869,6 +1970,8 @@ export default function SettingsModal() {
               Useful for 2-round debates so agreement/disagreement summaries still appear.
             </p>
           </div>
+            </>
+          )}
         </div>
 
         <div className="settings-footer">

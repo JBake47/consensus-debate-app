@@ -117,7 +117,13 @@ export default function ChatInput() {
     budgetSoftLimitUsd,
     budgetAutoApproveBelowUsd,
   } = useDebateSettings();
-  const { webSearchEnabled, chatMode, focusedMode, editingTurn } = useDebateUi();
+  const {
+    webSearchEnabled,
+    chatMode,
+    focusedMode,
+    editingTurn,
+    conversationStoreStatus,
+  } = useDebateUi();
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -133,6 +139,7 @@ export default function ChatInput() {
   const modeMenuRef = useRef(null);
   const fileWorkerRef = useRef(null);
   const fileWorkerRequestRef = useRef(0);
+  const conversationStoreReady = conversationStoreStatus === 'ready';
 
   // Auto-resize textarea
   useEffect(() => {
@@ -232,6 +239,7 @@ export default function ChatInput() {
   }, [ensureFileWorker, fallbackAttachment]);
 
   const handleFiles = useCallback(async (files) => {
+    if (!conversationStoreReady) return;
     const incomingFiles = Array.from(files || []);
     if (incomingFiles.length === 0) return;
     const supportedFiles = incomingFiles.filter((file) => isSupportedAttachment(file));
@@ -278,7 +286,7 @@ export default function ChatInput() {
     } finally {
       setProcessing(false);
     }
-  }, [attachments.length, processFilesInWorker, processFilesOnMainThread]);
+  }, [attachments.length, conversationStoreReady, processFilesInWorker, processFilesOnMainThread]);
 
   const removeAttachment = (index) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -287,7 +295,7 @@ export default function ChatInput() {
   const performSubmit = useCallback((payload) => {
     const trimmed = String(payload?.prompt || '').trim();
     const currentAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
-    if ((!trimmed && currentAttachments.length === 0) || debateInProgress || orchestrating) return;
+    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating) return;
     setInput('');
     setAttachments([]);
     const opts = {
@@ -337,12 +345,13 @@ export default function ChatInput() {
     startDirect,
     startParallel,
     orchestrating,
+    conversationStoreReady,
   ]);
 
   const submitWithOrchestration = useCallback(async ({ prompt, attachments: rawAttachments }) => {
     const trimmed = String(prompt || '').trim();
     const currentAttachments = Array.isArray(rawAttachments) ? rawAttachments : [];
-    if ((!trimmed && currentAttachments.length === 0) || debateInProgress || orchestrating) return;
+    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating) return;
 
     setOrchestrating(true);
     try {
@@ -369,6 +378,7 @@ export default function ChatInput() {
   }, [
     debateInProgress,
     orchestrating,
+    conversationStoreReady,
     selectedModels,
     synthesizerModel,
     providerStatus,
@@ -419,7 +429,7 @@ export default function ChatInput() {
   const anyAttachmentProcessing = attachments.some((attachment) => attachment.processingStatus === 'processing');
   const canSubmit = (!input.trim() && sendableAttachmentCount === 0)
     ? false
-    : (!debateInProgress && !orchestrating && !anyAttachmentProcessing);
+    : (conversationStoreReady && !debateInProgress && !orchestrating && !anyAttachmentProcessing);
 
   const handleSubmit = () => {
     const trimmed = input.trim();
@@ -468,9 +478,24 @@ export default function ChatInput() {
   };
 
   const modeOptions = [
-    { id: 'debate', label: 'Debate', icon: <Swords size={14} /> },
-    { id: 'direct', label: 'Ensemble', icon: <MessageSquare size={14} /> },
-    { id: 'parallel', label: 'Parallel', icon: <Layers size={14} /> },
+    {
+      id: 'debate',
+      label: 'Debate',
+      icon: <Swords size={14} />,
+      description: 'Models rebut each other across rounds, then synthesis combines the outcome.',
+    },
+    {
+      id: 'direct',
+      label: 'Ensemble',
+      icon: <MessageSquare size={14} />,
+      description: 'Fastest path to one merged answer when you want clarity over process.',
+    },
+    {
+      id: 'parallel',
+      label: 'Parallel',
+      icon: <Layers size={14} />,
+      description: 'Show each model side by side when you want to compare raw outputs yourself.',
+    },
   ];
 
   const submitLabelByMode = {
@@ -478,7 +503,6 @@ export default function ChatInput() {
     direct: 'Get Answer',
     parallel: 'Run Parallel',
   };
-
   useEffect(() => {
     if (!modeMenuOpen) return;
     const handleClickOutside = (event) => {
@@ -535,12 +559,14 @@ export default function ChatInput() {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
+    if (!conversationStoreReady) return;
     if (e.dataTransfer.files?.length > 0) {
       handleFiles(e.dataTransfer.files);
     }
   };
 
   const handlePaste = (e) => {
+    if (!conversationStoreReady) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     const files = [];
@@ -638,20 +664,20 @@ export default function ChatInput() {
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder={placeholderByMode[chatMode] || 'Ask a question...'}
+            placeholder={conversationStoreReady ? (placeholderByMode[chatMode] || 'Ask a question...') : 'Restoring chats...'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             rows={1}
-            disabled={false}
+            disabled={!conversationStoreReady}
           />
           <div className="chat-input-footer">
             <div className="chat-input-toggles">
               <button
                 className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
                 onClick={toggleWebSearch}
-                disabled={debateInProgress}
+                disabled={!conversationStoreReady || debateInProgress}
                 title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
               >
                 <Globe size={15} />
@@ -661,7 +687,7 @@ export default function ChatInput() {
                 <button
                   className="chat-mode-select"
                   onClick={() => setModeMenuOpen((open) => !open)}
-                  disabled={debateInProgress}
+                  disabled={!conversationStoreReady || debateInProgress}
                   aria-haspopup="listbox"
                   aria-expanded={modeMenuOpen}
                   type="button"
@@ -672,7 +698,7 @@ export default function ChatInput() {
                   <span>{modeOptions.find(option => option.id === chatMode)?.label || 'Mode'}</span>
                   <ChevronDown size={12} className="chat-mode-select-caret" />
                 </button>
-                {modeMenuOpen && !debateInProgress && (
+                {modeMenuOpen && conversationStoreReady && !debateInProgress && (
                   <div className="chat-mode-menu" role="listbox" aria-label="Chat mode">
                     {modeOptions.map((option) => (
                       <button
@@ -687,7 +713,10 @@ export default function ChatInput() {
                         type="button"
                       >
                         <span className="chat-mode-option-icon">{option.icon}</span>
-                        <span>{option.label}</span>
+                        <span className="chat-mode-option-copy">
+                          <span>{option.label}</span>
+                          <span className="chat-mode-option-description">{option.description}</span>
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -696,7 +725,7 @@ export default function ChatInput() {
               <button
                 className={`chat-toggle ${focusedMode ? 'active' : ''}`}
                 onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
-                disabled={debateInProgress}
+                disabled={!conversationStoreReady || debateInProgress}
                 title={focusedMode ? 'Shorter replies enabled' : 'Prefer shorter, sharper replies'}
               >
                 <Zap size={15} />
@@ -705,7 +734,7 @@ export default function ChatInput() {
               <button
                 className="chat-toggle"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={debateInProgress || processing || orchestrating}
+                disabled={!conversationStoreReady || debateInProgress || processing || orchestrating}
                 title="Attach files"
               >
                 <Paperclip size={15} />
@@ -760,6 +789,7 @@ export default function ChatInput() {
       </div>
       <p className="chat-input-hint">
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line {' | '} Drag and drop or paste files
+        {!conversationStoreReady && ' | Restoring saved chats...'}
         {anyAttachmentProcessing && ' | Processing attachments...'}
         {orchestrating && ' | Preparing multimodal tools...'}
         {budgetEstimateLabel && (

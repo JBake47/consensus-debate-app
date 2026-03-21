@@ -351,7 +351,7 @@ function getInitialTurnBreakdownState(turn, options = {}) {
   };
 }
 
-function DebateView({ turn, index, isLastTurn }) {
+function DebateView({ turn, index, isLastTurn, highlighted = false }) {
   const {
     dispatch,
     editLastTurn,
@@ -730,7 +730,7 @@ function DebateView({ turn, index, isLastTurn }) {
   );
 
   return (
-    <div className="debate-turn">
+    <div className={`debate-turn ${highlighted ? 'search-target' : ''}`.trim()}>
       {userPromptPanel}
 
       {viewerAttachment && (

@@ -27,14 +27,16 @@ function AppContent() {
   const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
   const { activeConversation, debateInProgress } = useDebateConversations();
   const { themeMode } = useDebateSettings();
-  const { webSearchEnabled, showSettings } = useDebateUi();
+  const { webSearchEnabled, showSettings, pendingTurnFocus, conversationStoreStatus } = useDebateUi();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingHeader, setEditingHeader] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [headerTitle, setHeaderTitle] = useState('');
   const [headerDesc, setHeaderDesc] = useState('');
+  const [highlightedTurnKey, setHighlightedTurnKey] = useState(null);
   const headerTitleRef = useRef(null);
   const virtuosoRef = useRef(null);
+  const highlightedTurnTimeoutRef = useRef(0);
 
   const turns = activeConversation?.turns || [];
   const conversationCostMeta = useMemo(() => (
@@ -47,6 +49,46 @@ function AppContent() {
   useEffect(() => {
     setEditingHeader(false);
   }, [activeConversation?.id]);
+
+  useEffect(() => () => {
+    if (highlightedTurnTimeoutRef.current) {
+      window.clearTimeout(highlightedTurnTimeoutRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pendingTurnFocus || activeConversation?.id !== pendingTurnFocus.conversationId) {
+      return undefined;
+    }
+
+    const requestedIndex = Number(pendingTurnFocus.turnIndex);
+    if (!Number.isInteger(requestedIndex) || requestedIndex < 0 || requestedIndex >= turns.length) {
+      dispatch({ type: 'SET_PENDING_TURN_FOCUS', payload: null });
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: requestedIndex,
+        align: 'center',
+        behavior: 'smooth',
+      });
+
+      const targetTurn = turns[requestedIndex];
+      const targetKey = targetTurn?.id || targetTurn?.timestamp || requestedIndex;
+      setHighlightedTurnKey(targetKey);
+      dispatch({ type: 'SET_PENDING_TURN_FOCUS', payload: null });
+
+      if (highlightedTurnTimeoutRef.current) {
+        window.clearTimeout(highlightedTurnTimeoutRef.current);
+      }
+      highlightedTurnTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedTurnKey(null);
+      }, 2600);
+    }, 90);
+
+    return () => window.clearTimeout(timer);
+  }, [activeConversation?.id, dispatch, pendingTurnFocus, turns]);
 
   const startHeaderEdit = () => {
     if (!activeConversation) return;
@@ -294,7 +336,10 @@ function AppContent() {
           <div className="chat-content-shell">
             <div className="main-content">
               {turns.length === 0 ? (
-                <WelcomeScreen onQuickStart={handleQuickStart} />
+                <WelcomeScreen
+                  loading={conversationStoreStatus !== 'ready'}
+                  onQuickStart={handleQuickStart}
+                />
               ) : (
                 <Virtuoso
                   ref={virtuosoRef}
@@ -311,6 +356,7 @@ function AppContent() {
                         turn={turn}
                         index={index}
                         isLastTurn={index === turns.length - 1}
+                        highlighted={highlightedTurnKey === (turn.id || turn.timestamp || index)}
                       />
                     </div>
                   )}

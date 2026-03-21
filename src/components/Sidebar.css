@@ -75,6 +75,14 @@
   padding: var(--space-sm);
 }
 
+.sidebar-virtuoso {
+  height: 100%;
+}
+
+.sidebar-virtuoso-item {
+  padding-bottom: 4px;
+}
+
 .sidebar-empty {
   display: flex;
   flex-direction: column;

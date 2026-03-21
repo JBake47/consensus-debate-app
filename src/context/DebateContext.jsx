@@ -54,6 +54,7 @@ import {
   shouldFallbackForMissingSearchEvidence,
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
+import { loadConversationStoreSnapshot, queueConversationStorePersist } from '../lib/conversationStore.js';
 import { createConversationHistoryBranch } from '../lib/conversationBranching.js';
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
 import { buildRankingTaskRequirements } from '../lib/modelRanking.js';
@@ -455,19 +456,7 @@ function migrateConversations(conversations, options = {}) {
   return { conversations: result, migrated };
 }
 
-const rawConversations = loadFromStorage(CONVERSATIONS_STORAGE_KEY, []);
-const { conversations: migratedConversations, migrated } = migrateConversations(rawConversations);
-if (migrated) {
-  persistConversationsSnapshot(localStorage, CONVERSATIONS_STORAGE_KEY, migratedConversations);
-}
 const storedActiveConversationId = loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
-const initialActiveConversationId = resolveInitialActiveConversationId(
-  migratedConversations,
-  storedActiveConversationId,
-);
-if (storedActiveConversationId !== initialActiveConversationId) {
-  saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, initialActiveConversationId);
-}
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
 const loadedRetryPolicy = normalizeRetryPolicy(loadFromStorage('retry_policy', DEFAULT_RETRY_POLICY));
@@ -528,11 +517,13 @@ const initialState = {
   providerStatusState: 'idle',
   providerStatusError: null,
   metrics: loadedMetrics,
-  conversations: migratedConversations,
-  activeConversationId: initialActiveConversationId,
+  conversations: [],
+  activeConversationId: storedActiveConversationId ?? null,
   debateInProgress: false,
   showSettings: false,
   editingTurn: null,
+  pendingTurnFocus: null,
+  conversationStoreStatus: 'loading',
 };
 
 function updateLastTurn(conversations, conversationId, updater, options = {}) {
@@ -1014,9 +1005,39 @@ function reducer(state, action) {
       const metrics = normalizeMetrics(action.payload);
       return { ...state, metrics };
     }
+    case 'HYDRATE_CONVERSATION_STORE': {
+      const rawConversations = Array.isArray(action.payload?.conversations)
+        ? action.payload.conversations
+        : [];
+      const { conversations } = migrateConversations(rawConversations);
+      const nextActiveConversationId = resolveInitialActiveConversationId(
+        conversations,
+        action.payload?.activeConversationId ?? state.activeConversationId ?? null,
+      );
+      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, nextActiveConversationId);
+      return {
+        ...state,
+        conversations,
+        activeConversationId: nextActiveConversationId,
+        conversationStoreStatus: 'ready',
+      };
+    }
+    case 'SET_CONVERSATION_STORE_STATUS': {
+      return { ...state, conversationStoreStatus: action.payload || 'ready' };
+    }
     case 'SET_ACTIVE_CONVERSATION': {
       saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, action.payload ?? null);
-      return { ...state, activeConversationId: action.payload };
+      return {
+        ...state,
+        activeConversationId: action.payload,
+        pendingTurnFocus: null,
+      };
+    }
+    case 'SET_PENDING_TURN_FOCUS': {
+      return {
+        ...state,
+        pendingTurnFocus: action.payload ?? null,
+      };
     }
     case 'UPDATE_TURN_UI_STATE': {
       const {
@@ -1506,9 +1527,11 @@ export function DebateProvider({ children }) {
   const responseCacheRef = useRef(loadedResponseCache);
   const providerCircuitRef = useRef({});
   const conversationsRef = useRef(state.conversations);
+  const activeConversationIdRef = useRef(state.activeConversationId);
   const liveRunScopesRef = useRef([]);
   const lastConversationPersistAtRef = useRef(0);
   const lastRunHeartbeatAtRef = useRef(0);
+  const recoveredInterruptedRunsRef = useRef(false);
   const metricsRef = useRef(state.metrics);
   const cacheStatsRef = useRef({
     cacheHitCount: state.cacheHitCount,
@@ -1537,12 +1560,72 @@ export function DebateProvider({ children }) {
   }, [state.themeMode]);
 
   useEffect(() => {
-    dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
+    let cancelled = false;
+
+    const hydrateConversationStore = async () => {
+      let snapshot = await loadConversationStoreSnapshot();
+
+      if (!snapshot) {
+        const legacyConversations = loadFromStorage(CONVERSATIONS_STORAGE_KEY, []);
+        const { conversations: migratedLegacy, migrated } = migrateConversations(
+          Array.isArray(legacyConversations) ? legacyConversations : [],
+        );
+        const legacyActiveConversationId = resolveInitialActiveConversationId(
+          migratedLegacy,
+          loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY),
+        );
+
+        if (migratedLegacy.length > 0) {
+          const persistResult = await queueConversationStorePersist({
+            conversations: migratedLegacy,
+            activeConversationId: legacyActiveConversationId,
+          });
+          if (persistResult?.ok) {
+            localStorage.removeItem(CONVERSATIONS_STORAGE_KEY);
+          } else if (migrated) {
+            persistConversationsSnapshot(localStorage, CONVERSATIONS_STORAGE_KEY, migratedLegacy);
+          }
+        }
+
+        snapshot = {
+          conversations: migratedLegacy,
+          activeConversationId: legacyActiveConversationId,
+        };
+      } else {
+        localStorage.removeItem(CONVERSATIONS_STORAGE_KEY);
+      }
+
+      if (cancelled) return;
+
+      if (snapshot) {
+        dispatch({ type: 'HYDRATE_CONVERSATION_STORE', payload: snapshot });
+      } else {
+        dispatch({ type: 'SET_CONVERSATION_STORE_STATUS', payload: 'ready' });
+      }
+    };
+
+    hydrateConversationStore();
+
+    return () => {
+      cancelled = true;
+    };
   }, [dispatch]);
+
+  useEffect(() => {
+    if (state.conversationStoreStatus !== 'ready' || recoveredInterruptedRunsRef.current) {
+      return;
+    }
+    recoveredInterruptedRunsRef.current = true;
+    dispatch({ type: 'RECOVER_INTERRUPTED_RUNS' });
+  }, [dispatch, state.conversationStoreStatus]);
 
   useLayoutEffect(() => {
     conversationsRef.current = state.conversations;
   }, [state.conversations]);
+
+  useLayoutEffect(() => {
+    activeConversationIdRef.current = state.activeConversationId;
+  }, [state.activeConversationId]);
 
   useLayoutEffect(() => {
     liveRunScopesRef.current = liveRunScopes;
@@ -1559,7 +1642,7 @@ export function DebateProvider({ children }) {
     };
   }, [state.cacheHitCount, state.cacheEntryCount]);
 
-  const persistConversationsNow = useCallback(() => {
+  const persistConversationsFallbackNow = useCallback(() => {
     if (typeof window === 'undefined') return false;
     const result = persistConversationsSnapshot(
       window.localStorage,
@@ -1571,6 +1654,23 @@ export function DebateProvider({ children }) {
     }
     return result.ok;
   }, []);
+
+  const persistConversationsNow = useCallback(async () => {
+    if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return false;
+
+    const result = await queueConversationStorePersist({
+      conversations: conversationsRef.current,
+      activeConversationId: activeConversationIdRef.current ?? null,
+    });
+
+    if (result?.ok) {
+      lastConversationPersistAtRef.current = Date.now();
+      window.localStorage.removeItem(CONVERSATIONS_STORAGE_KEY);
+      return true;
+    }
+
+    return persistConversationsFallbackNow();
+  }, [persistConversationsFallbackNow, state.conversationStoreStatus]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1600,16 +1700,19 @@ export function DebateProvider({ children }) {
   }, []);
 
   useLayoutEffect(() => {
+    if (state.conversationStoreStatus !== 'ready') {
+      return;
+    }
     if (!liveRunScopesKey) {
       lastRunHeartbeatAtRef.current = 0;
       return;
     }
     lastRunHeartbeatAtRef.current = Date.now();
     persistConversationsNow();
-  }, [liveRunScopesKey, persistConversationsNow]);
+  }, [liveRunScopesKey, persistConversationsNow, state.conversationStoreStatus]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
+    if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return undefined;
 
     const tickLiveRuns = () => {
       if (document.visibilityState === 'hidden') {
@@ -1667,10 +1770,10 @@ export function DebateProvider({ children }) {
 
     const intervalId = window.setInterval(tickLiveRuns, LIVE_RUN_TICK_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [abortConversationRun, dispatch, persistConversationsNow]);
+  }, [abortConversationRun, dispatch, persistConversationsNow, state.conversationStoreStatus]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
+    if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return undefined;
     if (liveRunScopes.length > 0) {
       return undefined;
     }
@@ -1693,13 +1796,14 @@ export function DebateProvider({ children }) {
         window.cancelIdleCallback(idleId);
       }
     };
-  }, [liveRunScopes.length, persistConversationsNow, state.conversations]);
+  }, [liveRunScopes.length, persistConversationsNow, state.conversationStoreStatus, state.conversations]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
+    if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return undefined;
 
     const flushConversations = () => {
       persistConversationsNow();
+      persistConversationsFallbackNow();
     };
     const flushWhenHidden = () => {
       if (document.visibilityState === 'hidden') {
@@ -1718,7 +1822,7 @@ export function DebateProvider({ children }) {
       window.removeEventListener('beforeunload', flushConversations);
       document.removeEventListener('freeze', flushConversations);
     };
-  }, [persistConversationsNow]);
+  }, [persistConversationsFallbackNow, persistConversationsNow, state.conversationStoreStatus]);
 
   const syncCacheStats = useCallback((partial = {}) => {
     const next = {
@@ -5873,12 +5977,16 @@ export function DebateProvider({ children }) {
     webSearchEnabled: state.webSearchEnabled,
     chatMode: state.chatMode,
     focusedMode: state.focusedMode,
+    pendingTurnFocus: state.pendingTurnFocus,
+    conversationStoreStatus: state.conversationStoreStatus,
   }), [
     state.showSettings,
     state.editingTurn,
     state.webSearchEnabled,
     state.chatMode,
     state.focusedMode,
+    state.pendingTurnFocus,
+    state.conversationStoreStatus,
   ]);
 
   const conversationList = useMemo(
@@ -6013,4 +6121,3 @@ export function useDebate() {
     ...useDebateActions(),
   };
 }
-

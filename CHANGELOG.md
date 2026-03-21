@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-03-21
+
+### Added
+- IndexedDB-backed conversation snapshots with a restore state that rehydrates saved chats and interrupted runs without blocking on localStorage size limits
+- Sidebar search can now open a matched chat, jump to the exact turn, and briefly highlight the result in the main timeline
+
+### Changed
+- Settings is split into focused panes for general app controls, model selection, reliability, budget, and performance tuning
+- The sidebar now virtualizes long chat histories, and markdown rendering loads its heavier parser/rendering stack lazily
+- Chat mode descriptions stay in the mode picker instead of repeating as a persistent composer info bar
+
+### Fixed
+- Sidebar search now rebuilds correctly as queries change instead of staying empty until the conversation list changes
+- The composer now waits for saved chats to finish restoring before allowing sends or attachments, preventing a startup hydration race from overwriting a new prompt
+
 ## [0.3.29] - 2026-03-21
 
 ### Added
