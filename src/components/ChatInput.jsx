@@ -849,9 +849,6 @@ export default function ChatInput() {
                   </div>
                 )}
               </div>
-              <span className="chat-mode-helper" aria-live="polite">
-                <strong>{selectedModeOption?.label || 'Mode'}:</strong> {selectedModeOption?.description}
-              </span>
               <button
                 className={`chat-toggle ${focusedMode ? 'active' : ''}`}
                 onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}

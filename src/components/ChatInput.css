@@ -271,18 +271,6 @@
   color: var(--accent-cyan);
 }
 
-.chat-mode-helper {
-  font-size: 10px;
-  line-height: 1.45;
-  color: var(--text-tertiary);
-  max-width: min(340px, 100%);
-}
-
-.chat-mode-helper strong {
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
 .chat-mode-option-icon {
   display: inline-flex;
   align-items: center;
@@ -482,9 +470,6 @@
     min-width: 180px;
   }
 
-  .chat-mode-helper {
-    flex-basis: 100%;
-  }
 }
 
 @media (max-width: 640px) {
