@@ -4,7 +4,6 @@ import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pen
 import { useDebateActions, useDebateConversationList } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
-import { exportConversationReport } from '../lib/reportExport';
 import { sortSidebarConversations } from '../lib/sidebarOrdering';
 import './Sidebar.css';
 
@@ -175,10 +174,28 @@ export default function Sidebar({ open, onClose }) {
     );
   };
 
-  const handleShareReport = (e, conv) => {
-    e.stopPropagation();
+  const handleSelectableKeyDown = (event, callback) => {
+    if (event.defaultPrevented || event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    callback?.();
+  };
+
+  const handleConversationKeyDown = (event, conversationId) => {
+    handleSelectableKeyDown(event, () => {
+      if (editingId === conversationId) return;
+      handleSelect(conversationId);
+    });
+  };
+
+  const handleSearchResultKeyDown = (event, result) => {
+    handleSelectableKeyDown(event, () => handleSearchResultClick(result));
+  };
+
+  const handleShareReportAsync = async (conv) => {
     const fullConversation = getConversationById?.(conv.id);
     if (!fullConversation) return;
+    const { exportConversationReport } = await import('../lib/reportExport');
     exportConversationReport(fullConversation);
   };
 
@@ -223,6 +240,10 @@ export default function Sidebar({ open, onClose }) {
         key={conv.id}
         className={`sidebar-item ${conv.id === activeConversationId ? 'active' : ''} ${conversationRunning ? 'in-progress' : ''}`}
         onClick={() => editingId !== conv.id && handleSelect(conv.id)}
+        onKeyDown={editingId === conv.id ? undefined : (event) => handleConversationKeyDown(event, conv.id)}
+        role={editingId === conv.id ? undefined : 'button'}
+        tabIndex={editingId === conv.id ? undefined : 0}
+        aria-current={conv.id === activeConversationId ? 'page' : undefined}
       >
         <MessageSquare size={14} />
         {editingId === conv.id ? (
@@ -243,10 +264,10 @@ export default function Sidebar({ open, onClose }) {
               placeholder="Short description (optional)"
             />
             <div className="sidebar-edit-actions">
-              <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} title="Save">
+              <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} title="Save" type="button">
                 <Check size={12} />
               </button>
-              <button className="sidebar-edit-btn cancel" onClick={cancelEdit} title="Cancel">
+              <button className="sidebar-edit-btn cancel" onClick={cancelEdit} title="Cancel" type="button">
                 <X size={12} />
               </button>
             </div>
@@ -269,14 +290,19 @@ export default function Sidebar({ open, onClose }) {
               className="sidebar-item-action edit"
               onClick={e => startEditing(e, conv)}
               title="Edit title"
+              type="button"
             >
               <Pencil size={12} />
             </button>
           )}
           <button
             className="sidebar-item-action share"
-            onClick={e => handleShareReport(e, conv)}
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleShareReportAsync(conv);
+            }}
             title="Export report"
+            type="button"
           >
             <Share2 size={12} />
           </button>
@@ -284,6 +310,7 @@ export default function Sidebar({ open, onClose }) {
             className="sidebar-item-action export"
             onClick={e => handleExportOne(e, conv)}
             title="Export chat"
+            type="button"
           >
             <Download size={12} />
           </button>
@@ -292,6 +319,7 @@ export default function Sidebar({ open, onClose }) {
             onClick={e => handleDelete(e, conv)}
             title={conversationRunning ? 'Stop this chat before deleting' : 'Delete'}
             disabled={conversationRunning}
+            type="button"
           >
             <Trash2 size={12} />
           </button>
@@ -303,10 +331,10 @@ export default function Sidebar({ open, onClose }) {
               {conv.title || 'Untitled chat'}
             </div>
             <div className="sidebar-inline-confirm-actions">
-              <button className="sidebar-inline-confirm-btn ghost" onClick={closeDeleteModal}>
+              <button className="sidebar-inline-confirm-btn ghost" onClick={closeDeleteModal} type="button">
                 Cancel
               </button>
-              <button className="sidebar-inline-confirm-btn danger" onClick={confirmDelete}>
+              <button className="sidebar-inline-confirm-btn danger" onClick={confirmDelete} type="button">
                 Delete
               </button>
             </div>
@@ -319,13 +347,13 @@ export default function Sidebar({ open, onClose }) {
   return (
     <>
       {open && <div className="sidebar-overlay" onClick={onClose} />}
-      <aside className={`sidebar ${open ? 'open' : ''}`}>
+      <aside id="app-sidebar" className={`sidebar ${open ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
             <img className="sidebar-logo-mark" src="/consensus.svg" alt="Consensus logo" />
             <span>Consensus</span>
           </div>
-          <button className="sidebar-btn" onClick={handleNew} title="New debate">
+          <button className="sidebar-btn" onClick={handleNew} title="New debate" type="button">
             <Plus size={18} />
           </button>
         </div>
@@ -342,7 +370,7 @@ export default function Sidebar({ open, onClose }) {
                 onChange={e => setSearchQuery(e.target.value)}
               />
               {searchQuery && (
-                <button className="sidebar-search-clear" onClick={() => setSearchQuery('')}>
+                <button className="sidebar-search-clear" onClick={() => setSearchQuery('')} type="button">
                   <X size={14} />
                 </button>
               )}
@@ -362,6 +390,10 @@ export default function Sidebar({ open, onClose }) {
                   key={result.conversationId}
                   className={`sidebar-item ${result.conversationId === activeConversationId ? 'active' : ''}`}
                   onClick={() => handleSearchResultClick(result)}
+                  onKeyDown={(event) => handleSearchResultKeyDown(event, result)}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={result.conversationId === activeConversationId ? 'page' : undefined}
                 >
                   <Search size={14} />
                   <div className="sidebar-item-text">
@@ -410,6 +442,7 @@ export default function Sidebar({ open, onClose }) {
               onClick={handleExportAll}
               disabled={conversations.length === 0}
               title="Export chats"
+              type="button"
             >
               <Download size={15} />
             </button>
@@ -417,6 +450,7 @@ export default function Sidebar({ open, onClose }) {
               className="sidebar-footer-btn-icon"
               onClick={() => importInputRef.current?.click()}
               title="Import chats"
+              type="button"
             >
               <Upload size={15} />
             </button>
@@ -428,7 +462,7 @@ export default function Sidebar({ open, onClose }) {
               onChange={handleImport}
             />
           </div>
-          <button className="sidebar-footer-btn" onClick={handleSettings}>
+          <button className="sidebar-footer-btn" onClick={handleSettings} type="button">
             <Settings size={16} />
             <span>Settings</span>
           </button>

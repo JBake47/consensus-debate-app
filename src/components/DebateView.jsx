@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { User, Globe, ChevronDown, ChevronUp, Loader2, AlertCircle, Pencil, RotateCcw, LayoutGrid, MessageSquare } from 'lucide-react';
 import { useDebateActions, useDebateConversations, useDebateSettings } from '../context/DebateContext';
@@ -13,8 +13,6 @@ import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import EnsembleResultPanel from './EnsembleResultPanel';
 import AttachmentCard from './AttachmentCard';
-import AttachmentViewer from './AttachmentViewer';
-import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
@@ -32,6 +30,9 @@ import {
   getCostQualityDescription,
 } from '../lib/formatTokens';
 import './DebateView.css';
+
+const AttachmentViewer = lazy(() => import('./AttachmentViewer'));
+const ResponseViewerModal = lazy(() => import('./ResponseViewerModal'));
 
 function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null, branchesConversation = false }) {
   const [collapsed, setCollapsed] = useState(true);
@@ -118,9 +119,11 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null, bra
   );
 
   return viewerOpen ? (
-    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title="Web Search">
-      {panel}
-    </ResponseViewerModal>
+    <Suspense fallback={panel}>
+      <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title="Web Search">
+        {panel}
+      </ResponseViewerModal>
+    </Suspense>
   ) : panel;
 }
 
@@ -734,7 +737,9 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
       {userPromptPanel}
 
       {viewerAttachment && (
-        <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+        <Suspense fallback={null}>
+          <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+        </Suspense>
       )}
 
       {showTabbedStages ? (

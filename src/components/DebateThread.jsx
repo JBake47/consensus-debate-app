@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useMemo } from 'react';
+import { lazy, memo, Suspense, useState, useRef, useEffect, useMemo } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { ChevronDown, ChevronUp, Loader2, AlertCircle, Brain, Globe, RotateCcw } from 'lucide-react';
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
@@ -7,7 +7,6 @@ import CopyButton from './CopyButton';
 import ConvergencePanel from './ConvergencePanel';
 import ExpandButton from './ExpandButton';
 import ReplaceModelButton from './ReplaceModelButton';
-import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
 import { getRetryScopeDescription, getStreamDisplayState } from '../lib/retryState';
@@ -19,6 +18,8 @@ import {
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './DebateThread.css';
+
+const ResponseViewerModal = lazy(() => import('./ResponseViewerModal'));
 
 const THREAD_VIRTUALIZATION_THRESHOLD = 18;
 
@@ -259,9 +260,11 @@ function ThreadMessage({
   );
 
   return viewerOpen ? (
-    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
-      {message}
-    </ResponseViewerModal>
+    <Suspense fallback={message}>
+      <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
+        {message}
+      </ResponseViewerModal>
+    </Suspense>
   ) : message;
 }
 

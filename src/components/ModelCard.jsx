@@ -1,11 +1,10 @@
-import { memo, useRef, useEffect, useState, useMemo } from 'react';
+import { lazy, memo, Suspense, useRef, useEffect, useState, useMemo } from 'react';
 import { ChevronDown, ChevronUp, AlertCircle, Loader2, RotateCcw, Brain, Globe, Link2 } from 'lucide-react';
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ExpandButton from './ExpandButton';
 import ReplaceModelButton from './ReplaceModelButton';
-import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName, getProviderName, getModelColor } from '../lib/openrouter';
 import { extractCitations } from '../lib/citationInspector';
 import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
@@ -18,6 +17,8 @@ import {
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './ModelCard.css';
+
+const ResponseViewerModal = lazy(() => import('./ResponseViewerModal'));
 
 function isReasoningModel(modelId) {
   const id = modelId.toLowerCase();
@@ -430,9 +431,11 @@ function ModelCard({
   );
 
   return viewerOpen ? (
-    <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
-      {card}
-    </ResponseViewerModal>
+    <Suspense fallback={card}>
+      <ResponseViewerModal open={viewerOpen} onClose={() => setViewerOpen(false)} title={displayName}>
+        {card}
+      </ResponseViewerModal>
+    </Suspense>
   ) : card;
 }
 

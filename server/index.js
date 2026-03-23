@@ -20,6 +20,7 @@ import {
 import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
 import { buildOpenRouterPlugins } from './openrouterPayload.js';
 import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateManager.js';
+import { createModelCatalogCache, DEFAULT_MODEL_CATALOG_CACHE_TTL_MS, filterModelCatalog } from './modelCatalog.js';
 
 dotenv.config();
 
@@ -53,6 +54,7 @@ const GENERATE_INTENT_REGEX = /\b(generate|create|make|produce|export|output|sav
 const DOC_GENERATION_MAX_BYTES = Number(process.env.DOC_GENERATION_MAX_BYTES || 12 * 1024 * 1024);
 const FILE_TEXT_EXTRACTION_MAX_BYTES = Number(process.env.FILE_TEXT_EXTRACTION_MAX_BYTES || 12 * 1024 * 1024);
 const ARTIFACT_TTL_MS = Number(process.env.ARTIFACT_TTL_MS || 24 * 60 * 60 * 1000);
+const MODEL_CATALOG_CACHE_TTL_MS = Number(process.env.MODEL_CATALOG_CACHE_TTL_MS || DEFAULT_MODEL_CATALOG_CACHE_TTL_MS);
 const ARTIFACT_STORE_DIR = process.env.ARTIFACT_STORE_DIR
   ? path.resolve(process.env.ARTIFACT_STORE_DIR)
   : path.join(process.cwd(), 'server', '.artifacts');
@@ -69,6 +71,7 @@ app.use(express.json({ limit: '60mb' }));
 const artifactStore = new Map();
 const multimodalJobs = new Map();
 const multimodalJobFingerprints = new Map();
+const modelCatalogCache = createModelCatalogCache({ ttlMs: MODEL_CATALOG_CACHE_TTL_MS });
 const multimodalQueue = [];
 let multimodalWorkerRunning = false;
 const providerHealth = {
@@ -2611,18 +2614,9 @@ app.get('/api/models', async (_req, res) => {
   }
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-    if (!response.ok) {
-      const bodyText = await response.text();
-      res.status(500).json({ error: bodyText || 'Failed to fetch models' });
-      return;
-    }
-    const data = await response.json();
-    res.json(data);
+    const models = await modelCatalogCache.get(apiKey);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.json({ data: models });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to fetch models' });
   }
@@ -2635,47 +2629,15 @@ app.get('/api/models/search', async (req, res) => {
     return;
   }
 
-  const query = String(req.query.q || '').toLowerCase().trim();
-  const provider = String(req.query.provider || '').toLowerCase().trim();
-  const parsedLimit = Number(req.query.limit);
-  const parsedOffset = Number(req.query.offset);
-  const limit = Number.isFinite(parsedLimit)
-    ? Math.min(Math.max(Math.floor(parsedLimit), 0), 500)
-    : 200;
-  const offset = Number.isFinite(parsedOffset)
-    ? Math.max(Math.floor(parsedOffset), 0)
-    : 0;
-
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
-    if (!response.ok) {
-      const bodyText = await response.text();
-      res.status(500).json({ error: bodyText || 'Failed to fetch models' });
-      return;
-    }
-    const data = await response.json();
-    let models = data.data || [];
-    if (provider) {
-      models = models.filter(m => {
-        const id = (m.id || '').toLowerCase();
-        return id.startsWith(`${provider}/`);
-      });
-    }
-    if (query) {
-      models = models.filter(m => {
-        const id = (m.id || '').toLowerCase();
-        const name = (m.name || '').toLowerCase();
-        const description = (m.description || '').toLowerCase();
-        return id.includes(query) || name.includes(query) || description.includes(query);
-      });
-    }
-    const total = models.length;
-    const sliced = models.slice(offset, offset + limit);
-    res.json({ data: sliced, total });
+    const models = await modelCatalogCache.get(apiKey);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.json(filterModelCatalog(models, {
+      query: req.query.q,
+      provider: req.query.provider,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to fetch models' });
   }

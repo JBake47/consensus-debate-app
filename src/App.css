@@ -66,6 +66,11 @@
   background: var(--bg-glass-hover);
 }
 
+.menu-toggle:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
+}
+
 .main-header-title-group {
   display: flex;
   align-items: center;
@@ -79,6 +84,12 @@
 }
 
 .main-header-title-group:hover {
+  background: var(--bg-glass-hover);
+}
+
+.main-header-title-group:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
   background: var(--bg-glass-hover);
 }
 
@@ -223,6 +234,12 @@
   border-color: var(--border-medium);
   color: var(--text-primary);
   background: var(--bg-glass-hover);
+}
+
+.main-header-theme:focus-visible,
+.main-header-share:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
 }
 
 .main-header-share {

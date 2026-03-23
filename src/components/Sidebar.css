@@ -112,6 +112,12 @@
   background: var(--bg-glass);
 }
 
+.sidebar-item:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
+  background: var(--bg-glass);
+}
+
 .sidebar-item.active {
   background: var(--bg-glass-active);
   color: var(--text-primary);
@@ -197,6 +203,16 @@
 .sidebar-item-action:disabled:hover {
   color: var(--text-muted);
   background: none;
+}
+
+.sidebar-item-action:focus-visible,
+.sidebar-btn:focus-visible,
+.sidebar-search-clear:focus-visible,
+.sidebar-footer-btn:focus-visible,
+.sidebar-footer-btn-icon:focus-visible,
+.sidebar-inline-confirm-btn:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
 }
 
 .sidebar-item-action.edit:hover {

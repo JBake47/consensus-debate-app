@@ -53,13 +53,23 @@ A React application with an optional Node proxy that can route requests to OpenR
 
 ### Installation
 
-1. Clone the repository:
+1. Authenticate that computer to GitHub for this private repository.
+   - Recommended: configure SSH access for GitHub.
+   - Alternative: use HTTPS with Git Credential Manager or `gh auth login`.
+
+2. Clone the repository:
+```bash
+git clone git@github.com:JBake47/openrouter-debate-app.git
+cd openrouter-debate-app
+```
+
+HTTPS also works if credentials are already configured:
 ```bash
 git clone https://github.com/JBake47/openrouter-debate-app.git
 cd openrouter-debate-app
 ```
 
-2. Install dependencies:
+3. Install dependencies:
 ```bash
 npm install
 ```
@@ -67,6 +77,8 @@ npm install
 ### Updating an Existing Clone (Other Computers)
 
 `npm install` only updates dependencies. It does not pull new code changes.
+
+Each computer must already have GitHub access to this private repository. The in-app updater uses the same local Git credentials and does not open an interactive login prompt.
 
 Use this sequence to sync your local copy with GitHub:
 
@@ -85,7 +97,13 @@ npm test
 npm run build
 ```
 
-You can also use the in-app updater in **Settings > App Updates**. It runs `git pull --ff-only`, refreshes dependencies with `npm ci` when a lockfile is present, and auto-stashes ordinary local edits before restoring them after the update. It still refuses to run when the clone has unresolved merge conflicts or the branch needs manual reconciliation.
+If this repo was changed from public to private and the remote URL stayed the same, existing clones usually continue to work once Git credentials are configured on that machine. If you moved to a different private repo, update the remote first:
+
+```bash
+git remote set-url origin git@github.com:JBake47/openrouter-debate-app.git
+```
+
+You can also use the in-app updater in **Settings > App Updates**. It runs `git fetch --prune` to check for updates, then `git pull --ff-only`, refreshes dependencies with `npm ci` when a lockfile is present, and auto-stashes ordinary local edits before restoring them after the update. It still refuses to run when the clone has unresolved merge conflicts, the branch needs manual reconciliation, or GitHub authentication is not already working in that local clone.
 
 If you have local uncommitted work first:
 

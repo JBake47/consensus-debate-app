@@ -1,4 +1,4 @@
-import { Cpu, RotateCcw, Sparkles, ArrowRight } from 'lucide-react';
+import { Cpu, RotateCcw, Sparkles, ArrowRight, Settings2 } from 'lucide-react';
 import './WelcomeScreen.css';
 
 const QUICK_STARTS = [
@@ -28,7 +28,12 @@ const QUICK_STARTS = [
   },
 ];
 
-export default function WelcomeScreen({ loading = false, onQuickStart }) {
+export default function WelcomeScreen({
+  loading = false,
+  onQuickStart,
+  requiresProviderSetup = false,
+  onOpenSettings,
+}) {
   if (loading) {
     return (
       <div className="welcome-screen">
@@ -55,6 +60,19 @@ export default function WelcomeScreen({ loading = false, onQuickStart }) {
         <p className="welcome-subtitle">
           Compare multiple AI models three ways: run them in parallel, get one ensemble answer, or hold a debate.
         </p>
+
+        {requiresProviderSetup && (
+          <div className="welcome-setup glass-panel">
+            <div className="welcome-setup-copy">
+              <strong>Connect a provider first.</strong>
+              <span>Add an OpenRouter API key or enable a direct provider in Settings before sending.</span>
+            </div>
+            <button className="welcome-setup-btn" onClick={() => onOpenSettings?.()} type="button">
+              <Settings2 size={14} />
+              <span>Open Settings</span>
+            </button>
+          </div>
+        )}
 
         <div className="welcome-quick-starts">
           {QUICK_STARTS.map((item) => (

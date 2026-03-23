@@ -13,10 +13,12 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [page, setPage] = useState(0);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
 
   useEffect(() => {
     if (!open) return;
     setQuery('');
+    setDebouncedQuery('');
     setResults([]);
     setTotal(0);
     setPage(0);
@@ -25,18 +27,34 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
 
   useEffect(() => {
     if (!open) return;
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [open, query]);
+
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError('');
     const providerFilter = provider === 'openrouter' ? '' : (provider === 'gemini' ? 'google' : provider);
-    searchModels({ query, provider: providerFilter, limit: PAGE_SIZE, offset: page * PAGE_SIZE, apiKey })
+    searchModels({
+      query: debouncedQuery,
+      provider: providerFilter,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+      apiKey,
+      signal: controller.signal,
+    })
       .then((data) => {
         if (cancelled) return;
         setResults(data.data || []);
         setTotal(data.total || 0);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || err?.name === 'AbortError') return;
         setError(err.message || 'Failed to load models');
       })
       .finally(() => {
@@ -44,8 +62,9 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [open, query, page, apiKey, provider]);
+  }, [open, debouncedQuery, page, apiKey, provider]);
 
   const pageCount = useMemo(() => {
     if (!total) return 1;
@@ -67,7 +86,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
       <div className="model-picker-modal glass-panel" onClick={(e) => e.stopPropagation()}>
         <div className="model-picker-header">
           <h3>Browse {titleSuffix} Models</h3>
-          <button className="model-picker-close" onClick={onClose} aria-label="Close">
+          <button className="model-picker-close" onClick={onClose} aria-label="Close" type="button">
             <X size={16} />
           </button>
         </div>
@@ -133,7 +152,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
                         ))}
                       </div>
                     </div>
-                    <button className="model-picker-add" onClick={() => onAdd(model.id)}>
+                    <button className="model-picker-add" onClick={() => onAdd(model.id)} type="button">
                       <Plus size={14} />
                       Add
                     </button>
@@ -150,6 +169,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
               className="model-picker-page"
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
+              type="button"
             >
               Prev
             </button>
@@ -158,6 +178,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
               className="model-picker-page"
               onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
               disabled={page >= pageCount - 1}
+              type="button"
             >
               Next
             </button>

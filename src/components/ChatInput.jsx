@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { lazy, Suspense, useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Swords, Square, Globe, Paperclip, X, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
 import {
   useDebateActions,
@@ -9,7 +9,6 @@ import {
 import { estimateTurnBudget } from '../lib/budgetEstimator';
 import { formatCostWithQuality } from '../lib/formatTokens';
 import AttachmentCard from './AttachmentCard';
-import AttachmentViewer from './AttachmentViewer';
 import {
   DEFAULT_MAX_ATTACHMENTS,
   buildAttachmentRoutingOverview,
@@ -17,6 +16,8 @@ import {
 import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
 import { IMAGE_TYPES, getFileCategory } from '../lib/fileTypes';
 import './ChatInput.css';
+
+const AttachmentViewer = lazy(() => import('./AttachmentViewer'));
 
 const FILE_INPUT_ACCEPT_PARTS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
@@ -108,6 +109,7 @@ export default function ChatInput() {
     selectedModels,
     modelCatalog,
     providerStatus,
+    providerStatusState,
     capabilityRegistry,
     synthesizerModel,
     convergenceModel,
@@ -137,9 +139,15 @@ export default function ChatInput() {
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
+  const modeMenuButtonRef = useRef(null);
+  const modeOptionRefs = useRef([]);
   const fileWorkerRef = useRef(null);
   const fileWorkerRequestRef = useRef(0);
   const conversationStoreReady = conversationStoreStatus === 'ready';
+  const hasConfiguredProvider = Boolean(String(apiKey || '').trim())
+    || Object.values(providerStatus || {}).some(Boolean);
+  const providerStateReady = providerStatusState === 'ready';
+  const requiresProviderSetup = providerStateReady && !hasConfiguredProvider;
 
   // Auto-resize textarea
   useEffect(() => {
@@ -295,7 +303,7 @@ export default function ChatInput() {
   const performSubmit = useCallback((payload) => {
     const trimmed = String(payload?.prompt || '').trim();
     const currentAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
-    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating) return;
+    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating || requiresProviderSetup) return;
     setInput('');
     setAttachments([]);
     const opts = {
@@ -346,12 +354,13 @@ export default function ChatInput() {
     startParallel,
     orchestrating,
     conversationStoreReady,
+    requiresProviderSetup,
   ]);
 
   const submitWithOrchestration = useCallback(async ({ prompt, attachments: rawAttachments }) => {
     const trimmed = String(prompt || '').trim();
     const currentAttachments = Array.isArray(rawAttachments) ? rawAttachments : [];
-    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating) return;
+    if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating || requiresProviderSetup) return;
 
     setOrchestrating(true);
     try {
@@ -384,6 +393,7 @@ export default function ChatInput() {
     providerStatus,
     apiKey,
     performSubmit,
+    requiresProviderSetup,
   ]);
 
   const budgetEstimate = useMemo(() => estimateTurnBudget({
@@ -429,11 +439,11 @@ export default function ChatInput() {
   const anyAttachmentProcessing = attachments.some((attachment) => attachment.processingStatus === 'processing');
   const canSubmit = (!input.trim() && sendableAttachmentCount === 0)
     ? false
-    : (conversationStoreReady && !debateInProgress && !orchestrating && !anyAttachmentProcessing);
+    : (conversationStoreReady && !debateInProgress && !orchestrating && !anyAttachmentProcessing && !requiresProviderSetup);
 
   const handleSubmit = () => {
     const trimmed = input.trim();
-    if ((!trimmed && sendableAttachmentCount === 0) || debateInProgress || orchestrating || anyAttachmentProcessing) return;
+    if ((!trimmed && sendableAttachmentCount === 0) || debateInProgress || orchestrating || anyAttachmentProcessing || requiresProviderSetup) return;
 
     const estimatedCost = Number(budgetEstimate.totalEstimatedCost || 0);
     const softLimit = Number(budgetSoftLimitUsd || 0);
@@ -503,16 +513,45 @@ export default function ChatInput() {
     direct: 'Get Answer',
     parallel: 'Run Parallel',
   };
+  const selectedModeIndex = Math.max(0, modeOptions.findIndex((option) => option.id === chatMode));
+  const selectedModeOption = modeOptions[selectedModeIndex] || modeOptions[0];
+
+  const focusModeOption = useCallback((index) => {
+    requestAnimationFrame(() => {
+      modeOptionRefs.current[index]?.focus();
+    });
+  }, []);
+
+  const closeModeMenu = useCallback((restoreFocus = false) => {
+    setModeMenuOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => {
+        modeMenuButtonRef.current?.focus();
+      });
+    }
+  }, []);
+
+  const selectModeOption = useCallback((mode) => {
+    setChatMode(mode);
+    closeModeMenu(true);
+  }, [closeModeMenu]);
+
+  const openModeMenu = useCallback((index = selectedModeIndex) => {
+    if (!conversationStoreReady || debateInProgress) return;
+    setModeMenuOpen(true);
+    focusModeOption(Math.max(0, Math.min(index, modeOptions.length - 1)));
+  }, [conversationStoreReady, debateInProgress, focusModeOption, selectedModeIndex, modeOptions.length]);
+
   useEffect(() => {
     if (!modeMenuOpen) return;
     const handleClickOutside = (event) => {
       if (modeMenuRef.current && !modeMenuRef.current.contains(event.target)) {
-        setModeMenuOpen(false);
+        closeModeMenu();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [modeMenuOpen]);
+  }, [closeModeMenu, modeMenuOpen]);
 
   useEffect(() => {
     const handleFocusComposer = () => {
@@ -582,6 +621,75 @@ export default function ChatInput() {
     }
   };
 
+  const handleModeTriggerKeyDown = (event) => {
+    if (!conversationStoreReady || debateInProgress) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      openModeMenu(selectedModeIndex);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      openModeMenu(modeOptions.length - 1);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (modeMenuOpen) {
+        closeModeMenu();
+      } else {
+        openModeMenu(selectedModeIndex);
+      }
+      return;
+    }
+    if (event.key === 'Escape' && modeMenuOpen) {
+      event.preventDefault();
+      closeModeMenu(true);
+    }
+  };
+
+  const handleModeOptionKeyDown = (event, optionIndex, optionId) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusModeOption((optionIndex + 1) % modeOptions.length);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusModeOption((optionIndex - 1 + modeOptions.length) % modeOptions.length);
+      return;
+    }
+    if (event.key === 'Home') {
+      event.preventDefault();
+      focusModeOption(0);
+      return;
+    }
+    if (event.key === 'End') {
+      event.preventDefault();
+      focusModeOption(modeOptions.length - 1);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeModeMenu(true);
+      return;
+    }
+    if (event.key === 'Tab') {
+      closeModeMenu();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectModeOption(optionId);
+    }
+  };
+
+  const textareaPlaceholder = !conversationStoreReady
+    ? 'Restoring chats...'
+    : requiresProviderSetup
+      ? 'Open Settings to connect a provider before sending...'
+      : (placeholderByMode[chatMode] || 'Ask a question...');
+
   return (
     <div className="chat-input-wrapper">
       <div
@@ -609,6 +717,21 @@ export default function ChatInput() {
                 ? 'Editing last message'
                 : 'Editing last message. Sending will create a new branch.'}
             </span>
+          </div>
+        )}
+
+        {requiresProviderSetup && (
+          <div className="provider-setup-banner">
+            <div className="provider-setup-copy">
+              Add an OpenRouter key or enable a direct provider in Settings before sending your first turn.
+            </div>
+            <button
+              className="chat-btn chat-btn-provider"
+              onClick={() => dispatch({ type: 'SET_SHOW_SETTINGS', payload: true })}
+              type="button"
+            >
+              Open Settings
+            </button>
           </div>
         )}
 
@@ -664,7 +787,7 @@ export default function ChatInput() {
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder={conversationStoreReady ? (placeholderByMode[chatMode] || 'Ask a question...') : 'Restoring chats...'}
+            placeholder={textareaPlaceholder}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -685,29 +808,33 @@ export default function ChatInput() {
               </button>
               <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
                 <button
+                  ref={modeMenuButtonRef}
                   className="chat-mode-select"
                   onClick={() => setModeMenuOpen((open) => !open)}
+                  onKeyDown={handleModeTriggerKeyDown}
                   disabled={!conversationStoreReady || debateInProgress}
                   aria-haspopup="listbox"
                   aria-expanded={modeMenuOpen}
+                  aria-controls="chat-mode-menu"
                   type="button"
                 >
                   <span className="chat-mode-select-icon">
-                    {modeOptions.find(option => option.id === chatMode)?.icon}
+                    {selectedModeOption?.icon}
                   </span>
-                  <span>{modeOptions.find(option => option.id === chatMode)?.label || 'Mode'}</span>
+                  <span>{selectedModeOption?.label || 'Mode'}</span>
                   <ChevronDown size={12} className="chat-mode-select-caret" />
                 </button>
                 {modeMenuOpen && conversationStoreReady && !debateInProgress && (
-                  <div className="chat-mode-menu" role="listbox" aria-label="Chat mode">
-                    {modeOptions.map((option) => (
+                  <div id="chat-mode-menu" className="chat-mode-menu" role="listbox" aria-label="Chat mode">
+                    {modeOptions.map((option, index) => (
                       <button
                         key={option.id}
-                        className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
-                        onClick={() => {
-                          setChatMode(option.id);
-                          setModeMenuOpen(false);
+                        ref={(element) => {
+                          modeOptionRefs.current[index] = element;
                         }}
+                        className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
+                        onClick={() => selectModeOption(option.id)}
+                        onKeyDown={(event) => handleModeOptionKeyDown(event, index, option.id)}
                         role="option"
                         aria-selected={chatMode === option.id}
                         type="button"
@@ -722,6 +849,9 @@ export default function ChatInput() {
                   </div>
                 )}
               </div>
+              <span className="chat-mode-helper" aria-live="polite">
+                <strong>{selectedModeOption?.label || 'Mode'}:</strong> {selectedModeOption?.description}
+              </span>
               <button
                 className={`chat-toggle ${focusedMode ? 'active' : ''}`}
                 onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
@@ -790,6 +920,7 @@ export default function ChatInput() {
       <p className="chat-input-hint">
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line {' | '} Drag and drop or paste files
         {!conversationStoreReady && ' | Restoring saved chats...'}
+        {requiresProviderSetup && ' | Open Settings to connect a provider'}
         {anyAttachmentProcessing && ' | Processing attachments...'}
         {orchestrating && ' | Preparing multimodal tools...'}
         {budgetEstimateLabel && (
@@ -799,7 +930,9 @@ export default function ChatInput() {
         )}
       </p>
       {viewerAttachment && (
-        <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+        <Suspense fallback={null}>
+          <AttachmentViewer attachment={viewerAttachment} onClose={() => setViewerAttachment(null)} />
+        </Suspense>
       )}
     </div>
   );

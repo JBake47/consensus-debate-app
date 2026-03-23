@@ -1,10 +1,9 @@
-import { memo, useRef, useEffect, useState } from 'react';
+import { lazy, memo, Suspense, useRef, useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye, Link2 } from 'lucide-react';
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
 import ExpandButton from './ExpandButton';
-import ResponseViewerModal from './ResponseViewerModal';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { extractCitations } from '../lib/citationInspector';
@@ -21,6 +20,8 @@ import {
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './SynthesisView.css';
+
+const ResponseViewerModal = lazy(() => import('./ResponseViewerModal'));
 
 function DebateInternals({ rounds, debateMetadata }) {
   const [expanded, setExpanded] = useState(false);
@@ -353,13 +354,15 @@ function SynthesisView({
   );
 
   return viewerOpen ? (
-    <ResponseViewerModal
-      open={viewerOpen}
-      onClose={() => setViewerOpen(false)}
-      title={ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}
-    >
-      {panel}
-    </ResponseViewerModal>
+    <Suspense fallback={panel}>
+      <ResponseViewerModal
+        open={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        title={ensembleResult ? 'Ensemble Synthesis' : 'Synthesized Answer'}
+      >
+        {panel}
+      </ResponseViewerModal>
+    </Suspense>
   ) : panel;
 }
 

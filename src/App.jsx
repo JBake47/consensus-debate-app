@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useState, useEffect, useMemo, lazy, Suspense, 
 import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
+import { isTypingShortcutTarget, matchesShortcut } from './lib/keyboardShortcuts';
 import {
   computeConversationCostMeta,
   formatCostWithQuality,
@@ -11,7 +12,6 @@ import Sidebar from './components/Sidebar';
 import ChatInput from './components/ChatInput';
 import DebateView from './components/DebateView';
 import WelcomeScreen from './components/WelcomeScreen';
-import { exportConversationReport } from './lib/reportExport';
 import './App.css';
 
 const SettingsModal = lazy(() => import('./components/SettingsModal'));
@@ -26,7 +26,7 @@ const TurnList = forwardRef(function TurnList(props, ref) {
 function AppContent() {
   const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
   const { activeConversation, debateInProgress } = useDebateConversations();
-  const { themeMode } = useDebateSettings();
+  const { themeMode, apiKey, providerStatus, providerStatusState } = useDebateSettings();
   const { webSearchEnabled, showSettings, pendingTurnFocus, conversationStoreStatus } = useDebateUi();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingHeader, setEditingHeader] = useState(false);
@@ -45,6 +45,10 @@ function AppContent() {
       : { totalCost: 0, quality: 'none' }
   ), [activeConversation]);
   const conversationCostLabel = formatCostWithQuality(conversationCostMeta);
+  const hasConfiguredProvider = Boolean(String(apiKey || '').trim())
+    || Object.values(providerStatus || {}).some(Boolean);
+  const providerStateReady = providerStatusState === 'ready';
+  const requiresProviderSetup = providerStateReady && !hasConfiguredProvider;
 
   useEffect(() => {
     setEditingHeader(false);
@@ -124,8 +128,13 @@ function AppContent() {
     window.dispatchEvent(new Event('consensus:focus-composer'));
   };
 
-  const handleExportReport = useCallback(() => {
+  const openSettings = useCallback(() => {
+    dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
+  }, [dispatch]);
+
+  const handleExportReport = useCallback(async () => {
     if (!activeConversation) return;
+    const { exportConversationReport } = await import('./lib/reportExport');
     exportConversationReport(activeConversation);
   }, [activeConversation]);
 
@@ -152,7 +161,7 @@ function AppContent() {
     {
       id: 'new-chat',
       title: 'New Chat',
-      shortcut: 'N',
+      shortcut: 'Alt+N',
       icon: <Command size={14} />,
       keywords: 'new chat conversation',
       run: () => dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: null }),
@@ -160,7 +169,7 @@ function AppContent() {
     {
       id: 'focus-composer',
       title: 'Focus Composer',
-      shortcut: 'I',
+      shortcut: 'Alt+I',
       icon: <Command size={14} />,
       keywords: 'focus input composer',
       run: emitFocusComposer,
@@ -168,15 +177,15 @@ function AppContent() {
     {
       id: 'toggle-settings',
       title: 'Open Settings',
-      shortcut: 'S',
+      shortcut: 'Alt+S',
       icon: <Settings2 size={14} />,
       keywords: 'settings preferences config',
-      run: () => dispatch({ type: 'SET_SHOW_SETTINGS', payload: true }),
+      run: openSettings,
     },
     {
       id: 'toggle-search',
       title: webSearchEnabled ? 'Disable Search' : 'Enable Search',
-      shortcut: 'W',
+      shortcut: 'Alt+W',
       icon: <Globe size={14} />,
       keywords: 'search web toggle',
       run: () => dispatch({ type: 'SET_WEB_SEARCH_ENABLED', payload: !webSearchEnabled }),
@@ -184,7 +193,7 @@ function AppContent() {
     {
       id: 'toggle-theme',
       title: themeMode === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode',
-      shortcut: 'T',
+      shortcut: 'Alt+T',
       icon: themeMode === 'light' ? <Moon size={14} /> : <Sun size={14} />,
       keywords: 'theme appearance dark light mode',
       run: toggleTheme,
@@ -192,7 +201,7 @@ function AppContent() {
     {
       id: 'retry-last',
       title: 'Retry Last Turn',
-      shortcut: 'R',
+      shortcut: 'Alt+R',
       icon: <RotateCcw size={14} />,
       keywords: 'retry rerun last',
       run: () => retryLastTurn?.({ forceRefresh: false }),
@@ -200,7 +209,7 @@ function AppContent() {
     {
       id: 'retry-failed',
       title: 'Retry All Failed',
-      shortcut: 'Shift+R',
+      shortcut: 'Alt+Shift+R',
       icon: <RefreshCcw size={14} />,
       keywords: 'retry failed streams',
       run: () => retryAllFailed?.({ forceRefresh: false }),
@@ -208,7 +217,7 @@ function AppContent() {
     {
       id: 'clear-cache',
       title: 'Clear Response Cache',
-      shortcut: 'C',
+      shortcut: 'Alt+C',
       icon: <Trash2 size={14} />,
       keywords: 'cache clear memory',
       run: () => clearResponseCache?.(),
@@ -216,7 +225,7 @@ function AppContent() {
     {
       id: 'share-report',
       title: 'Export Report',
-      shortcut: 'E',
+      shortcut: 'Alt+E',
       icon: <Share2 size={14} />,
       keywords: 'export markdown report',
       run: handleExportReport,
@@ -229,30 +238,45 @@ function AppContent() {
     retryAllFailed,
     clearResponseCache,
     handleExportReport,
+    openSettings,
   ]);
 
   useEffect(() => {
-    const isTypingTarget = (target) => {
-      if (!target || !(target instanceof HTMLElement)) return false;
-      const tag = target.tagName.toLowerCase();
-      return tag === 'input' || tag === 'textarea' || target.isContentEditable;
-    };
     const onKeyDown = (event) => {
       const key = String(event.key || '').toLowerCase();
       const modifier = event.metaKey || event.ctrlKey;
+      const typingTarget = isTypingShortcutTarget(event.target);
       if (modifier && key === 'k') {
         event.preventDefault();
         setCommandPaletteOpen(true);
         return;
       }
-      if (event.key === '/' && !modifier && !isTypingTarget(event.target)) {
+      if (event.key === '/' && !modifier && !typingTarget) {
         event.preventDefault();
         setCommandPaletteOpen(true);
+        return;
+      }
+      if (typingTarget) {
+        return;
+      }
+      const matchedCommand = commands.find((command) => matchesShortcut(event, command.shortcut));
+      if (matchedCommand) {
+        event.preventDefault();
+        matchedCommand.run?.();
+        setCommandPaletteOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [commands]);
+
+  const handleHeaderTitleKeyDown = (event) => {
+    if (!activeConversation) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      startHeaderEdit();
+    }
+  };
 
   return (
     <div className="app-layout">
@@ -263,6 +287,10 @@ function AppContent() {
           <button
             className="menu-toggle"
             onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+            type="button"
           >
             <Menu size={20} />
           </button>
@@ -291,7 +319,14 @@ function AppContent() {
               </button>
             </div>
           ) : (
-            <div className="main-header-title-group" onClick={activeConversation ? startHeaderEdit : undefined}>
+            <div
+              className="main-header-title-group"
+              onClick={activeConversation ? startHeaderEdit : undefined}
+              onKeyDown={handleHeaderTitleKeyDown}
+              role={activeConversation ? 'button' : undefined}
+              tabIndex={activeConversation ? 0 : undefined}
+              aria-label={activeConversation ? 'Edit chat title and description' : undefined}
+            >
               <h1 className="main-title">
                 {activeConversation?.title || 'New Chat'}
               </h1>
@@ -338,6 +373,8 @@ function AppContent() {
               {turns.length === 0 ? (
                 <WelcomeScreen
                   loading={conversationStoreStatus !== 'ready'}
+                  requiresProviderSetup={requiresProviderSetup}
+                  onOpenSettings={openSettings}
                   onQuickStart={handleQuickStart}
                 />
               ) : (

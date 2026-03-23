@@ -7,6 +7,8 @@ const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90000;
 const MIN_STREAM_STALL_TIMEOUT_MS = 15000;
 const DEFAULT_STREAM_RENDER_THROTTLE_MS = 40;
 const MAX_STREAM_RENDER_THROTTLE_MS = 250;
+const MODEL_CATALOG_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const modelCatalogClientCache = new Map();
 
 function getStreamStallTimeoutMs() {
   const configured = Number(import.meta.env.VITE_STREAM_STALL_TIMEOUT_MS);
@@ -410,25 +412,76 @@ export async function chatCompletion({ model, messages, apiKey, signal, nativeWe
   };
 }
 
-/**
- * Fetch available models from OpenRouter.
- */
-export async function fetchModels(apiKey) {
+function getModelCatalogCacheKey(apiKey) {
+  return String(apiKey || '').trim() || '__server__';
+}
+
+function pruneModelCatalogClientCache(now = Date.now()) {
+  for (const [key, entry] of modelCatalogClientCache.entries()) {
+    if (!entry) {
+      modelCatalogClientCache.delete(key);
+      continue;
+    }
+    if (entry.promise) continue;
+    if (entry.expiresAt <= now) {
+      modelCatalogClientCache.delete(key);
+    }
+  }
+}
+
+export async function fetchModels(apiKey, options = {}) {
+  const cacheKey = getModelCatalogCacheKey(apiKey);
+  const refresh = options.refresh === true;
+  const signal = options.signal;
+  const now = Date.now();
+  pruneModelCatalogClientCache(now);
+
+  const cached = modelCatalogClientCache.get(cacheKey);
+  if (!refresh) {
+    if (cached?.data && cached.expiresAt > now) {
+      return cached.data;
+    }
+    if (cached?.promise) {
+      return cached.promise;
+    }
+  }
+
   const headers = {};
   if (apiKey) {
     headers['x-openrouter-api-key'] = apiKey;
   }
-  const response = await fetch(MODELS_PROXY_URL, { headers });
+  const request = fetch(MODELS_PROXY_URL, { headers, signal })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new OpenRouterError('Failed to fetch models', response.status);
+      }
+      const data = await response.json();
+      const models = data.data || [];
+      modelCatalogClientCache.set(cacheKey, {
+        data: models,
+        expiresAt: Date.now() + MODEL_CATALOG_CLIENT_CACHE_TTL_MS,
+        promise: null,
+      });
+      return models;
+    })
+    .catch((error) => {
+      const latest = modelCatalogClientCache.get(cacheKey);
+      if (latest?.promise === request) {
+        modelCatalogClientCache.delete(cacheKey);
+      }
+      throw error;
+    });
 
-  if (!response.ok) {
-    throw new OpenRouterError('Failed to fetch models', response.status);
-  }
+  modelCatalogClientCache.set(cacheKey, {
+    data: null,
+    expiresAt: 0,
+    promise: request,
+  });
 
-  const data = await response.json();
-  return data.data || [];
+  return request;
 }
 
-export async function searchModels({ query = '', provider = '', limit = 200, offset = 0, apiKey } = {}) {
+export async function searchModels({ query = '', provider = '', limit = 200, offset = 0, apiKey, signal } = {}) {
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (provider) params.set('provider', provider);
@@ -438,7 +491,7 @@ export async function searchModels({ query = '', provider = '', limit = 200, off
   if (apiKey) {
     headers['x-openrouter-api-key'] = apiKey;
   }
-  const response = await fetch(`${MODELS_SEARCH_URL}?${params.toString()}`, { headers });
+  const response = await fetch(`${MODELS_SEARCH_URL}?${params.toString()}`, { headers, signal });
   if (!response.ok) {
     throw new OpenRouterError('Failed to search models', response.status);
   }

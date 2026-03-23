@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-03-23
+
+### Added
+- Model catalog cache/filtering coverage on the server plus keyboard shortcut regression tests for the new global shortcut handling
+
+### Changed
+- Model browsing now reuses cached OpenRouter catalogs on both the server and client, debounces picker searches, aborts superseded requests, and lazy-loads heavy attachment/response/report viewers until they are opened
+- Header, sidebar, search results, and composer mode controls now have fuller keyboard support, visible focus states, and command palette labels that match real global shortcuts
+- Empty and composer states now guide provider setup more directly and keep Debate, Ensemble, and Parallel mode explanations visible near the selector
+- Setup documentation now explains private-repo GitHub authentication expectations for manual syncs and the in-app updater
+
+### Fixed
+- Provider setup gating no longer blocks sends merely because provider capability loading failed; it only appears when the app has positively confirmed that no providers are configured
+- Keyboard activation on sidebar action buttons no longer also triggers the parent conversation row selection
+
 ## [0.3.30] - 2026-03-21
 
 ### Added
@@ -580,7 +595,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.24...HEAD
+[Unreleased]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.31...HEAD
+[0.3.31]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.30...v0.3.31
+[0.3.30]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.29...v0.3.30
+[0.3.29]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.28...v0.3.29
+[0.3.28]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.27...v0.3.28
+[0.3.27]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.26...v0.3.27
+[0.3.26]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.25...v0.3.26
+[0.3.25]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.24...v0.3.25
 [0.3.24]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.23...v0.3.24
 [0.3.23]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.22...v0.3.23
 [0.3.22]: https://github.com/JBake47/openrouter-debate-app/compare/v0.3.21...v0.3.22

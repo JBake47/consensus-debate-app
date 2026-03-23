@@ -1901,27 +1901,31 @@ export function DebateProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetchModels(state.apiKey, { signal: controller.signal })
+        .then((models) => {
+          if (cancelled) return;
+          const catalog = {};
+          for (const model of models) {
+            const id = model.id || model.name || model.model;
+            if (id) catalog[id] = model;
+          }
+          dispatch({ type: 'SET_MODEL_CATALOG', payload: catalog });
+          dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'ready', error: null } });
+        })
+        .catch((err) => {
+          if (cancelled || err?.name === 'AbortError') return;
+          dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'error', error: err.message || 'Failed to load models' } });
+        });
+    }, 320);
 
     dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'loading', error: null } });
 
-    fetchModels(state.apiKey)
-      .then((models) => {
-        if (cancelled) return;
-        const catalog = {};
-        for (const model of models) {
-          const id = model.id || model.name || model.model;
-          if (id) catalog[id] = model;
-        }
-        dispatch({ type: 'SET_MODEL_CATALOG', payload: catalog });
-        dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'ready', error: null } });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'error', error: err.message || 'Failed to load models' } });
-      });
-
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
     };
   }, [state.apiKey]);
 
