@@ -4,6 +4,7 @@ const TITLE_MODEL = 'google/gemini-2.0-flash-001';
 const TITLE_MAX_CHARS = 80;
 const TITLE_MAX_WORDS = 12;
 const DESCRIPTION_MAX_CHARS = 200;
+const DESCRIPTION_PREFERRED_MAX_CHARS = 120;
 
 const SMALL_TITLE_WORDS = new Set([
   'a',
@@ -159,6 +160,123 @@ function normalizeDescription(description) {
   return stripWrappedQuotes(cleanSourceText(description)).slice(0, DESCRIPTION_MAX_CHARS);
 }
 
+function clampTextBoundary(text, maxChars) {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) return '';
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || normalized.length <= maxChars) {
+    return normalized;
+  }
+  const boundary = normalized.lastIndexOf(' ', maxChars);
+  return (boundary >= 24 ? normalized.slice(0, boundary) : normalized.slice(0, maxChars)).trim();
+}
+
+function finalizeDescription(text, maxChars = DESCRIPTION_PREFERRED_MAX_CHARS) {
+  const normalized = normalizeDescription(text);
+  if (!normalized) return '';
+  let next = /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+  if (next.length <= maxChars) return next;
+  next = clampTextBoundary(next, maxChars);
+  if (!next) return '';
+  if (/[.!?]$/.test(next)) return next;
+  return next.length < maxChars ? `${next}.` : next;
+}
+
+function formatSentenceFragmentWord(word) {
+  if (!word) return word;
+  const lower = word.toLowerCase();
+  if (CANONICAL_TITLE_WORDS.has(lower)) {
+    return CANONICAL_TITLE_WORDS.get(lower);
+  }
+  if (/^[A-Z0-9]{2,}$/.test(word) || /[A-Z].+[A-Z]/.test(word)) {
+    return word;
+  }
+  return lower;
+}
+
+function toSentenceFragment(text) {
+  const tokens = normalizeWhitespace(text).split(' ').filter(Boolean);
+  return tokens.map((token) => {
+    const segments = token.split('-');
+    return segments.map((segment) => formatSentenceFragmentWord(segment)).join('-');
+  }).join(' ');
+}
+
+function buildPromptDescription(prompt) {
+  const normalizedPrompt = cleanSourceText(prompt).replace(/[?!]+$/g, '');
+  if (!normalizedPrompt) return '';
+
+  let match = normalizedPrompt.match(/^(?:how\s+do\s+i|how\s+can\s+i|how\s+should\s+i)\s+(.+)$/i);
+  if (match) {
+    return finalizeDescription(`Learning how to ${toSentenceFragment(match[1])}`);
+  }
+
+  match = normalizedPrompt.match(/^(?:please\s+)?(?:can|could|would)\s+you\s+summari[sz]e\s+(.+)$/i);
+  if (match) {
+    return finalizeDescription(`Summarizing ${toSentenceFragment(match[1])}`);
+  }
+
+  match = normalizedPrompt.match(/^summari[sz]e\s+(?:this|these)\s+(.+)$/i);
+  if (match) {
+    return finalizeDescription(`Summarizing ${toSentenceFragment(match[1])}`);
+  }
+
+  match = normalizedPrompt.match(/^what(?:'s| is| are)\s+the\s+best\s+(.+)$/i);
+  if (match) {
+    return finalizeDescription(`Comparing the best ${toSentenceFragment(match[1])}`);
+  }
+
+  match = normalizedPrompt.match(/^which\s+(.+?)\s+should\s+i\s+(?:buy|get|choose|pick|use)(.*)$/i);
+  if (match) {
+    return finalizeDescription(`Choosing ${toSentenceFragment(`${match[1]}${match[2]}`)}`);
+  }
+
+  return '';
+}
+
+function buildTitleDescription(title) {
+  const fragment = toSentenceFragment(cleanSourceText(title));
+  if (!fragment || /^new chat$/i.test(fragment)) {
+    return '';
+  }
+  if (/^how to /i.test(fragment)) {
+    return finalizeDescription(`Learning ${fragment}`);
+  }
+  if (/^summary of /i.test(fragment)) {
+    return finalizeDescription(`Summarizing ${fragment.replace(/^summary of /i, '')}`);
+  }
+  if (/^best /i.test(fragment)) {
+    return finalizeDescription(`Comparing the best ${fragment.slice(5)}`);
+  }
+  if (/\bvs\.?\b/i.test(fragment)) {
+    return finalizeDescription(`Comparing ${fragment}`);
+  }
+  if (/\binteraction\b/i.test(fragment) || /\bcompatib(?:le|ility)\b/i.test(fragment)) {
+    return finalizeDescription(`Checking ${fragment}`);
+  }
+  return finalizeDescription(`Discussion about ${fragment}`);
+}
+
+function extractLeadSentence(text) {
+  const normalized = cleanSourceText(text);
+  if (!normalized) return '';
+  const match = normalized.match(/^(.+?[.!?])(?:\s|$)/);
+  return match ? match[1] : normalized;
+}
+
+export function createSeedDescription(prompt, synthesisContent = '') {
+  const promptDescription = buildPromptDescription(prompt);
+  if (promptDescription) return promptDescription;
+
+  const titleDescription = buildTitleDescription(createSeedTitle(prompt));
+  if (titleDescription) return titleDescription;
+
+  return finalizeDescription(extractLeadSentence(synthesisContent), DESCRIPTION_PREFERRED_MAX_CHARS);
+}
+
+function normalizeGeneratedDescription(description, userPrompt = '', synthesisContent = '') {
+  return finalizeDescription(description, DESCRIPTION_MAX_CHARS) || createSeedDescription(userPrompt, synthesisContent);
+}
+
 export function createSeedTitle(prompt) {
   const transformed = applyTitleTransforms(prompt);
   if (!transformed) return 'New Chat';
@@ -200,20 +318,37 @@ export async function generateTitle({ userPrompt, synthesisContent, apiKey, sign
       signal,
     });
 
-    const parsed = parseResponse(content, userPrompt);
+    const parsed = parseResponse(content, userPrompt, synthesisContent);
     if (parsed) return parsed;
-    return fallback(userPrompt);
+    return fallback(userPrompt, synthesisContent);
   } catch {
-    return fallback(userPrompt);
+    return fallback(userPrompt, synthesisContent);
   }
 }
 
-function parseResponse(text, userPrompt) {
+function parseLabelledResponse(text, userPrompt, synthesisContent) {
+  const source = String(text || '');
+  const titleMatch = source.match(/(?:^|\n)\s*title\s*[:=-]\s*(.+)$/im);
+  const descriptionMatch = source.match(/(?:^|\n)\s*description\s*[:=-]\s*(.+)$/im);
+  if (!titleMatch && !descriptionMatch) {
+    return null;
+  }
+  const title = normalizeGeneratedTitle(titleMatch?.[1] || '', userPrompt);
+  if (!title) {
+    return null;
+  }
+  return {
+    title,
+    description: normalizeGeneratedDescription(descriptionMatch?.[1] || '', userPrompt, synthesisContent),
+  };
+}
+
+function parseResponse(text, userPrompt, synthesisContent) {
   const parseCandidate = (candidate) => {
     try {
       const parsed = JSON.parse(candidate.trim());
       const title = normalizeGeneratedTitle(parsed.title || '', userPrompt);
-      const description = normalizeDescription(parsed.description || '');
+      const description = normalizeGeneratedDescription(parsed.description || '', userPrompt, synthesisContent);
       if (title && title.length < 100) {
         return { title, description };
       }
@@ -232,13 +367,19 @@ function parseResponse(text, userPrompt) {
     if (extracted) return extracted;
   }
 
+  const labelled = parseLabelledResponse(text, userPrompt, synthesisContent);
+  if (labelled) return labelled;
+
   const plain = normalizeGeneratedTitle(text, userPrompt);
   if (plain && plain.length < 100) {
-    return { title: plain, description: '' };
+    return { title: plain, description: createSeedDescription(userPrompt, synthesisContent) };
   }
   return null;
 }
 
-function fallback(prompt) {
-  return { title: createSeedTitle(prompt), description: '' };
+function fallback(prompt, synthesisContent = '') {
+  return {
+    title: createSeedTitle(prompt),
+    description: createSeedDescription(prompt, synthesisContent),
+  };
 }
