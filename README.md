@@ -53,69 +53,31 @@ A React application with an optional Node proxy that can route requests to OpenR
 
 ### Installation
 
-1. Authenticate that computer to GitHub for this private repository.
-   - Recommended: configure SSH access for GitHub.
-   - Alternative: use HTTPS with Git Credential Manager or `gh auth login`.
-
-2. Clone the repository:
-```bash
-git clone git@github.com:JBake47/openrouter-debate-app.git
-cd openrouter-debate-app
-```
-
-HTTPS also works if credentials are already configured:
+1. Clone the public repository:
 ```bash
 git clone https://github.com/JBake47/openrouter-debate-app.git
 cd openrouter-debate-app
 ```
 
-3. Install dependencies:
+If you plan to contribute through a fork, clone your fork instead and open pull requests from there.
+
+2. Install dependencies:
 ```bash
 npm install
 ```
 
-### Updating an Existing Clone (Other Computers)
-
-`npm install` only updates dependencies. It does not pull new code changes.
-
-Each computer must already have GitHub access to this private repository. The in-app updater uses the same local Git credentials and does not open an interactive login prompt.
-
-Use this sequence to sync your local copy with GitHub:
-
+3. Configure environment variables from the example file:
 ```bash
-git fetch origin
-git checkout master
-git pull --ff-only origin master
-npm ci
+cp .env.example .env
 ```
 
-Optional checks:
-
-```bash
-git rev-parse --short HEAD
-npm test
-npm run build
+On PowerShell:
+```powershell
+Copy-Item .env.example .env
 ```
 
-If this repo was changed from public to private and the remote URL stayed the same, existing clones usually continue to work once Git credentials are configured on that machine. If you moved to a different private repo, update the remote first:
-
-```bash
-git remote set-url origin git@github.com:JBake47/openrouter-debate-app.git
-```
-
-You can also use the in-app updater in **Settings > App Updates**. It runs `git fetch --prune` to check for updates, then `git pull --ff-only`, refreshes dependencies with `npm ci` when a lockfile is present, and auto-stashes ordinary local edits before restoring them after the update. It still refuses to run when the clone has unresolved merge conflicts, the branch needs manual reconciliation, or GitHub authentication is not already working in that local clone.
-
-If you have local uncommitted work first:
-
-```bash
-git stash push -u -m "temp before sync"
-git pull --ff-only origin master
-git stash pop
-```
-
-3. Configure server environment variables (example in `.env.example`).
-   - Recommended: set provider API keys in `.env` and run the backend so keys stay off the client.
-   - Optional: you can also add an OpenRouter override key in the in-app **Settings** modal (stored in the browser).
+- Recommended: set provider API keys in `.env` and run the backend so keys stay off the client.
+- Optional: add an OpenRouter override key in the in-app **Settings** modal (stored in the browser).
 
 4. Start both backend and frontend together:
 ```bash
@@ -128,6 +90,47 @@ Alternative (separate terminals):
 ```bash
 npm run server
 npm run dev
+```
+
+### Updating an Existing Clone
+
+`npm install` updates dependencies only. Pull the latest code separately when you want to sync with GitHub.
+
+If your local clone tracks the main repository directly:
+
+```bash
+git fetch origin
+git checkout master
+git pull --ff-only origin master
+npm install
+```
+
+If you are working from a fork, keep the main repository as `upstream` and pull from it:
+
+```bash
+git remote add upstream https://github.com/JBake47/openrouter-debate-app.git
+git fetch upstream
+git checkout master
+git pull --ff-only upstream master
+npm install
+```
+
+Optional checks:
+
+```bash
+git rev-parse --short HEAD
+npm test
+npm run build
+```
+
+You can also use the in-app updater in **Settings > App Updates**. It runs `git fetch --prune` to check for updates, then `git pull --ff-only`, refreshes dependencies when needed, and auto-stashes ordinary local edits before restoring them after the update. It stops when the clone has unresolved merge conflicts or the branch needs manual reconciliation.
+
+If you have local uncommitted work first:
+
+```bash
+git stash push -u -m "temp before sync"
+git pull --ff-only
+git stash pop
 ```
 
 ### Build for Production
