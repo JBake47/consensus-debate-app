@@ -16,6 +16,7 @@ import {
   getCostQualityDescription,
   getUsageCostMeta,
 } from '../lib/formatTokens';
+import InfoTip from './InfoTip';
 import './ModelCard.css';
 
 const ResponseViewerModal = lazy(() => import('./ResponseViewerModal'));
@@ -68,20 +69,34 @@ function ModelCard({
   const searchSummary = searchEvidence
     ? `Search ${searchEvidence.searchUsed ? 'yes' : 'no'} | ${searchEvidence.sourceCount || 0} src`
     : null;
-  const searchTitle = searchEvidence
+  const searchHelp = searchEvidence
     ? [
+      `Search ${searchEvidence.searchUsed ? 'was used for this answer.' : 'was not used for this answer.'}`,
+      `${searchEvidence.sourceCount || 0} source${Number(searchEvidence.sourceCount || 0) === 1 ? '' : 's'} collected.`,
+      searchEvidence.verified
+        ? 'Verified means the sources and date evidence passed strict checks.'
+        : searchEvidence.strictBlocked
+          ? 'Strict web-search verification blocked this answer because the evidence did not pass.'
+          : 'This result did not fully pass strict verification.',
       searchEvidence.primaryIssue ? `Issue: ${searchEvidence.primaryIssue}` : null,
       searchEvidence.fallbackApplied && searchEvidence.fallbackReason
         ? `Fallback: ${searchEvidence.fallbackReason}`
         : null,
-    ].filter(Boolean).join('\n')
-    : '';
+    ].filter(Boolean)
+    : [];
   const routeSummary = routeInfo?.routed
     ? `Routed to ${getModelDisplayName(routeInfo.fallbackModel || model)}`
     : routeInfo?.reason
       ? 'Route warning'
       : null;
-  const routeTitle = routeInfo?.reason || '';
+  const routeHelp = routeSummary
+    ? [
+      routeInfo?.routed
+        ? `This response was routed to ${getModelDisplayName(routeInfo.fallbackModel || model)}.`
+        : 'This response hit a routing warning.',
+      routeInfo?.reason || 'The app may fall back or block delivery based on model capabilities.',
+    ].filter(Boolean)
+    : [];
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
@@ -153,7 +168,11 @@ function ModelCard({
       className={`model-card glass-panel ${status} ${displayState.tone === 'warning' ? 'warning' : ''} ${viewerOpen ? 'fullscreen-panel' : ''}`}
       style={{ '--card-accent': color }}
     >
-      <div className="model-card-header" onClick={() => setCollapsed(!collapsed)}>
+      <div
+        className="model-card-header"
+        onClick={() => setCollapsed(!collapsed)}
+        title={`${displayName} response card. Click to ${collapsed ? 'expand' : 'collapse'} the response details.`}
+      >
         <div className="model-card-info">
           <div className="model-card-accent-dot" />
           <div className="model-card-names">
@@ -215,19 +234,49 @@ function ModelCard({
             </span>
           )}
           {searchEvidence && (
-            <span className={`model-card-search-pill ${searchEvidenceClass}`} title={searchTitle}>
-              <Globe size={11} />
-              <span>{searchSummary}</span>
+            <span className="model-card-badge-with-help">
+              <span
+                className={`model-card-search-pill ${searchEvidenceClass}`}
+                title={searchHelp.join(' ') || 'Search evidence summary for this answer. Verified means sources and date evidence passed strict checks.'}
+              >
+                <Globe size={11} />
+                <span>{searchSummary}</span>
+              </span>
+              <InfoTip
+                content={searchHelp}
+                label={`${displayName} search evidence help`}
+              />
             </span>
           )}
           {routeSummary && (
-            <span className={`model-card-route-pill ${routeClass}`} title={routeTitle}>
-              <span>{routeSummary}</span>
+            <span className="model-card-badge-with-help">
+              <span
+                className={`model-card-route-pill ${routeClass}`}
+                title={routeHelp.join(' ') || 'Routing note for this response. The app may fall back or block delivery based on model capabilities.'}
+              >
+                <span>{routeSummary}</span>
+              </span>
+              <InfoTip
+                content={routeHelp}
+                label={`${displayName} routing help`}
+              />
             </span>
           )}
           {cacheHit && (
-            <span className="model-card-cache-pill" title="Served from local response cache">
-              Cache hit
+            <span className="model-card-badge-with-help">
+              <span
+                className="model-card-cache-pill"
+                title="Served from the local response cache instead of making a fresh provider call. Retry with Shift to bypass cache."
+              >
+                Cache hit
+              </span>
+              <InfoTip
+                content={[
+                  'This response came from the local cache instead of a fresh provider call.',
+                  'Retry with Shift if you want to bypass the cache and force a new request.',
+                ]}
+                label={`${displayName} cache help`}
+              />
             </span>
           )}
           <span className={`model-card-status ${displayState.tone}`}>
@@ -268,6 +317,7 @@ function ModelCard({
                 className="model-card-citations-toggle"
                 onClick={() => setCitationExpanded((open) => !open)}
                 type="button"
+                title={`${citationExpanded ? 'Hide' : 'Show'} the citations extracted from this response.`}
               >
                 <Link2 size={12} />
                 <span>Citations ({citations.length})</span>
@@ -297,6 +347,7 @@ function ModelCard({
                 <div
                   className="model-card-reasoning-header"
                   onClick={() => setReasoningCollapsed(!reasoningCollapsed)}
+                  title={`Show or hide the model's reasoning trace${usage?.reasoningTokens != null ? ` (${formatTokenCount(usage.reasoningTokens)} reasoning tokens).` : '.'}`}
                 >
                   <div className="model-card-reasoning-label">
                     <Brain size={13} />
@@ -312,7 +363,7 @@ function ModelCard({
                     <button
                       className="model-card-layout-toggle"
                       onClick={(e) => { e.stopPropagation(); setSideBySide(false); }}
-                      title="Stack vertically"
+                      title="Stack reasoning above the final answer instead of showing them side by side."
                     >
                       <ChevronDown size={14} />
                     </button>
@@ -350,6 +401,7 @@ function ModelCard({
                   <div
                     className="model-card-reasoning-header"
                     onClick={() => setReasoningCollapsed(!reasoningCollapsed)}
+                    title={`Show or hide the model's reasoning trace${usage?.reasoningTokens != null ? ` (${formatTokenCount(usage.reasoningTokens)} reasoning tokens).` : '.'}`}
                   >
                     <div className="model-card-reasoning-label">
                       <Brain size={13} />
@@ -371,7 +423,7 @@ function ModelCard({
                         <button
                           className="model-card-layout-toggle"
                           onClick={(e) => { e.stopPropagation(); setSideBySide(true); }}
-                          title="Show side by side"
+                          title="Show the reasoning trace and final answer side by side."
                         >
                           <ChevronUp size={14} />
                         </button>

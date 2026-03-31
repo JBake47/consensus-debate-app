@@ -42,7 +42,11 @@ function DebateInternals({ rounds, debateMetadata }) {
 
   return (
     <div className="debate-internals">
-      <div className="debate-internals-header" onClick={() => setExpanded(!expanded)}>
+      <div
+        className="debate-internals-header"
+        onClick={() => setExpanded(!expanded)}
+        title={`Debate internals summarize how the run ended, what each round cost, and how each model performed. Click to ${expanded ? 'hide' : 'show'} details.`}
+      >
         <div className="debate-internals-label">
           <Eye size={13} />
           <span>Debate Internals</span>
@@ -323,6 +327,7 @@ function SynthesisView({
             className="synthesis-citations-toggle"
             onClick={() => setCitationsExpanded((open) => !open)}
             type="button"
+            title={`${citationsExpanded ? 'Hide' : 'Show'} the extracted citations from the synthesized answer.`}
           >
             <Link2 size={12} />
             <span>Citations ({synthesisCitations.length})</span>

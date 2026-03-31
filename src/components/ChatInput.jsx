@@ -15,6 +15,7 @@ import {
 } from '../lib/attachmentRouting';
 import { orchestrateMultimodalTurn } from '../lib/multimodalOrchestrator';
 import { IMAGE_TYPES, getFileCategory } from '../lib/fileTypes';
+import InfoTip from './InfoTip';
 import './ChatInput.css';
 
 const AttachmentViewer = lazy(() => import('./AttachmentViewer'));
@@ -515,6 +516,14 @@ export default function ChatInput() {
   };
   const selectedModeIndex = Math.max(0, modeOptions.findIndex((option) => option.id === chatMode));
   const selectedModeOption = modeOptions[selectedModeIndex] || modeOptions[0];
+  const selectedModeTitle = selectedModeOption
+    ? `${selectedModeOption.label}: ${selectedModeOption.description} Configure models and rounds in Settings.`
+    : 'Choose how the app should answer this turn.';
+  const submitTitle = chatMode === 'debate'
+    ? 'Run a multi-round debate, then synthesize the result. Configure the roster and rounds in Settings.'
+    : chatMode === 'parallel'
+      ? 'Run each selected model separately so you can compare raw outputs side by side.'
+      : 'Get one merged answer quickly by synthesizing the selected models without running rebuttal rounds.';
 
   const focusModeOption = useCallback((index) => {
     requestAnimationFrame(() => {
@@ -697,6 +706,7 @@ export default function ChatInput() {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        title="Composer area. Type a prompt, toggle Search or mode, then send. You can also drag, paste, or attach supported files here."
       >
         {dragOver && (
           <div className="drag-overlay">
@@ -729,6 +739,7 @@ export default function ChatInput() {
               className="chat-btn chat-btn-provider"
               onClick={() => dispatch({ type: 'SET_SHOW_SETTINGS', payload: true })}
               type="button"
+              title="Open Settings to connect OpenRouter or a direct provider before sending."
             >
               Open Settings
             </button>
@@ -745,6 +756,7 @@ export default function ChatInput() {
                 className="chat-btn chat-btn-cancel-edit"
                 onClick={() => setBudgetConfirm(null)}
                 type="button"
+                title="Cancel this send and return to editing the prompt."
               >
                 Cancel
               </button>
@@ -758,6 +770,7 @@ export default function ChatInput() {
                   setBudgetConfirm(null);
                 }}
                 type="button"
+                title="Send this turn even though the estimated cost is above your soft limit."
               >
                 Send Anyway
               </button>
@@ -794,83 +807,154 @@ export default function ChatInput() {
             onPaste={handlePaste}
             rows={1}
             disabled={!conversationStoreReady}
+            aria-label="Prompt composer"
+            title="Prompt composer. Press Enter to send, Shift+Enter for a new line. Drag, paste, or attach files to include context."
           />
           <div className="chat-input-footer">
             <div className="chat-input-toggles">
-              <button
-                className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
-                onClick={toggleWebSearch}
-                disabled={!conversationStoreReady || debateInProgress}
-                title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
-              >
-                <Globe size={15} />
-                <span>Search</span>
-              </button>
-              <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
+              <div className="chat-control-with-help">
                 <button
-                  ref={modeMenuButtonRef}
-                  className="chat-mode-select"
-                  onClick={() => setModeMenuOpen((open) => !open)}
-                  onKeyDown={handleModeTriggerKeyDown}
+                  className={`chat-toggle ${webSearchEnabled ? 'active' : ''}`}
+                  onClick={toggleWebSearch}
                   disabled={!conversationStoreReady || debateInProgress}
-                  aria-haspopup="listbox"
-                  aria-expanded={modeMenuOpen}
-                  aria-controls="chat-mode-menu"
-                  type="button"
+                  aria-pressed={webSearchEnabled}
+                  aria-label={webSearchEnabled
+                    ? 'Search is on for this turn. The configured web-search model will gather live sources before answering.'
+                    : 'Turn on live web search for this turn. Configure the search model and strict verification in Settings.'}
+                  title={webSearchEnabled
+                    ? 'Search is on for this turn. The configured web-search model will gather live sources before answering.'
+                    : 'Turn on live web search for this turn. Configure the search model and strict verification in Settings > Models.'}
                 >
-                  <span className="chat-mode-select-icon">
-                    {selectedModeOption?.icon}
-                  </span>
-                  <span>{selectedModeOption?.label || 'Mode'}</span>
-                  <ChevronDown size={12} className="chat-mode-select-caret" />
+                  <Globe size={15} />
+                  <span>Search</span>
                 </button>
-                {modeMenuOpen && conversationStoreReady && !debateInProgress && (
-                  <div id="chat-mode-menu" className="chat-mode-menu" role="listbox" aria-label="Chat mode">
-                    {modeOptions.map((option, index) => (
-                      <button
-                        key={option.id}
-                        ref={(element) => {
-                          modeOptionRefs.current[index] = element;
-                        }}
-                        className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
-                        onClick={() => selectModeOption(option.id)}
-                        onKeyDown={(event) => handleModeOptionKeyDown(event, index, option.id)}
-                        role="option"
-                        aria-selected={chatMode === option.id}
-                        type="button"
-                      >
-                        <span className="chat-mode-option-icon">{option.icon}</span>
-                        <span className="chat-mode-option-copy">
-                          <span>{option.label}</span>
-                          <span className="chat-mode-option-description">{option.description}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <InfoTip
+                  content={webSearchEnabled
+                    ? [
+                      'Search is on for this turn.',
+                      'The configured web-search model will gather live sources before the answer is generated.',
+                      'Use Settings > Models to change the search model or strict verification rules.',
+                    ]
+                    : [
+                      'Turn on live web search when you want current evidence instead of model memory alone.',
+                      'Configure the search model and strict verification rules in Settings > Models.',
+                    ]}
+                  label="Search help"
+                />
               </div>
-              <button
-                className={`chat-toggle ${focusedMode ? 'active' : ''}`}
-                onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
-                disabled={!conversationStoreReady || debateInProgress}
-                title={focusedMode ? 'Shorter replies enabled' : 'Prefer shorter, sharper replies'}
-              >
-                <Zap size={15} />
-                <span>Shorter</span>
-              </button>
-              <button
-                className="chat-toggle"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!conversationStoreReady || debateInProgress || processing || orchestrating}
-                title="Attach files"
-              >
-                <Paperclip size={15} />
-              </button>
+              <div className="chat-control-with-help">
+                <div className="chat-mode-select-wrapper" ref={modeMenuRef}>
+                  <button
+                    ref={modeMenuButtonRef}
+                    className="chat-mode-select"
+                    onClick={() => setModeMenuOpen((open) => !open)}
+                    onKeyDown={handleModeTriggerKeyDown}
+                    disabled={!conversationStoreReady || debateInProgress}
+                    aria-haspopup="listbox"
+                    aria-expanded={modeMenuOpen}
+                    aria-controls="chat-mode-menu"
+                    aria-label={selectedModeTitle}
+                    title={selectedModeTitle}
+                    type="button"
+                  >
+                    <span className="chat-mode-select-icon">
+                      {selectedModeOption?.icon}
+                    </span>
+                    <span>{selectedModeOption?.label || 'Mode'}</span>
+                    <ChevronDown size={12} className="chat-mode-select-caret" />
+                  </button>
+                  {modeMenuOpen && conversationStoreReady && !debateInProgress && (
+                    <div id="chat-mode-menu" className="chat-mode-menu" role="listbox" aria-label="Chat mode">
+                      {modeOptions.map((option, index) => (
+                        <button
+                          key={option.id}
+                          ref={(element) => {
+                            modeOptionRefs.current[index] = element;
+                          }}
+                          className={`chat-mode-option ${chatMode === option.id ? 'active' : ''}`}
+                          onClick={() => selectModeOption(option.id)}
+                          onKeyDown={(event) => handleModeOptionKeyDown(event, index, option.id)}
+                          role="option"
+                          aria-selected={chatMode === option.id}
+                          aria-label={`${option.label}. ${option.description}`}
+                          title={`${option.label}: ${option.description}`}
+                          type="button"
+                        >
+                          <span className="chat-mode-option-icon">{option.icon}</span>
+                          <span className="chat-mode-option-copy">
+                            <span>{option.label}</span>
+                            <span className="chat-mode-option-description">{option.description}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <InfoTip
+                  content={[
+                    'Choose how the app should answer this turn.',
+                    'Debate runs rebuttal rounds before synthesis.',
+                    'Ensemble gives you one merged answer quickly.',
+                    'Parallel shows each model output side by side.',
+                  ]}
+                  label="Chat mode help"
+                />
+              </div>
+              <div className="chat-control-with-help">
+                <button
+                  className={`chat-toggle ${focusedMode ? 'active' : ''}`}
+                  onClick={() => dispatch({ type: 'SET_FOCUSED_MODE', payload: !focusedMode })}
+                  disabled={!conversationStoreReady || debateInProgress}
+                  aria-pressed={focusedMode}
+                  aria-label={focusedMode
+                    ? 'Shorter mode is on. Prompts ask models for tighter, more concise replies.'
+                    : 'Prefer shorter, sharper replies for this turn. Turn this off when you want more detail.'}
+                  title={focusedMode
+                    ? 'Shorter mode is on. Prompts ask models for tighter, more concise replies.'
+                    : 'Prefer shorter, sharper replies for this turn. Turn this off when you want more detail.'}
+                >
+                  <Zap size={15} />
+                  <span>Shorter</span>
+                </button>
+                <InfoTip
+                  content={focusedMode
+                    ? [
+                      'Shorter mode is on.',
+                      'The prompt asks models for tighter, more concise replies.',
+                      'Turn it off when you want fuller explanations or more detail.',
+                    ]
+                    : [
+                      'Use Shorter when you want tighter answers with less filler.',
+                      'Turn it off when you want fuller explanations or more detailed debate output.',
+                    ]}
+                  label="Shorter mode help"
+                />
+              </div>
+              <div className="chat-control-with-help">
+                <button
+                  className="chat-toggle"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!conversationStoreReady || debateInProgress || processing || orchestrating}
+                  aria-label={`Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY}`}
+                  title={`Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY} Hover each attachment after upload to see how it will be routed.`}
+                >
+                  <Paperclip size={15} />
+                </button>
+                <InfoTip
+                  content={[
+                    'Attach files to include extra context with this turn.',
+                    ATTACHMENT_SUPPORT_SUMMARY,
+                    'After upload, each attachment card explains how it will be routed.',
+                  ]}
+                  label="Attachment help"
+                />
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 style={{ display: 'none' }}
+                aria-label="Attach files"
                 onChange={e => {
                   handleFiles(e.target.files);
                   e.target.value = '';
@@ -879,7 +963,7 @@ export default function ChatInput() {
             </div>
             <div className="chat-input-actions">
               {debateInProgress ? (
-                <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()}>
+                <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()} title="Stop the active run. Completed outputs remain in the turn so you can inspect or retry them.">
                   <Square size={16} />
                   <span>Stop</span>
                 </button>
@@ -893,21 +977,30 @@ export default function ChatInput() {
                         setAttachments([]);
                         setEditMeta(null);
                       }}
+                      title="Discard this edit draft and keep the original turn unchanged."
                     >
                       <X size={16} />
                       <span>Cancel Edit</span>
                     </button>
                   )}
-                  <button
-                    className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                  >
-                    {chatMode === 'debate' && <Swords size={16} />}
-                    {chatMode === 'direct' && <Send size={16} />}
-                    {chatMode === 'parallel' && <Layers size={16} />}
-                    <span>{submitLabelByMode[chatMode] || 'Send'}</span>
-                  </button>
+                  <div className="chat-control-with-help">
+                    <button
+                      className={`chat-btn chat-btn-submit ${chatMode === 'direct' ? 'ensemble' : ''} ${chatMode === 'parallel' ? 'parallel' : ''}`}
+                      onClick={handleSubmit}
+                      disabled={!canSubmit}
+                      aria-label={submitTitle}
+                      title={submitTitle}
+                    >
+                      {chatMode === 'debate' && <Swords size={16} />}
+                      {chatMode === 'direct' && <Send size={16} />}
+                      {chatMode === 'parallel' && <Layers size={16} />}
+                      <span>{submitLabelByMode[chatMode] || 'Send'}</span>
+                    </button>
+                    <InfoTip
+                      content={submitTitle}
+                      label={`${submitLabelByMode[chatMode] || 'Send'} help`}
+                    />
+                  </div>
                 </>
               )}
             </div>

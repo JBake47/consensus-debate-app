@@ -91,6 +91,9 @@
 }
 
 .settings-pane-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-secondary);
@@ -112,6 +115,15 @@
   color: var(--text-primary);
   background: rgba(59, 130, 246, 0.16);
   border-color: rgba(59, 130, 246, 0.35);
+}
+
+.settings-pane-tab-copy,
+.settings-label-copy,
+.settings-inline-label,
+.settings-checkbox-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .settings-section {

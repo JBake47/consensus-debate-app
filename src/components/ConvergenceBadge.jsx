@@ -32,6 +32,9 @@ export default function ConvergenceBadge({ convergenceCheck }) {
             setExpanded(!expanded);
           }
         }}
+        title={hasDetails
+          ? `${converged ? 'Converged' : 'Diverged'}. Click to ${expanded ? 'hide' : 'show'} the convergence analysis for this round.`
+          : `${converged ? 'Converged' : 'Diverged'}.`}
       >
         {converged ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
         <span>{converged ? 'Converged' : 'Diverged'}</span>

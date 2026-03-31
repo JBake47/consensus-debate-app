@@ -40,6 +40,9 @@ export default function ConvergencePanel({ convergenceCheck, roundNumber }) {
         className="convergence-panel-header"
         onClick={() => hasDetails && setExpanded(!expanded)}
         style={{ cursor: hasDetails ? 'pointer' : 'default' }}
+        title={hasDetails
+          ? `Convergence summary for round ${roundNumber}. Click to ${expanded ? 'hide' : 'show'} the agreement and disagreement breakdown.`
+          : `Convergence summary for round ${roundNumber}.`}
       >
         <div className="convergence-panel-left">
           {converged ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}

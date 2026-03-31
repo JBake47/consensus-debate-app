@@ -91,6 +91,7 @@ export default function EnsembleResultPanel({ ensembleResult }) {
           <div
             className={`confidence-fill ${confidenceInfo.level}`}
             style={{ width: `${confidence}%` }}
+            title="Confidence estimates how strongly the ensemble analysis believes the model answers agree with one another."
           />
         </div>
         <div className="confidence-description">{confidenceInfo.label}</div>
@@ -115,6 +116,7 @@ export default function EnsembleResultPanel({ ensembleResult }) {
           <button
             className="ensemble-details-toggle"
             onClick={() => setDetailsExpanded(!detailsExpanded)}
+            title={`${detailsExpanded ? 'Hide' : 'Show'} the agreement, disagreement, and weighting details behind the ensemble score.`}
           >
             {detailsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             {detailsExpanded ? 'Hide details' : 'Show details'}

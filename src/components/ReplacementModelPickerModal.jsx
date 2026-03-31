@@ -202,7 +202,7 @@ export default function ReplacementModelPickerModal({
               Replace <strong>{currentModelLabel}</strong>. {scopeSummary}
             </p>
           </div>
-          <button className="replacement-picker-close" onClick={onClose} aria-label="Close" type="button">
+          <button className="replacement-picker-close" onClick={onClose} aria-label="Close" type="button" title="Close the replacement model chooser.">
             <X size={16} />
           </button>
         </div>
@@ -215,9 +215,10 @@ export default function ReplacementModelPickerModal({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search models by id, name, provider, or description..."
+              title="Search candidate replacement models by ID, name, provider, or description."
             />
           </label>
-          <label className="replacement-picker-cache-toggle">
+          <label className="replacement-picker-cache-toggle" title="When enabled, the replacement run bypasses the local response cache and forces a fresh provider call.">
             <input
               type="checkbox"
               checked={forceRefresh}

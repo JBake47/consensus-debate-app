@@ -67,7 +67,7 @@ export default function WelcomeScreen({
               <strong>Connect a provider first.</strong>
               <span>Add an OpenRouter API key or enable a direct provider in Settings before sending.</span>
             </div>
-            <button className="welcome-setup-btn" onClick={() => onOpenSettings?.()} type="button">
+            <button className="welcome-setup-btn" onClick={() => onOpenSettings?.()} type="button" title="Open Settings to connect OpenRouter or a direct provider before your first turn.">
               <Settings2 size={14} />
               <span>Open Settings</span>
             </button>
@@ -81,6 +81,7 @@ export default function WelcomeScreen({
               className="welcome-quick-start glass-panel"
               onClick={() => onQuickStart?.({ mode: item.mode, prompt: item.prompt })}
               type="button"
+              title={`${item.title}: ${item.description} Click to prefill an example prompt and switch the composer into that mode.`}
             >
               <span className="welcome-quick-start-icon">{item.icon}</span>
               <span className="welcome-quick-start-copy">

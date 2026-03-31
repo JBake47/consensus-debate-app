@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Added broader mouseover help across the composer, sidebar, settings, debate views, model cards, and related controls so the app explains more of its behavior inline without persistent helper chrome
+- Removed the redundant `Prompt` label above the main chat composer to keep the input area cleaner
+
 ## [0.3.31] - 2026-03-23
 
 ### Added

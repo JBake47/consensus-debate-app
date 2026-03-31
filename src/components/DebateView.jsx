@@ -13,6 +13,7 @@ import DebateProgressBar from './DebateProgressBar';
 import SynthesisView from './SynthesisView';
 import EnsembleResultPanel from './EnsembleResultPanel';
 import AttachmentCard from './AttachmentCard';
+import InfoTip from './InfoTip';
 import { getModelDisplayName } from '../lib/openrouter';
 import { formatFullTimestamp } from '../lib/formatDate';
 import { recordPreviewPointerDown, shouldExpandPreviewFromClick } from '../lib/previewExpand';
@@ -56,10 +57,23 @@ function WebSearchPanel({ webSearchResult, canRetry = false, onRetry = null, bra
 
   const panel = (
     <div className={`web-search-panel glass-panel ${status} ${viewerOpen ? 'fullscreen-panel' : ''}`}>
-      <div className="web-search-header" onClick={() => status === 'complete' && setCollapsed(!collapsed)}>
+      <div
+        className="web-search-header"
+        onClick={() => status === 'complete' && setCollapsed(!collapsed)}
+        title="Search stage for this turn. It gathers live web evidence before the model answers when Search is enabled."
+      >
         <div className="web-search-header-left">
-          <Globe size={14} className="web-search-icon" />
-          <span className="web-search-label">Web Search</span>
+          <div className="web-search-label-group">
+            <Globe size={14} className="web-search-icon" />
+            <span className="web-search-label">Web Search</span>
+            <InfoTip
+              content={[
+                'This stage gathers live web evidence before the models answer.',
+                'It only appears when Search is enabled for the turn.',
+              ]}
+              label="Web search stage help"
+            />
+          </div>
           {model && <span className="web-search-model">{getModelDisplayName(model)}</span>}
         </div>
         <div className="web-search-header-right">
@@ -303,8 +317,10 @@ function StageTabs({ tabs, activeTab, onChange, className = '' }) {
           type="button"
           role="tab"
           aria-selected={activeTab === tab.id}
+          aria-label={tab.title ? `${tab.label}. ${tab.title}` : tab.label}
           className={`turn-stage-tab ${activeTab === tab.id ? 'active' : ''}`}
           onClick={() => onChange(tab.id)}
+          title={tab.title}
         >
           <span>{tab.label}</span>
           {tab.count != null && (
@@ -460,16 +476,25 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
 
     const tabs = [];
     if (turn.webSearchResult) {
-      tabs.push({ id: 'web-search', label: 'Web Search' });
+      tabs.push({
+        id: 'web-search',
+        label: 'Web Search',
+        title: 'View the search-assisted evidence gathered before the models answered.',
+      });
     }
     if (initialRoundEntries.length > 0) {
-      tabs.push({ id: 'initial-responses', label: 'Initial Responses' });
+      tabs.push({
+        id: 'initial-responses',
+        label: 'Initial Responses',
+        title: 'See the first response from each selected model before rebuttals start.',
+      });
     }
     if (rebuttalRoundEntries.length > 0) {
       tabs.push({
         id: 'rebuttal-rounds',
         label: 'Rebuttal Rounds',
         count: rebuttalRoundEntries.length,
+        title: 'Inspect later rounds where models react to one another and refine their positions.',
       });
     }
     return tabs;
@@ -696,8 +721,8 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
                     className="user-action-btn"
                     onClick={(event) => retryLastTurn({ forceRefresh: event.shiftKey })}
                     title={branchesConversation
-                      ? 'Retry this turn in a new branch (Shift: bypass cache)'
-                      : 'Retry this turn (Shift: bypass cache)'}
+                      ? 'Rerun this entire turn in a new branch. Hold Shift to bypass the cache.'
+                      : 'Rerun this entire turn. Hold Shift to bypass the cache.'}
                   >
                     <RotateCcw size={14} />
                   </button>
@@ -745,32 +770,46 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
       {showTabbedStages ? (
         <>
           <div className="turn-explorer glass-panel">
-            <button
-              type="button"
-              className="turn-explorer-toggle"
-              onClick={() => setIsTurnExplorerOpen((open) => !open)}
-              aria-expanded={isTurnExplorerOpen}
-            >
-              <div className="turn-explorer-heading">
-                <span className="turn-explorer-title">Turn Breakdown</span>
-              </div>
-              <div className="turn-explorer-summary">
-                {attentionStreams.length > 0 && (
-                  <span className="turn-explorer-badge attention">
-                    {attentionStreams.length} issue{attentionStreams.length !== 1 ? 's' : ''}
+            <div className="turn-explorer-header">
+              <button
+                type="button"
+                className="turn-explorer-toggle"
+                onClick={() => setIsTurnExplorerOpen((open) => !open)}
+                aria-expanded={isTurnExplorerOpen}
+                aria-label={`Turn Breakdown. ${isTurnExplorerOpen ? 'Collapse' : 'Expand'} the stage explorer.`}
+                title={`Turn Breakdown groups this turn into stages. Click to ${isTurnExplorerOpen ? 'collapse' : 'expand'} the stage explorer.`}
+              >
+                <div className="turn-explorer-heading">
+                  <div className="turn-explorer-title-row">
+                    <span className="turn-explorer-title">Turn Breakdown</span>
+                  </div>
+                </div>
+                <div className="turn-explorer-summary">
+                  {attentionStreams.length > 0 && (
+                    <span className="turn-explorer-badge attention">
+                      {attentionStreams.length} issue{attentionStreams.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {rebuttalRoundEntries.length > 0 && (
+                    <span className="turn-explorer-badge">
+                      {rebuttalRoundEntries.length} rebuttal{rebuttalRoundEntries.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  <span className="turn-explorer-badge">{stageTabs.length} tab{stageTabs.length !== 1 ? 's' : ''}</span>
+                  <span className="turn-explorer-chevron">
+                    {isTurnExplorerOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </span>
-                )}
-                {rebuttalRoundEntries.length > 0 && (
-                  <span className="turn-explorer-badge">
-                    {rebuttalRoundEntries.length} rebuttal{rebuttalRoundEntries.length !== 1 ? 's' : ''}
-                  </span>
-                )}
-                <span className="turn-explorer-badge">{stageTabs.length} tab{stageTabs.length !== 1 ? 's' : ''}</span>
-                <span className="turn-explorer-chevron">
-                  {isTurnExplorerOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </span>
-              </div>
-            </button>
+                </div>
+              </button>
+              <InfoTip
+                className="turn-explorer-help"
+                content={[
+                  'Turn Breakdown groups a turn into stages like search, initial responses, and rebuttal rounds.',
+                  `Use it to ${isTurnExplorerOpen ? 'collapse' : 'expand'} the stage explorer and inspect one stage at a time.`,
+                ]}
+                label="Turn breakdown help"
+              />
+            </div>
 
             {isTurnExplorerOpen && (
               <>
@@ -778,23 +817,34 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
                   <DebateProgressBar rounds={turn.rounds} debateMetadata={turn.debateMetadata} compact />
                   <StageTabs tabs={stageTabs} activeTab={activeStageTab} onChange={setActiveStageTab} />
                   {activeStageTab !== 'web-search' && (
-                    <div className="debate-view-toggle">
-                      <button
-                        className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
-                        onClick={() => setViewMode('cards')}
-                        title="Card view"
-                      >
-                        <LayoutGrid size={14} />
-                        <span>Cards</span>
-                      </button>
-                      <button
-                        className={`view-toggle-btn ${viewMode === 'thread' ? 'active' : ''}`}
-                        onClick={() => setViewMode('thread')}
-                        title="Debate thread view"
-                      >
-                        <MessageSquare size={14} />
-                        <span>Thread</span>
-                      </button>
+                    <div className="turn-stage-control-group">
+                      <div className="debate-view-toggle">
+                        <button
+                          className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
+                          onClick={() => setViewMode('cards')}
+                          aria-label="Show each round as stacked cards for easier per-round inspection"
+                          title="Show each round as stacked cards for easier per-round inspection."
+                        >
+                          <LayoutGrid size={14} />
+                          <span>Cards</span>
+                        </button>
+                        <button
+                          className={`view-toggle-btn ${viewMode === 'thread' ? 'active' : ''}`}
+                          onClick={() => setViewMode('thread')}
+                          aria-label="Show the full debate as one continuous conversation thread"
+                          title="Show the full debate as one continuous conversation thread."
+                        >
+                          <MessageSquare size={14} />
+                          <span>Thread</span>
+                        </button>
+                      </div>
+                      <InfoTip
+                        content={[
+                          'Cards groups each round into stacked sections for easier inspection.',
+                          'Thread shows the full debate as one continuous conversation.',
+                        ]}
+                        label="Round view help"
+                      />
                     </div>
                   )}
                 </div>
@@ -812,27 +862,38 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
                     <>
                       {rebuttalRoundEntries.length > 1 && (
                         <div className="turn-stage-subheader">
-                          <div className="debate-view-toggle" role="tablist" aria-label="Rebuttal display mode">
-                            <button
-                              type="button"
-                              role="tab"
-                              aria-selected={rebuttalDisplayMode === 'sequential'}
-                              className={`view-toggle-btn ${rebuttalDisplayMode === 'sequential' ? 'active' : ''}`}
-                              onClick={() => setRebuttalDisplayMode('sequential')}
-                              title="Show all rebuttal rounds in order"
-                            >
-                              <span>Sequential</span>
-                            </button>
-                            <button
-                              type="button"
-                              role="tab"
-                              aria-selected={rebuttalDisplayMode === 'round'}
-                              className={`view-toggle-btn ${rebuttalDisplayMode === 'round' ? 'active' : ''}`}
-                              onClick={() => setRebuttalDisplayMode('round')}
-                              title="Show one rebuttal round at a time"
-                            >
-                              <span>Round by round</span>
-                            </button>
+                          <div className="turn-stage-control-group">
+                            <div className="debate-view-toggle" role="tablist" aria-label="Rebuttal display mode">
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={rebuttalDisplayMode === 'sequential'}
+                                className={`view-toggle-btn ${rebuttalDisplayMode === 'sequential' ? 'active' : ''}`}
+                                onClick={() => setRebuttalDisplayMode('sequential')}
+                                aria-label="Show every rebuttal round in one long list"
+                                title="Show every rebuttal round in one long list."
+                              >
+                                <span>Sequential</span>
+                              </button>
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={rebuttalDisplayMode === 'round'}
+                                className={`view-toggle-btn ${rebuttalDisplayMode === 'round' ? 'active' : ''}`}
+                                onClick={() => setRebuttalDisplayMode('round')}
+                                aria-label="Show one rebuttal round at a time and switch between them manually"
+                                title="Show one rebuttal round at a time and switch between them manually."
+                              >
+                                <span>Round by round</span>
+                              </button>
+                            </div>
+                            <InfoTip
+                              content={[
+                                'Sequential shows every rebuttal round in one long list.',
+                                'Round by round shows one rebuttal round at a time and lets you switch manually.',
+                              ]}
+                              label="Rebuttal display mode help"
+                            />
                           </div>
 
                           {rebuttalDisplayMode === 'round' && (
@@ -845,6 +906,7 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
                                     type="button"
                                     role="tab"
                                     aria-selected={activeRebuttalRoundIndex === index}
+                                    aria-label={roundLabel}
                                     className={`turn-stage-tab ${activeRebuttalRoundIndex === index ? 'active' : ''}`}
                                     onClick={() => setActiveRebuttalRoundIndex(index)}
                                     title={`Show ${roundLabel}`}

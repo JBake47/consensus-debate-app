@@ -22,7 +22,7 @@ export default function CopyButton({ text, className = '' }) {
     <button
       className={`copy-btn ${copied ? 'copied' : ''} ${className}`}
       onClick={handleCopy}
-      title={copied ? 'Copied!' : 'Copy to clipboard'}
+      title={copied ? 'Copied to clipboard.' : 'Copy this content to the clipboard.'}
     >
       {copied ? <Check size={13} /> : <Copy size={13} />}
     </button>

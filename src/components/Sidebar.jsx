@@ -5,6 +5,7 @@ import { useDebateActions, useDebateConversationList } from '../context/DebateCo
 import { formatRelativeDate } from '../lib/formatDate';
 import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
 import { sortSidebarConversations } from '../lib/sidebarOrdering';
+import InfoTip from './InfoTip';
 import './Sidebar.css';
 
 export default function Sidebar({ open, onClose }) {
@@ -244,6 +245,8 @@ export default function Sidebar({ open, onClose }) {
         role={editingId === conv.id ? undefined : 'button'}
         tabIndex={editingId === conv.id ? undefined : 0}
         aria-current={conv.id === activeConversationId ? 'page' : undefined}
+        aria-label={editingId === conv.id ? undefined : 'Open this chat. Use the action buttons to rename, export, report, or delete it.'}
+        title={editingId === conv.id ? undefined : 'Open this chat. Use the action buttons to rename, export, report, or delete it.'}
       >
         <MessageSquare size={14} />
         {editingId === conv.id ? (
@@ -255,6 +258,8 @@ export default function Sidebar({ open, onClose }) {
               onChange={e => setEditTitle(e.target.value)}
               onKeyDown={e => handleEditKeyDown(e, conv.id)}
               placeholder="Title"
+              aria-label="Rename this chat"
+              title="Rename this chat."
             />
             <input
               className="sidebar-edit-input sidebar-edit-desc"
@@ -262,12 +267,14 @@ export default function Sidebar({ open, onClose }) {
               onChange={e => setEditDesc(e.target.value)}
               onKeyDown={e => handleEditKeyDown(e, conv.id)}
               placeholder="Short description (optional)"
+              aria-label="Optional description shown under the chat title"
+              title="Optional description shown under the chat title."
             />
             <div className="sidebar-edit-actions">
-              <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} title="Save" type="button">
+              <button className="sidebar-edit-btn save" onClick={() => saveEdit(conv.id)} aria-label="Save the edited title and description" title="Save the edited title and description." type="button">
                 <Check size={12} />
               </button>
-              <button className="sidebar-edit-btn cancel" onClick={cancelEdit} title="Cancel" type="button">
+              <button className="sidebar-edit-btn cancel" onClick={cancelEdit} aria-label="Cancel editing and keep the current title" title="Cancel editing and keep the current title." type="button">
                 <X size={12} />
               </button>
             </div>
@@ -289,38 +296,42 @@ export default function Sidebar({ open, onClose }) {
             <button
               className="sidebar-item-action edit"
               onClick={e => startEditing(e, conv)}
-              title="Edit title"
+              aria-label="Rename this chat and edit its short description"
+              title="Rename this chat and edit its short description."
               type="button"
             >
               <Pencil size={12} />
             </button>
           )}
-          <button
-            className="sidebar-item-action share"
-            onClick={(event) => {
-              event.stopPropagation();
-              void handleShareReportAsync(conv);
-            }}
-            title="Export report"
-            type="button"
-          >
-            <Share2 size={12} />
-          </button>
-          <button
-            className="sidebar-item-action export"
-            onClick={e => handleExportOne(e, conv)}
-            title="Export chat"
-            type="button"
-          >
-            <Download size={12} />
-          </button>
-          <button
-            className="sidebar-item-action delete"
-            onClick={e => handleDelete(e, conv)}
-            title={conversationRunning ? 'Stop this chat before deleting' : 'Delete'}
-            disabled={conversationRunning}
-            type="button"
-          >
+            <button
+              className="sidebar-item-action share"
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleShareReportAsync(conv);
+              }}
+              aria-label="Export a readable report for this chat"
+              title="Export a readable report for this chat."
+              type="button"
+            >
+              <Share2 size={12} />
+            </button>
+            <button
+              className="sidebar-item-action export"
+              onClick={e => handleExportOne(e, conv)}
+              aria-label="Export this chat as JSON so it can be imported later"
+              title="Export this chat as JSON so it can be imported later."
+              type="button"
+            >
+              <Download size={12} />
+            </button>
+            <button
+              className="sidebar-item-action delete"
+              onClick={e => handleDelete(e, conv)}
+              aria-label={conversationRunning ? 'Stop this chat before deleting' : 'Delete this chat'}
+              title={conversationRunning ? 'Stop this chat before deleting' : 'Delete'}
+              disabled={conversationRunning}
+              type="button"
+            >
             <Trash2 size={12} />
           </button>
         </div>
@@ -353,13 +364,32 @@ export default function Sidebar({ open, onClose }) {
             <img className="sidebar-logo-mark" src="/consensus.svg" alt="Consensus logo" />
             <span>Consensus</span>
           </div>
-          <button className="sidebar-btn" onClick={handleNew} title="New debate" type="button">
-            <Plus size={18} />
-          </button>
+          <div className="sidebar-header-actions">
+            <button className="sidebar-btn" onClick={handleNew} aria-label="Start a new chat with the current global settings" title="Start a new chat with the current global settings." type="button">
+              <Plus size={18} />
+            </button>
+            <InfoTip
+              content={[
+                'Start a new chat with the current global settings.',
+                'Your existing chats stay in the sidebar so you can switch back at any time.',
+              ]}
+              label="New chat help"
+            />
+          </div>
         </div>
 
         {conversations.length > 0 && (
           <div className="sidebar-search">
+            <div className="sidebar-search-heading">
+              <span className="sidebar-search-label">Search</span>
+              <InfoTip
+                content={[
+                  'Search across chat titles, prompts, and responses.',
+                  'Choosing a result opens the matching chat and jumps to the related turn when possible.',
+                ]}
+                label="Chat search help"
+              />
+            </div>
             <div className="sidebar-search-input-wrapper">
               <Search size={14} className="sidebar-search-icon" />
               <input
@@ -368,9 +398,11 @@ export default function Sidebar({ open, onClose }) {
                 placeholder="Search chats..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
+                aria-label="Search across chat titles, prompts, and responses"
+                title="Search across chat titles, prompts, and responses. Search results can jump directly to a matching turn."
               />
               {searchQuery && (
-                <button className="sidebar-search-clear" onClick={() => setSearchQuery('')} type="button">
+                <button className="sidebar-search-clear" onClick={() => setSearchQuery('')} type="button" aria-label="Clear the current chat search" title="Clear the current chat search.">
                   <X size={14} />
                 </button>
               )}
@@ -394,6 +426,8 @@ export default function Sidebar({ open, onClose }) {
                   role="button"
                   tabIndex={0}
                   aria-current={result.conversationId === activeConversationId ? 'page' : undefined}
+                  aria-label="Open this matching chat and jump to the referenced result"
+                  title="Open this matching chat and jump to the referenced result."
                 >
                   <Search size={14} />
                   <div className="sidebar-item-text">
@@ -437,23 +471,34 @@ export default function Sidebar({ open, onClose }) {
             </div>
           )}
           <div className="sidebar-footer-row">
-            <button
-              className="sidebar-footer-btn-icon"
-              onClick={handleExportAll}
-              disabled={conversations.length === 0}
-              title="Export chats"
-              type="button"
-            >
-              <Download size={15} />
-            </button>
-            <button
-              className="sidebar-footer-btn-icon"
-              onClick={() => importInputRef.current?.click()}
-              title="Import chats"
-              type="button"
-            >
-              <Upload size={15} />
-            </button>
+            <div className="sidebar-footer-controls">
+              <button
+                className="sidebar-footer-btn-icon"
+                onClick={handleExportAll}
+                disabled={conversations.length === 0}
+                aria-label="Export every saved chat in this browser profile as JSON"
+                title="Export every saved chat in this browser profile as JSON."
+                type="button"
+              >
+                <Download size={15} />
+              </button>
+              <button
+                className="sidebar-footer-btn-icon"
+                onClick={() => importInputRef.current?.click()}
+                aria-label="Import chats from a JSON export file"
+                title="Import chats from a JSON export file."
+                type="button"
+              >
+                <Upload size={15} />
+              </button>
+              <InfoTip
+                content={[
+                  'Export saves chats from this browser profile as JSON.',
+                  'Import restores chats from a previous JSON export.',
+                ]}
+                label="Import and export help"
+              />
+            </div>
             <input
               ref={importInputRef}
               type="file"
@@ -462,10 +507,19 @@ export default function Sidebar({ open, onClose }) {
               onChange={handleImport}
             />
           </div>
-          <button className="sidebar-footer-btn" onClick={handleSettings} type="button">
-            <Settings size={16} />
-            <span>Settings</span>
-          </button>
+          <div className="sidebar-settings-row">
+            <button className="sidebar-footer-btn" onClick={handleSettings} type="button" aria-label="Open app settings for models, budget, reliability, and performance" title="Open app settings for models, budget, reliability, and performance.">
+              <Settings size={16} />
+              <span>Settings</span>
+            </button>
+            <InfoTip
+              content={[
+                'Settings controls your model roster, providers, budget rules, reliability, and performance.',
+                'Changes apply to new turns unless the current workflow says otherwise.',
+              ]}
+              label="Settings help"
+            />
+          </div>
         </div>
       </aside>
     </>

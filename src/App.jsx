@@ -291,6 +291,7 @@ function AppContent() {
             aria-expanded={sidebarOpen}
             aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
             type="button"
+            title={sidebarOpen ? 'Hide the chat list and library actions.' : 'Show the chat list, search, import/export, and settings.'}
           >
             <Menu size={20} />
           </button>
@@ -303,6 +304,7 @@ function AppContent() {
                 onChange={e => setHeaderTitle(e.target.value)}
                 onKeyDown={handleHeaderKeyDown}
                 placeholder="Title"
+                title="Rename this chat. Press Enter to save."
               />
               <input
                 className="main-header-edit-input main-header-edit-desc"
@@ -310,11 +312,12 @@ function AppContent() {
                 onChange={e => setHeaderDesc(e.target.value)}
                 onKeyDown={handleHeaderKeyDown}
                 placeholder="Short description (optional)"
+                title="Optional description shown under the chat title."
               />
-              <button className="main-header-edit-btn save" onClick={saveHeaderEdit} title="Save">
+              <button className="main-header-edit-btn save" onClick={saveHeaderEdit} title="Save the edited title and description.">
                 <Check size={14} />
               </button>
-              <button className="main-header-edit-btn cancel" onClick={() => setEditingHeader(false)} title="Cancel">
+              <button className="main-header-edit-btn cancel" onClick={() => setEditingHeader(false)} title="Cancel editing and keep the current title.">
                 <X size={14} />
               </button>
             </div>
@@ -326,6 +329,7 @@ function AppContent() {
               role={activeConversation ? 'button' : undefined}
               tabIndex={activeConversation ? 0 : undefined}
               aria-label={activeConversation ? 'Edit chat title and description' : undefined}
+              title={activeConversation ? 'Click to rename this chat and add a short description.' : undefined}
             >
               <h1 className="main-title">
                 {activeConversation?.title || 'New Chat'}
@@ -350,7 +354,9 @@ function AppContent() {
           <button
             className="main-header-theme"
             onClick={toggleTheme}
-            title={themeMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            title={themeMode === 'light'
+              ? 'Switch the app to dark mode. You can also change this in Settings > General.'
+              : 'Switch the app to light mode. You can also change this in Settings > General.'}
             aria-label={themeMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {themeMode === 'light' ? <Moon size={14} /> : <Sun size={14} />}
@@ -359,7 +365,7 @@ function AppContent() {
             <button
               className="main-header-share"
               onClick={handleExportReport}
-              title="Export report"
+              title="Export this chat as a readable report instead of raw conversation JSON."
             >
               <Share2 size={13} />
               <span>Export</span>
@@ -409,7 +415,7 @@ function AppContent() {
       </main>
 
       {turns.length > 0 && (
-        <button className="jump-latest-btn" onClick={jumpToLatest} type="button">
+        <button className="jump-latest-btn" onClick={jumpToLatest} type="button" title="Jump to the newest turn in the current chat.">
           Jump to Latest
         </button>
       )}

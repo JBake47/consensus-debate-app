@@ -288,7 +288,7 @@ export default function AttachmentCard({
                   type="button"
                   className="attachment-card-action"
                   onClick={(event) => handleActionClick(event, onReuse)}
-                  title="Add attachment"
+                  title="Reuse this attachment in the current composer."
                 >
                   <Plus size={14} />
                 </button>
@@ -298,7 +298,7 @@ export default function AttachmentCard({
                   type="button"
                   className="attachment-card-action danger"
                   onClick={(event) => handleActionClick(event, onRemove)}
-                  title="Remove attachment"
+                  title="Remove this attachment from the current turn draft."
                 >
                   <X size={14} />
                 </button>

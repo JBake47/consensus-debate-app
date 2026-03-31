@@ -86,7 +86,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
       <div className="model-picker-modal glass-panel" onClick={(e) => e.stopPropagation()}>
         <div className="model-picker-header">
           <h3>Browse {titleSuffix} Models</h3>
-          <button className="model-picker-close" onClick={onClose} aria-label="Close" type="button">
+          <button className="model-picker-close" onClick={onClose} aria-label="Close" type="button" title="Close the model browser.">
             <X size={16} />
           </button>
         </div>
@@ -97,6 +97,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
             value={query}
             onChange={(e) => { setQuery(e.target.value); setPage(0); }}
             placeholder="Search by model id or name..."
+            title="Search the provider catalog by model ID or display name."
           />
         </div>
         <div className="model-picker-body">
@@ -152,7 +153,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
                         ))}
                       </div>
                     </div>
-                    <button className="model-picker-add" onClick={() => onAdd(model.id)} type="button">
+                    <button className="model-picker-add" onClick={() => onAdd(model.id)} type="button" title="Use this model in the current settings field.">
                       <Plus size={14} />
                       Add
                     </button>
@@ -170,6 +171,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
               type="button"
+              title="Show the previous page of models."
             >
               Prev
             </button>
@@ -179,6 +181,7 @@ export default function ModelPickerModal({ open, onClose, onAdd, provider = 'ope
               onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
               disabled={page >= pageCount - 1}
               type="button"
+              title="Show the next page of models."
             >
               Next
             </button>

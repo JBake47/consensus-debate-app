@@ -22,9 +22,21 @@ import {
 import { DEFAULT_THEME_MODE } from '../lib/theme';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload';
 import ModelPickerModal from './ModelPickerModal';
+import InfoTip from './InfoTip';
 import './SettingsModal.css';
 
 const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
+const SETTINGS_PANE_HELP = {
+  general: 'Browser-local setup like provider credentials, theme, and app maintenance.',
+  models: 'Choose who debates, who synthesizes, who checks convergence, and which model handles web search.',
+  reliability: 'Control retries, diagnostics, and how far debates can continue before they stop.',
+  budget: 'Warn before expensive turns so you can cap or approve spend intentionally.',
+  performance: 'Trade memory and fidelity for smoother rendering and faster repeat runs.',
+};
+const PROVIDER_FIELD_HELP = [
+  'Choose where this model ID should be resolved.',
+  'OpenRouter uses full catalog IDs. Direct providers add the provider prefix automatically.',
+];
 
 function formatDurationCompact(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '--';
@@ -464,11 +476,11 @@ export default function SettingsModal() {
     [appUpdateResult],
   );
   const settingsPanes = useMemo(() => ([
-    { id: 'general', label: 'General' },
-    { id: 'models', label: 'Models' },
-    { id: 'reliability', label: 'Reliability' },
-    { id: 'budget', label: 'Budget' },
-    { id: 'performance', label: 'Performance' },
+    { id: 'general', label: 'General', help: SETTINGS_PANE_HELP.general },
+    { id: 'models', label: 'Models', help: SETTINGS_PANE_HELP.models },
+    { id: 'reliability', label: 'Reliability', help: SETTINGS_PANE_HELP.reliability },
+    { id: 'budget', label: 'Budget', help: SETTINGS_PANE_HELP.budget },
+    { id: 'performance', label: 'Performance', help: SETTINGS_PANE_HELP.performance },
   ]), []);
   const appUpdateFollowUp = useMemo(() => {
     if (!appUpdateResult) return null;
@@ -1074,7 +1086,7 @@ export default function SettingsModal() {
       <div className="settings-modal glass-panel" onClick={e => e.stopPropagation()}>
         <div className="settings-header">
           <h2>Settings</h2>
-          <button className="settings-close" onClick={handleClose}>
+          <button className="settings-close" onClick={handleClose} title="Close settings">
             <X size={18} />
           </button>
         </div>
@@ -1087,10 +1099,14 @@ export default function SettingsModal() {
                 type="button"
                 role="tab"
                 aria-selected={activeSettingsPane === pane.id}
+                aria-label={`${pane.label}. ${pane.help}`}
                 className={`settings-pane-tab ${activeSettingsPane === pane.id ? 'active' : ''}`}
                 onClick={() => setActiveSettingsPane(pane.id)}
+                title={pane.help}
               >
-                {pane.label}
+                <span className="settings-pane-tab-copy">
+                  <span>{pane.label}</span>
+                </span>
               </button>
             ))}
           </div>
@@ -1100,7 +1116,17 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Key size={14} />
-              <span>OpenRouter API Key (optional override)</span>
+              <span className="settings-label-copy">
+                <span>OpenRouter API Key (optional override)</span>
+                <InfoTip
+                  label="OpenRouter API key help"
+                  content={[
+                    'This key overrides the server default for requests from this browser profile.',
+                    'Leave it blank if your backend already injects credentials.',
+                    'If you save it locally, it stays on this device until you remove it.',
+                  ]}
+                />
+              </span>
             </label>
             <input
               type="password"
@@ -1109,14 +1135,27 @@ export default function SettingsModal() {
               value={keyInput}
               onChange={e => setKeyInput(e.target.value)}
               autoFocus={!apiKey}
+              title="Optional browser-side OpenRouter override. Leave blank to keep using the backend default."
             />
-            <label className="settings-checkbox">
+            <label
+              className="settings-checkbox"
+              title="Store this override in browser storage on this machine. Turn it off on shared devices."
+            >
               <input
                 type="checkbox"
                 checked={rememberKey}
                 onChange={e => setRememberKey(e.target.checked)}
               />
-              <span>Remember key on this device</span>
+              <span className="settings-checkbox-copy">
+                <span>Remember key on this device</span>
+                <InfoTip
+                  label="Remember key help"
+                  content={[
+                    'Saves the API key in this browser profile so you do not need to re-enter it.',
+                    'Disable this on any shared or temporary machine.',
+                  ]}
+                />
+              </span>
             </label>
             <p className="settings-hint">
               Server-side API keys are recommended. Optional OpenRouter override:{' '}
@@ -1129,12 +1168,22 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Sun size={14} />
-              <span>Theme</span>
+              <span className="settings-label-copy">
+                <span>Theme</span>
+                <InfoTip
+                  label="Theme help"
+                  content={[
+                    'Switch between dark and light appearance modes for this app.',
+                    'The choice applies immediately and is saved only on this device.',
+                  ]}
+                />
+              </span>
             </label>
             <select
               className="settings-input settings-select"
               value={themeSelection}
               onChange={e => setThemeSelection(e.target.value)}
+              title="Choose the app appearance for this browser profile."
             >
               <option value="dark">Dark</option>
               <option value="light">Light</option>
@@ -1147,7 +1196,17 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Download size={14} />
-              <span>App Updates</span>
+              <span className="settings-label-copy">
+                <span>App Updates</span>
+                <InfoTip
+                  label="App updates help"
+                  content={[
+                    'Checks this local clone against its upstream branch.',
+                    'Use it when you want to pull newer code into the app without leaving the UI.',
+                    'If backend files or dependencies change, you may need to restart the local app afterward.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="settings-update-card">
               <div className="settings-update-grid">
@@ -1206,6 +1265,7 @@ export default function SettingsModal() {
                       className="settings-btn-secondary"
                       type="button"
                       onClick={handleReloadUi}
+                      title="Reload the frontend so the newly pulled UI files are used immediately."
                     >
                       Reload UI
                     </button>
@@ -1219,6 +1279,7 @@ export default function SettingsModal() {
                   type="button"
                   onClick={() => loadAppUpdateStatus({ refresh: true, clearResult: true })}
                   disabled={appUpdateState === 'loading' || appUpdateState === 'updating'}
+                  title="Fetch the latest upstream status without applying any changes."
                 >
                   {appUpdateState === 'loading' ? 'Checking...' : 'Check for Updates'}
                 </button>
@@ -1227,6 +1288,7 @@ export default function SettingsModal() {
                   type="button"
                   onClick={handleApplyAppUpdate}
                   disabled={appUpdateState === 'loading' || appUpdateState === 'updating' || !appUpdateStatus?.canUpdate}
+                  title="Pull the newest code from the tracked branch into this local clone."
                 >
                   {appUpdateState === 'updating' ? 'Updating...' : 'Update Now'}
                 </button>
@@ -1245,7 +1307,16 @@ export default function SettingsModal() {
             <>
           <div className="settings-section">
             <label className="settings-label">
-              <span>Model Presets</span>
+              <span className="settings-label-copy">
+                <span>Model Presets</span>
+                <InfoTip
+                  label="Model presets help"
+                  content={[
+                    'Presets save the current debate roster plus the synthesis, convergence, search, and rounds settings below.',
+                    'Loading a preset applies it immediately, and saving writes the current draft back into your preset library.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="preset-selector-card">
               <div className="preset-picker-row">
@@ -1255,6 +1326,7 @@ export default function SettingsModal() {
                     className="settings-input settings-select preset-selector-input"
                     value={selectedPresetId}
                     onChange={handlePresetSelection}
+                    title="Load a saved model configuration. Choosing one applies it immediately."
                   >
                     <option value="">Unsaved Draft</option>
                     {modelPresets.map((preset) => (
@@ -1288,6 +1360,7 @@ export default function SettingsModal() {
                     onChange={(event) => setPresetNameInput(event.target.value)}
                     onKeyDown={handlePresetNameKeyDown}
                     placeholder="Preset name"
+                    title="Name for saving the current configuration as a reusable preset."
                   />
                 </label>
 
@@ -1299,6 +1372,7 @@ export default function SettingsModal() {
                         className="settings-btn-primary"
                         onClick={handleSavePresetEdits}
                         disabled={!canSaveSelectedPreset}
+                        title="Overwrite the selected preset with the configuration currently shown below."
                       >
                         Save Changes
                       </button>
@@ -1307,6 +1381,7 @@ export default function SettingsModal() {
                         className="settings-btn-secondary"
                         onClick={handleRevertPreset}
                         disabled={!selectedPresetHasUnsavedChanges}
+                        title="Discard unsaved preset edits and restore the last saved version."
                       >
                         Reset to Saved
                       </button>
@@ -1314,6 +1389,7 @@ export default function SettingsModal() {
                         type="button"
                         className="settings-btn-secondary"
                         onClick={openSaveAsPresetSheet}
+                        title="Save this draft as a new preset without changing the original."
                       >
                         Save Copy...
                       </button>
@@ -1321,6 +1397,7 @@ export default function SettingsModal() {
                         type="button"
                         className="settings-btn-danger"
                         onClick={openDeletePresetSheet}
+                        title="Delete the currently selected preset from this browser profile."
                       >
                         Delete
                       </button>
@@ -1332,6 +1409,7 @@ export default function SettingsModal() {
                         className="settings-btn-primary"
                         onClick={handleCreatePreset}
                         disabled={!canCreatePreset}
+                        title="Save the current models and supporting settings as a new preset."
                       >
                         Create Preset
                       </button>
@@ -1339,6 +1417,7 @@ export default function SettingsModal() {
                         type="button"
                         className="settings-btn-secondary"
                         onClick={resetPresetNameDraft}
+                        title="Generate a preset name from the current model lineup and round count."
                       >
                         Suggest Name
                       </button>
@@ -1356,7 +1435,17 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Cpu size={14} />
-              <span>Debate Models</span>
+              <span className="settings-label-copy">
+                <span>Debate Models</span>
+                <InfoTip
+                  label="Debate models help"
+                  content={[
+                    'These are the models that produce the main responses in Debate and Parallel modes.',
+                    'Add a mix of strengths if you want disagreement, or similar models if you want a tighter consensus.',
+                    'The app uses the first round roster here unless a turn explicitly overrides it.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="model-list">
               {models.map((model, i) => (
@@ -1372,6 +1461,7 @@ export default function SettingsModal() {
                     className="model-item-remove"
                     onClick={() => removeModel(i)}
                     disabled={models.length <= 1}
+                    title={models.length <= 1 ? 'At least one debate model is required.' : 'Remove this model from the debate roster.'}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -1384,6 +1474,7 @@ export default function SettingsModal() {
                 value={newModelProvider}
                 onChange={e => setNewModelProvider(e.target.value)}
                 disabled={providerOptions.length === 0}
+                title="Choose how the model ID should be interpreted before adding it."
               >
                 {providerOptions.map(option => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -1397,11 +1488,13 @@ export default function SettingsModal() {
                 onChange={e => setNewModel(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addModel()}
                 list={providerModelOptions.length > 0 ? `provider-models-${newModelProvider}` : undefined}
+                title="Enter a model ID to add to the debate roster. OpenRouter expects full IDs; direct providers use the selected prefix."
               />
               <button
                 className="model-add-btn"
                 onClick={addModel}
                 disabled={providerOptions.length === 0}
+                title="Add the typed model to the debate roster."
               >
                 <Plus size={14} />
                 Add
@@ -1410,6 +1503,7 @@ export default function SettingsModal() {
                 <button
                   className="model-browse-btn"
                   onClick={() => setPickerOpen('debate')}
+                  title="Browse the provider catalog and add a debate model from the list."
                 >
                   Browse
                 </button>
@@ -1437,13 +1531,23 @@ export default function SettingsModal() {
             <div className="settings-smart-ranking">
               <label className="settings-label settings-sub-label">
                 <Wand2 size={13} />
-                <span>Smart Ranking</span>
+                <span className="settings-label-copy">
+                  <span>Smart Ranking</span>
+                  <InfoTip
+                    label="Smart ranking help"
+                    content={[
+                      'Ranks candidate models using catalog metadata, benchmark priors, and local telemetry.',
+                      'Use it to auto-fill the roster when you want balanced, fast, cheap, quality-first, or frontier-biased picks.',
+                    ]}
+                  />
+                </span>
               </label>
               <div className="model-add-row">
                 <select
                   className="settings-input settings-select"
                   value={rankingMode}
                   onChange={e => setRankingMode(e.target.value)}
+                  title="Choose what Smart Ranking should optimize for when suggesting models."
                 >
                   <option value="balanced">Balanced</option>
                   <option value="fast">Fastest</option>
@@ -1455,12 +1559,13 @@ export default function SettingsModal() {
                   className="settings-btn-secondary"
                   onClick={() => applyRankedTopModels(3)}
                   disabled={rankedModels.length === 0}
+                  title="Replace the current debate roster with the top three ranked suggestions."
                 >
                   Use Top 3
                 </button>
               </div>
               <div className="settings-smart-ranking-options">
-                <label className="settings-checkbox">
+                <label className="settings-checkbox" title="Give extra weight to providers' main flagship lines when ranking.">
                   <input
                     type="checkbox"
                     checked={rankingPreferFlagship}
@@ -1468,7 +1573,7 @@ export default function SettingsModal() {
                   />
                   <span>Prioritize flagship model families</span>
                 </label>
-                <label className="settings-checkbox">
+                <label className="settings-checkbox" title="Boost recently released models when ranking choices.">
                   <input
                     type="checkbox"
                     checked={rankingPreferNew}
@@ -1476,7 +1581,7 @@ export default function SettingsModal() {
                   />
                   <span>Boost newly released models</span>
                 </label>
-                <label className="settings-checkbox">
+                <label className="settings-checkbox" title="Include preview and beta models in ranked suggestions. Disable this if you want steadier production picks.">
                   <input
                     type="checkbox"
                     checked={rankingAllowPreview}
@@ -1537,7 +1642,16 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Sparkles size={14} />
-              <span>Synthesizer Model</span>
+              <span className="settings-label-copy">
+                <span>Synthesizer Model</span>
+                <InfoTip
+                  label="Synthesizer model help"
+                  content={[
+                    'This model reads the debate or ensemble outputs and writes the final answer shown to you.',
+                    'Choose a model you trust for summarization, arbitration, and citation handling.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="model-add-row">
               <select
@@ -1545,6 +1659,7 @@ export default function SettingsModal() {
                 value={synthProvider}
                 onChange={e => setSynthProvider(e.target.value)}
                 disabled={providerOptions.length === 0}
+                title={PROVIDER_FIELD_HELP.join(' ')}
               >
                 {providerOptions.map(option => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -1566,17 +1681,18 @@ export default function SettingsModal() {
                     dispatch({ type: 'SET_SYNTHESIZER', payload: nextValue });
                   }
                 }}
-                title={getModelStatsTitle(normalizedSynthValue)}
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck={false}
                 data-form-type="other"
                 data-lpignore="true"
+                title={`Model used to produce the final synthesized answer after the run completes. ${getModelStatsTitle(normalizedSynthValue)}`}
               />
               <button
                 className="model-browse-btn"
                 onClick={() => setPickerOpen('synth')}
+                title="Browse and choose a synthesizer model from the provider catalog."
               >
                 Browse
               </button>
@@ -1586,7 +1702,16 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <GitCompareArrows size={14} />
-              <span>Convergence Check Model</span>
+              <span className="settings-label-copy">
+                <span>Convergence Check Model</span>
+                <InfoTip
+                  label="Convergence model help"
+                  content={[
+                    'This model decides whether the debaters are meaningfully agreeing or still diverging between rounds.',
+                    'A fast and inexpensive model usually works best here because it runs during the debate, not after it.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="model-add-row">
               <select
@@ -1594,6 +1719,7 @@ export default function SettingsModal() {
                 value={convProvider}
                 onChange={e => setConvProvider(e.target.value)}
                 disabled={providerOptions.length === 0}
+                title={PROVIDER_FIELD_HELP.join(' ')}
               >
                 {providerOptions.map(option => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -1615,17 +1741,18 @@ export default function SettingsModal() {
                     dispatch({ type: 'SET_CONVERGENCE_MODEL', payload: nextValue });
                   }
                 }}
-                title={getModelStatsTitle(normalizedConvergenceValue)}
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck={false}
                 data-form-type="other"
                 data-lpignore="true"
+                title={`Model used to judge agreement between debaters after each round. ${getModelStatsTitle(normalizedConvergenceValue)}`}
               />
               <button
                 className="model-browse-btn"
                 onClick={() => setPickerOpen('convergence')}
+                title="Browse and choose the convergence checker model."
               >
                 Browse
               </button>
@@ -1638,7 +1765,16 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Globe size={14} />
-              <span>Web Search Model</span>
+              <span className="settings-label-copy">
+                <span>Web Search Model</span>
+                <InfoTip
+                  label="Web search model help"
+                  content={[
+                    'This model is only used when the composer Search toggle is on.',
+                    'Pick a model that can browse, cite sources, and report dates clearly.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="model-add-row">
               <select
@@ -1646,6 +1782,7 @@ export default function SettingsModal() {
                 value={searchProvider}
                 onChange={e => setSearchProvider(e.target.value)}
                 disabled={providerOptions.length === 0}
+                title={PROVIDER_FIELD_HELP.join(' ')}
               >
                 {providerOptions.map(option => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -1673,6 +1810,7 @@ export default function SettingsModal() {
               <button
                 className="model-browse-btn"
                 onClick={() => setPickerOpen('search')}
+                title="Browse and choose the model used for Search-enabled turns."
               >
                 Browse
               </button>
@@ -1687,13 +1825,25 @@ export default function SettingsModal() {
             <p className="settings-hint">
               A model with web search capabilities (e.g. Perplexity Sonar via OpenRouter). Used when the Search toggle is active.
             </p>
-            <label className="settings-checkbox">
+            <label
+              className="settings-checkbox"
+              title="When enabled, search-assisted answers must include verifiable sources and dates or the app blocks them."
+            >
               <input
                 type="checkbox"
                 checked={strictSearch}
                 onChange={e => setStrictSearch(e.target.checked)}
               />
-              <span>Strict search verification (block unverified answers)</span>
+              <span className="settings-checkbox-copy">
+                <span>Strict search verification (block unverified answers)</span>
+                <InfoTip
+                  label="Strict search help"
+                  content={[
+                    'Use this when you would rather get a blocked result than accept a weakly sourced search answer.',
+                    'If the search model does not provide URLs and date evidence, the app retries with legacy search context before failing.',
+                  ]}
+                />
+              </span>
             </label>
             <p className="settings-hint">
               Requires source URLs and date evidence on Search-enabled first-round responses. If missing, the app auto-retries with legacy search context.
@@ -1708,11 +1858,23 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Shield size={14} />
-              <span>Retry & Resilience</span>
+              <span className="settings-label-copy">
+                <span>Retry & Resilience</span>
+                <InfoTip
+                  label="Retry and resilience help"
+                  content={[
+                    'These controls decide how aggressively the app retries transient failures.',
+                    'Higher values improve recovery but can make a turn take longer and cost more.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="settings-grid-compact">
               <label className="settings-inline-field">
-                <span>Max attempts</span>
+                <span className="settings-inline-label">
+                  <span>Max attempts</span>
+                  <InfoTip content="Maximum tries per request before the app gives up and marks that stream as failed." label="Max attempts help" />
+                </span>
                 <input
                   type="number"
                   min={1}
@@ -1720,10 +1882,14 @@ export default function SettingsModal() {
                   className="settings-input"
                   value={retryMaxAttempts}
                   onChange={e => setRetryMaxAttempts(Number(e.target.value))}
+                  title="Maximum tries per request before a stream is marked as failed."
                 />
               </label>
               <label className="settings-inline-field">
-                <span>Base delay (ms)</span>
+                <span className="settings-inline-label">
+                  <span>Base delay (ms)</span>
+                  <InfoTip content="Starting backoff delay before the first retry. Later retries grow from here." label="Base delay help" />
+                </span>
                 <input
                   type="number"
                   min={100}
@@ -1732,10 +1898,14 @@ export default function SettingsModal() {
                   className="settings-input"
                   value={retryBaseDelayMs}
                   onChange={e => setRetryBaseDelayMs(Number(e.target.value))}
+                  title="Initial wait before retrying a failed request."
                 />
               </label>
               <label className="settings-inline-field">
-                <span>Max delay (ms)</span>
+                <span className="settings-inline-label">
+                  <span>Max delay (ms)</span>
+                  <InfoTip content="Upper bound for exponential backoff. Keeps long outages from stretching retries forever." label="Max delay help" />
+                </span>
                 <input
                   type="number"
                   min={retryBaseDelayMs || 100}
@@ -1744,10 +1914,14 @@ export default function SettingsModal() {
                   className="settings-input"
                   value={retryMaxDelayMs}
                   onChange={e => setRetryMaxDelayMs(Number(e.target.value))}
+                  title="Cap on retry backoff delay."
                 />
               </label>
               <label className="settings-inline-field">
-                <span>Circuit failures</span>
+                <span className="settings-inline-label">
+                  <span>Circuit failures</span>
+                  <InfoTip content="How many consecutive failures trigger the provider circuit breaker for a route." label="Circuit failures help" />
+                </span>
                 <input
                   type="number"
                   min={1}
@@ -1755,10 +1929,14 @@ export default function SettingsModal() {
                   className="settings-input"
                   value={circuitFailureThreshold}
                   onChange={e => setCircuitFailureThreshold(Number(e.target.value))}
+                  title="Consecutive failures required before a route is temporarily opened by the circuit breaker."
                 />
               </label>
               <label className="settings-inline-field">
-                <span>Cooldown (ms)</span>
+                <span className="settings-inline-label">
+                  <span>Cooldown (ms)</span>
+                  <InfoTip content="How long the circuit breaker waits before it allows traffic to try that route again." label="Cooldown help" />
+                </span>
                 <input
                   type="number"
                   min={5000}
@@ -1767,6 +1945,7 @@ export default function SettingsModal() {
                   className="settings-input"
                   value={circuitCooldownMs}
                   onChange={e => setCircuitCooldownMs(Number(e.target.value))}
+                  title="Time a tripped route stays paused before traffic is allowed again."
                 />
               </label>
             </div>
@@ -1775,7 +1954,16 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Activity size={14} />
-              <span>Diagnostics</span>
+              <span className="settings-label-copy">
+                <span>Diagnostics</span>
+                <InfoTip
+                  label="Diagnostics help"
+                  content={[
+                    'Diagnostics summarize local telemetry about failures, latency, retries, and cache behavior.',
+                    'This data only reflects runs from this browser profile and helps the ranking system adapt over time.',
+                  ]}
+                />
+              </span>
             </label>
             <p className="settings-hint">
               Global route telemetry for failures and retry behavior. Ranking cards above also blend public benchmark priors with per-model ensemble judge feedback when available.
@@ -1815,6 +2003,7 @@ export default function SettingsModal() {
                     className="settings-btn-secondary"
                     type="button"
                     onClick={resetDiagnostics}
+                    title="Clear the local diagnostics history collected in this browser profile."
                   >
                     Reset Diagnostics
                   </button>
@@ -1833,9 +2022,18 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <DollarSign size={14} />
-              <span>Budget Guardrails</span>
+              <span className="settings-label-copy">
+                <span>Budget Guardrails</span>
+                <InfoTip
+                  label="Budget guardrails help"
+                  content={[
+                    'These controls compare the estimated turn cost against your thresholds before sending.',
+                    'Use them if you want a pause before very expensive prompts or large attachment-heavy runs.',
+                  ]}
+                />
+              </span>
             </label>
-            <label className="settings-checkbox">
+            <label className="settings-checkbox" title="Turn on a confirmation step whenever the estimated cost is above your limits.">
               <input
                 type="checkbox"
                 checked={budgetEnabled}
@@ -1845,7 +2043,10 @@ export default function SettingsModal() {
             </label>
             <div className="settings-grid-compact">
               <label className="settings-inline-field">
-                <span>Soft limit (USD)</span>
+                <span className="settings-inline-label">
+                  <span>Soft limit (USD)</span>
+                  <InfoTip content="If the estimate is above this value, the app pauses and asks you to confirm the send." label="Soft limit help" />
+                </span>
                 <input
                   type="number"
                   min={0}
@@ -1854,10 +2055,14 @@ export default function SettingsModal() {
                   value={budgetSoftLimit}
                   onChange={e => setBudgetSoftLimit(Number(e.target.value))}
                   disabled={!budgetEnabled}
+                  title="Estimated turns above this amount require a confirmation."
                 />
               </label>
               <label className="settings-inline-field">
-                <span>Auto-approve below</span>
+                <span className="settings-inline-label">
+                  <span>Auto-approve below</span>
+                  <InfoTip content="Turns below this amount skip the confirmation even when the soft limit feature is enabled." label="Auto-approve help" />
+                </span>
                 <input
                   type="number"
                   min={0}
@@ -1866,6 +2071,7 @@ export default function SettingsModal() {
                   value={budgetAutoApprove}
                   onChange={e => setBudgetAutoApprove(Number(e.target.value))}
                   disabled={!budgetEnabled}
+                  title="Estimated turns below this amount are sent without a budget confirmation."
                 />
               </label>
             </div>
@@ -1879,9 +2085,18 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Gauge size={14} />
-              <span>Performance</span>
+              <span className="settings-label-copy">
+                <span>Performance</span>
+                <InfoTip
+                  label="Performance help"
+                  content={[
+                    'Performance settings reduce render cost for long chats and large debates.',
+                    'Use them if the UI becomes sluggish with many rounds or large threads.',
+                  ]}
+                />
+              </span>
             </label>
-            <label className="settings-checkbox">
+            <label className="settings-checkbox" title="Render only the visible portion of older round lists to keep long debates responsive.">
               <input
                 type="checkbox"
                 checked={virtualizationEnabled}
@@ -1890,7 +2105,10 @@ export default function SettingsModal() {
               <span>Virtualize older rounds for faster rendering</span>
             </label>
             <label className="settings-inline-field">
-              <span>Keep latest rounds</span>
+              <span className="settings-inline-label">
+                <span>Keep latest rounds</span>
+                <InfoTip content="Newest rounds that stay fully mounted before the app starts virtualizing older ones." label="Keep latest rounds help" />
+              </span>
               <input
                 type="number"
                 min={2}
@@ -1899,6 +2117,7 @@ export default function SettingsModal() {
                 value={virtualizationKeepLatest}
                 onChange={e => setVirtualizationKeepLatest(Number(e.target.value))}
                 disabled={!virtualizationEnabled}
+                title="How many newest rounds stay fully rendered before virtualization starts."
               />
             </label>
           </div>
@@ -1906,9 +2125,18 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <Database size={14} />
-              <span>Response Cache</span>
+              <span className="settings-label-copy">
+                <span>Response Cache</span>
+                <InfoTip
+                  label="Response cache help"
+                  content={[
+                    'The response cache reuses compatible results instead of calling providers again.',
+                    'Persist it if you want cache hits to survive app restarts on this machine.',
+                  ]}
+                />
+              </span>
             </label>
-            <label className="settings-checkbox">
+            <label className="settings-checkbox" title="Store cached responses locally so they are still available after the app restarts.">
               <input
                 type="checkbox"
                 checked={cachePersistence}
@@ -1924,6 +2152,7 @@ export default function SettingsModal() {
                 className="settings-btn-secondary"
                 onClick={clearResponseCache}
                 type="button"
+                title="Delete cached responses saved for this browser profile."
               >
                 Clear Cache
               </button>
@@ -1940,7 +2169,16 @@ export default function SettingsModal() {
           <div className="settings-section">
             <label className="settings-label">
               <RotateCcw size={14} />
-              <span>Max Debate Rounds</span>
+              <span className="settings-label-copy">
+                <span>Max Debate Rounds</span>
+                <InfoTip
+                  label="Max debate rounds help"
+                  content={[
+                    'Caps how many rounds the debaters can run before the app stops and synthesizes what it has.',
+                    'Higher values allow deeper rebuttals but cost more and take longer.',
+                  ]}
+                />
+              </span>
             </label>
             <div className="slider-row">
               <input
@@ -1950,6 +2188,7 @@ export default function SettingsModal() {
                 max={10}
                 value={maxRounds}
                 onChange={e => setMaxRounds(Number(e.target.value))}
+                title="Maximum number of debate rounds allowed before the run stops and synthesizes."
               />
               <span className="slider-value">{maxRounds}</span>
             </div>
@@ -1958,7 +2197,7 @@ export default function SettingsModal() {
                 ? 'Single round - models respond once, then synthesis.'
                 : `Up to ${maxRounds} rounds - models debate and refine positions.`}
             </p>
-            <label className="settings-checkbox">
+            <label className="settings-checkbox" title="Run one last agreement check after the final round, even if the debate is about to stop.">
               <input
                 type="checkbox"
                 checked={convOnFinalRound}
@@ -1975,12 +2214,13 @@ export default function SettingsModal() {
         </div>
 
         <div className="settings-footer">
-          <button className="settings-btn-secondary" onClick={resetDefaults}>
+          <button className="settings-btn-secondary" onClick={resetDefaults} title="Restore the default app configuration for this browser profile.">
             Reset Defaults
           </button>
           <button
             className="settings-btn-primary"
             onClick={handleSave}
+            title="Close settings and keep the changes currently applied."
           >
             Done
           </button>

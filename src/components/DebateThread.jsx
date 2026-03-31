@@ -165,18 +165,24 @@ function ThreadMessage({
             </span>
           )}
           {searchEvidence && (
-            <span className={`thread-search-pill ${searchEvidenceClass}`} title={searchTitle}>
+            <span
+              className={`thread-search-pill ${searchEvidenceClass}`}
+              title={searchTitle || 'Search evidence summary for this answer. Verified means sources and date evidence passed strict checks.'}
+            >
               <Globe size={11} />
               <span>{searchSummary}</span>
             </span>
           )}
           {routeSummary && (
-            <span className={`thread-route-pill ${routeClass}`} title={routeTitle}>
+            <span
+              className={`thread-route-pill ${routeClass}`}
+              title={routeTitle || 'Routing note for this response. The app may fall back or block delivery based on model capabilities.'}
+            >
               <span>{routeSummary}</span>
             </span>
           )}
           {cacheHit && (
-            <span className="thread-cache-pill" title="Served from local response cache">
+            <span className="thread-cache-pill" title="Served from the local response cache instead of making a fresh provider call.">
               Cache hit
             </span>
           )}
@@ -207,6 +213,7 @@ function ThreadMessage({
               <button
                 className="thread-reasoning-toggle"
                 onClick={() => setReasoningOpen(!reasoningOpen)}
+                title={`Show or hide the model's reasoning trace${usage?.reasoningTokens != null ? ` (${formatTokenCount(usage.reasoningTokens)} reasoning tokens).` : '.'}`}
               >
                 <Brain size={12} />
                 <span>Thinking</span>

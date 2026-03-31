@@ -54,7 +54,11 @@ function RoundSection({
 
   return (
     <div className={`round-section ${roundStatus} ${collapsed ? 'collapsed' : ''}`}>
-      <div className="round-header" onClick={() => setCollapsed(!collapsed)}>
+      <div
+        className="round-header"
+        onClick={() => setCollapsed(!collapsed)}
+        title={`Round ${roundNumber}. Click to ${collapsed ? 'expand' : 'collapse'} this round and inspect each model response.`}
+      >
         <div className="round-header-left">
           <span className={`round-status-icon ${roundStatus}`}>{statusIcon}</span>
           <span className="round-label">{label}</span>
@@ -93,7 +97,7 @@ function RoundSection({
                 e.stopPropagation();
                 branchFromRound(roundIndex);
               }}
-              title="Create a new branch from this round"
+              title="Create a new branch from this round so you can continue from here without changing the current chat history."
             >
               <GitBranchPlus size={13} />
               <span>Branch</span>
