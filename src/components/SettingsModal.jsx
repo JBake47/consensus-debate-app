@@ -28,8 +28,8 @@ import './SettingsModal.css';
 const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
 const SETTINGS_PANE_HELP = {
   general: 'Browser-local setup like provider credentials, theme, and app maintenance.',
-  models: 'Choose who debates, who synthesizes, who checks convergence, and which model handles web search.',
-  reliability: 'Control retries, diagnostics, and how far debates can continue before they stop.',
+  models: 'Choose who debates, how many rounds they run, who synthesizes, who checks convergence, and which model handles web search.',
+  reliability: 'Control retries, diagnostics, and provider recovery behavior.',
   budget: 'Warn before expensive turns so you can cap or approve spend intentionally.',
   performance: 'Trade memory and fidelity for smoother rendering and faster repeat runs.',
 };
@@ -1641,6 +1641,50 @@ export default function SettingsModal() {
 
           <div className="settings-section">
             <label className="settings-label">
+              <RotateCcw size={14} />
+              <span className="settings-label-copy">
+                <span>Max Debate Rounds</span>
+                <InfoTip
+                  label="Max debate rounds help"
+                  content={[
+                    'Caps how many rounds the debaters can run before the app stops and synthesizes what it has.',
+                    'Higher values allow deeper rebuttals but cost more and take longer.',
+                  ]}
+                />
+              </span>
+            </label>
+            <div className="slider-row">
+              <input
+                type="range"
+                className="settings-slider"
+                min={1}
+                max={10}
+                value={maxRounds}
+                onChange={e => setMaxRounds(Number(e.target.value))}
+                title="Maximum number of debate rounds allowed before the run stops and synthesizes."
+              />
+              <span className="slider-value">{maxRounds}</span>
+            </div>
+            <p className="settings-hint">
+              {maxRounds === 1
+                ? 'Single round - models respond once, then synthesis.'
+                : `Up to ${maxRounds} rounds - models debate and refine positions.`}
+            </p>
+            <label className="settings-checkbox" title="Run one last agreement check after the final round, even if the debate is about to stop.">
+              <input
+                type="checkbox"
+                checked={convOnFinalRound}
+                onChange={e => setConvOnFinalRound(e.target.checked)}
+              />
+              <span>Run convergence check on final round</span>
+            </label>
+            <p className="settings-hint">
+              Useful for 2-round debates so agreement/disagreement summaries still appear.
+            </p>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
               <Sparkles size={14} />
               <span className="settings-label-copy">
                 <span>Synthesizer Model</span>
@@ -2162,55 +2206,6 @@ export default function SettingsModal() {
             </>
           )}
 
-          {activeSettingsPane === 'reliability' && (
-            <>
-          <div className="settings-divider" />
-
-          <div className="settings-section">
-            <label className="settings-label">
-              <RotateCcw size={14} />
-              <span className="settings-label-copy">
-                <span>Max Debate Rounds</span>
-                <InfoTip
-                  label="Max debate rounds help"
-                  content={[
-                    'Caps how many rounds the debaters can run before the app stops and synthesizes what it has.',
-                    'Higher values allow deeper rebuttals but cost more and take longer.',
-                  ]}
-                />
-              </span>
-            </label>
-            <div className="slider-row">
-              <input
-                type="range"
-                className="settings-slider"
-                min={1}
-                max={10}
-                value={maxRounds}
-                onChange={e => setMaxRounds(Number(e.target.value))}
-                title="Maximum number of debate rounds allowed before the run stops and synthesizes."
-              />
-              <span className="slider-value">{maxRounds}</span>
-            </div>
-            <p className="settings-hint">
-              {maxRounds === 1
-                ? 'Single round - models respond once, then synthesis.'
-                : `Up to ${maxRounds} rounds - models debate and refine positions.`}
-            </p>
-            <label className="settings-checkbox" title="Run one last agreement check after the final round, even if the debate is about to stop.">
-              <input
-                type="checkbox"
-                checked={convOnFinalRound}
-                onChange={e => setConvOnFinalRound(e.target.checked)}
-              />
-              <span>Run convergence check on final round</span>
-            </label>
-            <p className="settings-hint">
-              Useful for 2-round debates so agreement/disagreement summaries still appear.
-            </p>
-          </div>
-            </>
-          )}
         </div>
 
         <div className="settings-footer">

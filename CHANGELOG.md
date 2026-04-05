@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-04-04
+
 ### Changed
 - Added broader mouseover help across the composer, sidebar, settings, debate views, model cards, and related controls so the app explains more of its behavior inline without persistent helper chrome
 - Removed the redundant `Prompt` label above the main chat composer to keep the input area cleaner
+- Raised typography, spacing, and contrast across the header, composer, turn explorer, debate thread, model cards, synthesis view, and shared markdown rendering so long debates are easier to read
+- Tightened reading widths and expanded preview heights for responses, reasoning traces, and web-search evidence so longer outputs scan cleanly without overlong lines
+- Polished the light-theme settings pane styling and kept debate round controls grouped with the rest of the debate/model configuration in Settings
 
 ## [0.3.31] - 2026-03-23
 
