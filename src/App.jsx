@@ -28,7 +28,12 @@ function AppContent() {
   const { activeConversation, debateInProgress } = useDebateConversations();
   const { themeMode, apiKey, providerStatus, providerStatusState } = useDebateSettings();
   const { webSearchEnabled, showSettings, pendingTurnFocus, conversationStoreStatus } = useDebateUi();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return true;
+    }
+    return window.matchMedia('(min-width: 769px)').matches;
+  });
   const [editingHeader, setEditingHeader] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [headerTitle, setHeaderTitle] = useState('');
@@ -279,7 +284,7 @@ function AppContent() {
   };
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="main-area">

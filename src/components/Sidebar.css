@@ -19,6 +19,11 @@
   flex-direction: column;
   z-index: 50;
   transition: transform var(--transition-base);
+  transform: translateX(-100%);
+}
+
+.sidebar.open {
+  transform: translateX(0);
 }
 
 .sidebar-header {
@@ -613,14 +618,6 @@
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-  .sidebar {
-    transform: translateX(-100%);
-  }
-
-  .sidebar.open {
-    transform: translateX(0);
-  }
-
   .sidebar-overlay {
     display: block;
   }
