@@ -484,6 +484,16 @@ export default function SettingsModal() {
   ]), []);
   const appUpdateFollowUp = useMemo(() => {
     if (!appUpdateResult) return null;
+    if (appUpdateResult.localChangesRequireManualRestore) {
+      return {
+        tone: 'warning',
+        title: 'Manual Restore Required',
+        description: appUpdateResult.stashRef
+          ? `The app updated, but your local changes were saved in ${appUpdateResult.stashRef}. Reapply them manually if you still need them.`
+          : 'The app updated, but your local changes were not reapplied automatically. Restore them manually if you still need them.',
+        allowReload: false,
+      };
+    }
     if (appUpdateResult.restartRequired) {
       return {
         tone: 'warning',
@@ -1295,7 +1305,7 @@ export default function SettingsModal() {
               </div>
 
               <p className="settings-hint">
-                Runs <code>git pull --ff-only</code> and refreshes dependencies with <code>npm ci</code> when a lockfile is present. Ordinary local changes are auto-stashed and restored; unresolved conflicts still block updates.
+                Runs <code>git pull --ff-only</code> and refreshes dependencies with <code>npm ci</code> when a lockfile is present. Ordinary local changes are auto-stashed and restored; local edits to dependency manifests and unresolved conflicts block updates to avoid broken restores.
               </p>
             </div>
           </div>

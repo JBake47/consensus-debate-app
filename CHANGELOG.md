@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Hardened in-app updates so local edits to `package.json`, `package-lock.json`, or `npm-shrinkwrap.json` block update attempts up front instead of being auto-stashed into likely restore conflicts
+- The updater now uses a safer stash-restore flow that leaves the pulled commit intact and preserves local work in the stash if reapplying changes fails
+
+### Fixed
+- App updates no longer leave the working tree stuck in an unresolved-conflict state after a failed post-update stash restore, and the Settings UI now explains when manual stash recovery is required
+
 ## [0.3.32] - 2026-04-04
 
 ### Changed

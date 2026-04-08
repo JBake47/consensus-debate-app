@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   canAutoStashDirtyEntries,
   getDependencyInstallMode,
+  isManifestDirtyEntry,
   isUnmergedGitStatus,
   needsAppRestart,
   needsDependencyInstall,
@@ -50,12 +51,22 @@ runTest('unmerged git statuses are treated as hard blockers', () => {
 runTest('auto-stash only allows ordinary dirty entries', () => {
   assert.equal(canAutoStashDirtyEntries([]), false);
   assert.equal(canAutoStashDirtyEntries([
-    { indexStatus: ' ', worktreeStatus: 'M', path: 'package-lock.json' },
+    { indexStatus: ' ', worktreeStatus: 'M', path: 'src/App.jsx' },
     { indexStatus: '?', worktreeStatus: '?', path: 'notes.txt' },
   ]), true);
   assert.equal(canAutoStashDirtyEntries([
+    { indexStatus: ' ', worktreeStatus: 'M', path: 'package-lock.json' },
+    { indexStatus: '?', worktreeStatus: '?', path: 'notes.txt' },
+  ]), false);
+  assert.equal(canAutoStashDirtyEntries([
     { indexStatus: 'U', worktreeStatus: 'U', path: 'package-lock.json' },
   ]), false);
+});
+
+runTest('dependency manifests are treated as unsafe updater dirtiness', () => {
+  assert.equal(isManifestDirtyEntry({ path: 'package-lock.json' }), true);
+  assert.equal(isManifestDirtyEntry({ path: 'package.json' }), true);
+  assert.equal(isManifestDirtyEntry({ path: 'src/App.jsx' }), false);
 });
 
 runTest('dependency install only runs when manifests change', () => {

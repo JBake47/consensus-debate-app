@@ -119,8 +119,20 @@ export function parseGitStatusPorcelain(output = '') {
     .map((line) => ({
       indexStatus: line[0] || ' ',
       worktreeStatus: line[1] || ' ',
-      path: line.slice(3).trim(),
+      path: normalizeGitStatusPath(line.slice(3)),
     }));
+}
+
+function normalizeGitStatusPath(rawPath = '') {
+  const trimmed = String(rawPath || '').trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
 }
 
 function summarizePaths(entries, limit = 6) {
@@ -140,9 +152,20 @@ export function isUnmergedGitStatus(entry = {}) {
   return UNMERGED_STATUS_CODES.has(`${indexStatus}${worktreeStatus}`);
 }
 
+export function isManifestDirtyEntry(entry = {}) {
+  return INSTALL_TRIGGER_FILES.has(String(entry?.path || '').trim());
+}
+
+function isUntrackedGitStatus(entry = {}) {
+  const indexStatus = String(entry?.indexStatus || ' ').slice(0, 1) || ' ';
+  const worktreeStatus = String(entry?.worktreeStatus || ' ').slice(0, 1) || ' ';
+  return indexStatus === '?' && worktreeStatus === '?';
+}
+
 export function canAutoStashDirtyEntries(entries = []) {
   const normalizedEntries = Array.isArray(entries) ? entries : [];
-  return normalizedEntries.length > 0 && !normalizedEntries.some(isUnmergedGitStatus);
+  return normalizedEntries.length > 0
+    && !normalizedEntries.some((entry) => isUnmergedGitStatus(entry) || isManifestDirtyEntry(entry));
 }
 
 export function getDependencyInstallMode({ hasPackageLock = false, hasShrinkwrap = false } = {}) {
@@ -166,6 +189,14 @@ function buildBlockedReason({ dirtyEntries, hasUpstream, aheadCount, behindCount
 
   if (aheadCount > 0 && behindCount > 0) {
     return 'Update blocked because the local branch has diverged from upstream. Reconcile it manually first.';
+  }
+
+  if (behindCount > 0) {
+    const manifestEntries = dirtyEntries.filter(isManifestDirtyEntry);
+    if (manifestEntries.length > 0) {
+      const dirtySummary = summarizePaths(manifestEntries).join(', ');
+      return `Update blocked because dependency manifests have local changes: ${dirtySummary}. Commit or discard them before updating.`;
+    }
   }
 
   return null;
@@ -334,6 +365,51 @@ async function stashRefExists(cwd, stashRef) {
   return !result.error;
 }
 
+function resolveRepoPath(cwd, repoPath) {
+  const rootPath = path.resolve(cwd);
+  const targetPath = path.resolve(rootPath, String(repoPath || ''));
+  const relativePath = path.relative(rootPath, targetPath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new AppUpdateError(`Refusing to remove path outside the repository: ${repoPath}`, 500, 'update_restore_cleanup_failed');
+  }
+  return targetPath;
+}
+
+async function cleanupFailedRestore(cwd) {
+  const cleanupMessages = [];
+  const resetResult = await runGit(['reset', '--hard', 'HEAD'], { cwd, allowFailure: true });
+  if (resetResult.error) {
+    cleanupMessages.push(resetResult.stderr || resetResult.stdout || resetResult.error?.message || 'git reset --hard HEAD failed');
+  }
+
+  const statusAfterReset = await runGit(['status', '--porcelain', '--untracked-files=normal'], { cwd, allowFailure: true });
+  if (statusAfterReset.error) {
+    cleanupMessages.push(statusAfterReset.stderr || statusAfterReset.stdout || statusAfterReset.error?.message || 'git status failed during restore cleanup');
+  }
+
+  const entriesAfterReset = parseGitStatusPorcelain(statusAfterReset.stdout);
+  const untrackedEntries = entriesAfterReset.filter(isUntrackedGitStatus);
+  for (const entry of untrackedEntries) {
+    try {
+      await fs.rm(resolveRepoPath(cwd, entry.path), { recursive: true, force: true });
+    } catch (error) {
+      cleanupMessages.push(error?.message || `Failed to remove ${entry.path}`);
+    }
+  }
+
+  const finalStatusResult = await runGit(['status', '--porcelain', '--untracked-files=normal'], { cwd, allowFailure: true });
+  if (finalStatusResult.error) {
+    cleanupMessages.push(finalStatusResult.stderr || finalStatusResult.stdout || finalStatusResult.error?.message || 'git status failed after restore cleanup');
+  }
+
+  const remainingDirtyEntries = parseGitStatusPorcelain(finalStatusResult.stdout);
+  return {
+    cleaned: cleanupMessages.length === 0 && remainingDirtyEntries.length === 0,
+    remainingDirtyEntries,
+    detail: cleanupMessages.join(' ').trim(),
+  };
+}
+
 async function restoreStashedChanges(cwd, stashContext) {
   if (!stashContext?.ref) {
     return {
@@ -342,27 +418,46 @@ async function restoreStashedChanges(cwd, stashContext) {
       conflicted: false,
       stashRef: null,
       detail: '',
+      cleanupSucceeded: false,
+      cleanupDetail: '',
     };
   }
 
-  const popResult = await runGit(['stash', 'pop', stashContext.ref], { cwd, allowFailure: true });
-  if (!popResult.error) {
+  const applyResult = await runGit(['stash', 'apply', stashContext.ref], { cwd, allowFailure: true });
+  if (!applyResult.error) {
+    const dropResult = await runGit(['stash', 'drop', stashContext.ref], { cwd, allowFailure: true });
+    if (dropResult.error) {
+      return {
+        attempted: true,
+        restored: true,
+        conflicted: false,
+        stashRef: stashContext.ref,
+        detail: dropResult.stderr || dropResult.stdout || dropResult.error?.message || 'git stash drop failed',
+        cleanupSucceeded: false,
+        cleanupDetail: '',
+      };
+    }
     return {
       attempted: true,
       restored: true,
       conflicted: false,
       stashRef: null,
-      detail: popResult.stdout || popResult.stderr || '',
+      detail: applyResult.stdout || applyResult.stderr || '',
+      cleanupSucceeded: false,
+      cleanupDetail: '',
     };
   }
 
   const stashStillExists = await stashRefExists(cwd, stashContext.ref);
+  const cleanupResult = await cleanupFailedRestore(cwd);
   return {
     attempted: true,
     restored: false,
     conflicted: true,
     stashRef: stashStillExists ? stashContext.ref : null,
-    detail: popResult.stderr || popResult.stdout || popResult.error?.message || 'git stash pop failed',
+    detail: applyResult.stderr || applyResult.stdout || applyResult.error?.message || 'git stash apply failed',
+    cleanupSucceeded: cleanupResult.cleaned,
+    cleanupDetail: cleanupResult.detail,
   };
 }
 
@@ -518,6 +613,8 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
       conflicted: false,
       stashRef: null,
       detail: '',
+      cleanupSucceeded: false,
+      cleanupDetail: '',
     };
 
     try {
@@ -527,7 +624,7 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
 
       if (!statusBefore.updateAvailable) {
         restoreResult = await restoreStashedChanges(cwd, stashContext);
-        if (restoreResult.conflicted) {
+        if (restoreResult.conflicted && !restoreResult.cleanupSucceeded) {
           throw new AppUpdateError(
             restoreResult.stashRef
               ? `App is already up to date, but local changes could not be restored cleanly. Resolve them manually from ${restoreResult.stashRef}.`
@@ -619,6 +716,15 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
       const updated = afterCommit !== statusBefore.currentCommit;
 
       restoreResult = await restoreStashedChanges(cwd, stashContext);
+      if (restoreResult.conflicted && !restoreResult.cleanupSucceeded) {
+        throw new AppUpdateError(
+          restoreResult.stashRef
+            ? `The app updated, but the working tree could not be cleaned after restoring local changes. Resolve them manually from ${restoreResult.stashRef}.`
+            : 'The app updated, but the working tree could not be cleaned after restoring local changes.',
+          409,
+          'update_restore_conflict',
+        );
+      }
 
       const statusAfter = await collectRepoStatus(cwd, {
         refresh: false,
@@ -664,10 +770,15 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
 
       if (restoreResult.conflicted) {
         const message = error?.message || 'Failed to apply app update.';
+        const cleanupNote = restoreResult.cleanupSucceeded
+          ? ' The working tree was reset to the updated commit.'
+          : restoreResult.cleanupDetail
+            ? ` Cleanup also failed: ${restoreResult.cleanupDetail}`
+            : '';
         throw new AppUpdateError(
           restoreResult.stashRef
-            ? `${message} Local changes were preserved in ${restoreResult.stashRef} and need manual restoration.`
-            : `${message} Local changes could not be restored cleanly.`,
+            ? `${message} Local changes were preserved in ${restoreResult.stashRef} and need manual restoration.${cleanupNote}`
+            : `${message} Local changes could not be restored cleanly.${cleanupNote}`,
           error instanceof AppUpdateError ? error.status : 500,
           'update_restore_conflict',
         );
