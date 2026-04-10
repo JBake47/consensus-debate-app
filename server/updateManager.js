@@ -156,6 +156,21 @@ export function isManifestDirtyEntry(entry = {}) {
   return INSTALL_TRIGGER_FILES.has(String(entry?.path || '').trim());
 }
 
+export function isBlockingManifestDirtyEntry(entry = {}) {
+  const normalizedPath = String(entry?.path || '').trim();
+  if (!INSTALL_TRIGGER_FILES.has(normalizedPath)) {
+    return false;
+  }
+
+  if (normalizedPath !== 'package-lock.json') {
+    return true;
+  }
+
+  const indexStatus = String(entry?.indexStatus || ' ').slice(0, 1) || ' ';
+  const worktreeStatus = String(entry?.worktreeStatus || ' ').slice(0, 1) || ' ';
+  return !(indexStatus === ' ' && worktreeStatus === 'M');
+}
+
 function isUntrackedGitStatus(entry = {}) {
   const indexStatus = String(entry?.indexStatus || ' ').slice(0, 1) || ' ';
   const worktreeStatus = String(entry?.worktreeStatus || ' ').slice(0, 1) || ' ';
@@ -165,7 +180,7 @@ function isUntrackedGitStatus(entry = {}) {
 export function canAutoStashDirtyEntries(entries = []) {
   const normalizedEntries = Array.isArray(entries) ? entries : [];
   return normalizedEntries.length > 0
-    && !normalizedEntries.some((entry) => isUnmergedGitStatus(entry) || isManifestDirtyEntry(entry));
+    && !normalizedEntries.some((entry) => isUnmergedGitStatus(entry) || isBlockingManifestDirtyEntry(entry));
 }
 
 export function getDependencyInstallMode({ hasPackageLock = false, hasShrinkwrap = false } = {}) {
@@ -192,7 +207,7 @@ function buildBlockedReason({ dirtyEntries, hasUpstream, aheadCount, behindCount
   }
 
   if (behindCount > 0) {
-    const manifestEntries = dirtyEntries.filter(isManifestDirtyEntry);
+    const manifestEntries = dirtyEntries.filter(isBlockingManifestDirtyEntry);
     if (manifestEntries.length > 0) {
       const dirtySummary = summarizePaths(manifestEntries).join(', ');
       return `Update blocked because dependency manifests have local changes: ${dirtySummary}. Commit or discard them before updating.`;

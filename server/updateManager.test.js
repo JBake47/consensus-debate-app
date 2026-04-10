@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   canAutoStashDirtyEntries,
   getDependencyInstallMode,
+  isBlockingManifestDirtyEntry,
   isManifestDirtyEntry,
   isUnmergedGitStatus,
   needsAppRestart,
@@ -57,9 +58,16 @@ runTest('auto-stash only allows ordinary dirty entries', () => {
   assert.equal(canAutoStashDirtyEntries([
     { indexStatus: ' ', worktreeStatus: 'M', path: 'package-lock.json' },
     { indexStatus: '?', worktreeStatus: '?', path: 'notes.txt' },
+  ]), true);
+  assert.equal(canAutoStashDirtyEntries([
+    { indexStatus: 'M', worktreeStatus: ' ', path: 'package-lock.json' },
+    { indexStatus: '?', worktreeStatus: '?', path: 'notes.txt' },
   ]), false);
   assert.equal(canAutoStashDirtyEntries([
     { indexStatus: 'U', worktreeStatus: 'U', path: 'package-lock.json' },
+  ]), false);
+  assert.equal(canAutoStashDirtyEntries([
+    { indexStatus: ' ', worktreeStatus: 'M', path: 'package.json' },
   ]), false);
 });
 
@@ -67,6 +75,24 @@ runTest('dependency manifests are treated as unsafe updater dirtiness', () => {
   assert.equal(isManifestDirtyEntry({ path: 'package-lock.json' }), true);
   assert.equal(isManifestDirtyEntry({ path: 'package.json' }), true);
   assert.equal(isManifestDirtyEntry({ path: 'src/App.jsx' }), false);
+});
+
+runTest('worktree-only package-lock drift stays auto-stashable while intentional manifest edits still block', () => {
+  assert.equal(isBlockingManifestDirtyEntry({
+    indexStatus: ' ',
+    worktreeStatus: 'M',
+    path: 'package-lock.json',
+  }), false);
+  assert.equal(isBlockingManifestDirtyEntry({
+    indexStatus: 'M',
+    worktreeStatus: ' ',
+    path: 'package-lock.json',
+  }), true);
+  assert.equal(isBlockingManifestDirtyEntry({
+    indexStatus: ' ',
+    worktreeStatus: 'M',
+    path: 'package.json',
+  }), true);
 });
 
 runTest('dependency install only runs when manifests change', () => {

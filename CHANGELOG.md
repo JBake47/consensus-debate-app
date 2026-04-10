@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- In-app updates once again auto-stash routine unstaged `package-lock.json` drift instead of blocking before pull, while still blocking `package.json`, `npm-shrinkwrap.json`, staged lockfile edits, and unresolved conflicts
+
 ## [0.3.33] - 2026-04-09
 
 ### Added

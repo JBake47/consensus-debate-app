@@ -1576,7 +1576,7 @@ export default function SettingsModal() {
               </div>
 
               <p className="settings-hint">
-                Runs <code>git pull --ff-only</code> and refreshes dependencies with <code>npm ci</code> when a lockfile is present. Ordinary local changes are auto-stashed and restored; local edits to dependency manifests and unresolved conflicts block updates to avoid broken restores.
+                Runs <code>git pull --ff-only</code> and refreshes dependencies with <code>npm ci</code> when a lockfile is present. Ordinary local changes, including routine unstaged <code>package-lock.json</code> drift, are auto-stashed and restored; <code>package.json</code>, <code>npm-shrinkwrap.json</code>, staged lockfile edits, and unresolved conflicts still block updates.
               </p>
             </div>
           </div>
