@@ -95,7 +95,14 @@ function formatRankingTelemetrySummary(item) {
   return parts.join(' · ');
 }
 
-function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, children, focusable = true }) {
+function ModelStatsHoverCard({
+  modelId,
+  modelCatalog,
+  modelCatalogStatus,
+  children,
+  focusable = true,
+  inline = false,
+}) {
   const { catalogId, model } = resolveModelCatalogEntry(modelCatalog, modelId);
   const statRows = getModelStatRows(model);
   const displayName = model?.name || getModelDisplayName(modelId);
@@ -105,7 +112,7 @@ function ModelStatsHoverCard({ modelId, modelCatalog, modelCatalogStatus, childr
   const helperText = buildModelStatsTitle({ modelId, modelCatalog, modelCatalogStatus });
 
   return (
-    <div className="model-hover-card">
+    <div className={`model-hover-card${inline ? ' inline' : ''}`}>
       <div
         className="model-hover-trigger"
         tabIndex={focusable ? 0 : undefined}
@@ -580,7 +587,18 @@ export default function SettingsModal() {
       <div className={`settings-inline-upgrade-notice${suggestion.isSafe === false ? ' unsafe' : ''}`}>
         <div className="settings-inline-upgrade-notice-copy">
           <span className="settings-inline-upgrade-notice-title">
-            <strong>{getModelDisplayName(suggestion.suggestedModel)}</strong> is available
+            <ModelStatsHoverCard
+              modelId={suggestion.suggestedModel}
+              modelCatalog={modelCatalog}
+              modelCatalogStatus={modelCatalogStatus}
+              focusable={false}
+              inline
+            >
+              <strong className="settings-inline-upgrade-model-name">
+                {getModelDisplayName(suggestion.suggestedModel)}
+              </strong>
+            </ModelStatsHoverCard>{' '}
+            is available
           </span>
           <code>{suggestion.suggestedModel}</code>
           {statSummary && (

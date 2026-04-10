@@ -253,10 +253,22 @@
   min-width: 0;
 }
 
+.model-hover-card.inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  vertical-align: baseline;
+}
+
 .model-hover-trigger {
   min-width: 0;
   cursor: help;
   outline: none;
+}
+
+.model-hover-card.inline .model-hover-trigger {
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .model-hover-trigger:focus-visible {
@@ -521,6 +533,10 @@
 .settings-inline-upgrade-notice-title {
   color: var(--text-primary);
   font-size: 12px;
+}
+
+.settings-inline-upgrade-model-name {
+  color: inherit;
 }
 
 .settings-inline-upgrade-notice-copy code {
