@@ -582,6 +582,19 @@ export default function SettingsModal() {
     const suggestion = modelUpgradeSuggestionLookup.get(target.key) || null;
     if (!suggestion) return null;
     const statSummary = buildModelUpgradeStatLines(suggestion).slice(0, 2).join(' | ');
+    const applySuggestionToTarget = () => dispatch({
+      type: 'APPLY_MODEL_UPGRADE',
+      payload: {
+        currentModel: suggestion.currentModel,
+        suggestedModel: suggestion.suggestedModel,
+        targetKeys: [target.key],
+        suggestionKey: suggestion.key,
+      },
+    });
+    const primaryActionLabel = suggestion.isSafe === false ? 'Replace' : 'Switch';
+    const primaryActionTitle = suggestion.isSafe === false
+      ? `Replace ${suggestion.currentModel} with ${suggestion.suggestedModel} for ${target.label}. This does not enable automatic future switching.`
+      : `Replace ${suggestion.currentModel} with ${suggestion.suggestedModel} for ${target.label}.`;
 
     return (
       <div className={`settings-inline-upgrade-notice${suggestion.isSafe === false ? ' unsafe' : ''}`}>
@@ -609,38 +622,22 @@ export default function SettingsModal() {
           )}
         </div>
         <div className="settings-inline-upgrade-actions">
+          <button
+            type="button"
+            className="settings-inline-upgrade-action primary"
+            onClick={applySuggestionToTarget}
+            title={primaryActionTitle}
+          >
+            {primaryActionLabel}
+          </button>
           {suggestion.isSafe !== false && (
             <>
-              <button
-                type="button"
-                className="settings-inline-upgrade-action primary"
-                onClick={() => dispatch({
-                  type: 'APPLY_MODEL_UPGRADE',
-                  payload: {
-                    currentModel: suggestion.currentModel,
-                    suggestedModel: suggestion.suggestedModel,
-                    targetKeys: [target.key],
-                    suggestionKey: suggestion.key,
-                  },
-                })}
-                title={`Replace ${suggestion.currentModel} with ${suggestion.suggestedModel} for ${target.label}.`}
-              >
-                Switch
-              </button>
               <button
                 type="button"
                 className="settings-inline-upgrade-action"
                 onClick={() => {
                   setModelUpgradePolicy(target.key, 'auto');
-                  dispatch({
-                    type: 'APPLY_MODEL_UPGRADE',
-                    payload: {
-                      currentModel: suggestion.currentModel,
-                      suggestedModel: suggestion.suggestedModel,
-                      targetKeys: [target.key],
-                      suggestionKey: suggestion.key,
-                    },
-                  });
+                  applySuggestionToTarget();
                 }}
                 title={`Always auto-switch future turns from ${suggestion.currentModel} to ${suggestion.suggestedModel} for ${target.label}.`}
               >
