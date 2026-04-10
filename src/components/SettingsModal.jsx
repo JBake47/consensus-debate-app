@@ -15,6 +15,9 @@ import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
 import { rankModels, selectDiverseModels } from '../lib/modelRanking';
 import {
   buildModelStatsTitle,
+  formatPricePerMillion,
+  formatTokenQuantity,
+  getModelStatSnapshot,
   getModelStatRows,
   getModelStatsUnavailableMessage,
   resolveModelCatalogEntry,
@@ -36,6 +39,26 @@ const SETTINGS_PANE_HELP = {
 const PROVIDER_FIELD_HELP = [
   'Choose where this model ID should be resolved.',
   'OpenRouter uses full catalog IDs. Direct providers add the provider prefix automatically.',
+];
+const MODEL_UPGRADE_POLICY_OPTIONS = [
+  {
+    value: 'pinned',
+    label: 'Pinned',
+    compactLabel: 'Pinned',
+    description: 'Keep this selection fixed. No notices or automatic switches.',
+  },
+  {
+    value: 'notify',
+    label: 'Notify',
+    compactLabel: 'Notify',
+    description: 'Show a notice when a newer safe same-track version is available.',
+  },
+  {
+    value: 'auto',
+    label: 'Auto-upgrade safe',
+    compactLabel: 'Auto',
+    description: 'Switch future turns to a newer safe same-track version automatically.',
+  },
 ];
 
 function formatDurationCompact(ms) {
@@ -185,18 +208,89 @@ function formatFilePreview(items, limit = 4) {
   return `${entries.slice(0, limit).join(', ')}, +${entries.length - limit} more`;
 }
 
+function buildModelUpgradeStatLines(suggestion) {
+  const currentStats = getModelStatSnapshot(suggestion?.currentModelInfo || {});
+  const nextStats = getModelStatSnapshot(suggestion?.suggestedModelInfo || {});
+  const lines = [];
+
+  const contextLine = (
+    currentStats.contextLength != null || nextStats.contextLength != null
+      ? (
+        currentStats.contextLength === nextStats.contextLength
+          ? `Context ${formatTokenQuantity(nextStats.contextLength)}`
+          : `Context ${formatTokenQuantity(currentStats.contextLength)} -> ${formatTokenQuantity(nextStats.contextLength)}`
+      )
+      : null
+  );
+  if (contextLine) lines.push(contextLine);
+
+  const outputLine = (
+    currentStats.maxOutput != null || nextStats.maxOutput != null
+      ? (
+        currentStats.maxOutput === nextStats.maxOutput
+          ? `Max output ${formatTokenQuantity(nextStats.maxOutput)}`
+          : `Max output ${formatTokenQuantity(currentStats.maxOutput)} -> ${formatTokenQuantity(nextStats.maxOutput)}`
+      )
+      : null
+  );
+  if (outputLine) lines.push(outputLine);
+
+  if (
+    currentStats.inputPrice != null ||
+    currentStats.outputPrice != null ||
+    nextStats.inputPrice != null ||
+    nextStats.outputPrice != null
+  ) {
+    const currentPricing = `${formatPricePerMillion(currentStats.inputPrice)} / ${formatPricePerMillion(currentStats.outputPrice)}`;
+    const nextPricing = `${formatPricePerMillion(nextStats.inputPrice)} / ${formatPricePerMillion(nextStats.outputPrice)}`;
+    lines.push(
+      currentPricing === nextPricing
+        ? `I/O ${nextPricing}`
+        : `I/O ${currentPricing} -> ${nextPricing}`
+    );
+  }
+
+  return lines;
+}
+
+function getModelUpgradePolicyDescription(policy) {
+  return MODEL_UPGRADE_POLICY_OPTIONS.find((option) => option.value === policy)?.description
+    || MODEL_UPGRADE_POLICY_OPTIONS[1].description;
+}
+
+function getModelUpgradePolicyOption(policy) {
+  return MODEL_UPGRADE_POLICY_OPTIONS.find((option) => option.value === policy)
+    || MODEL_UPGRADE_POLICY_OPTIONS[1];
+}
+
+function buildModelUpgradePolicyTooltipText(target) {
+  const currentOption = getModelUpgradePolicyOption(target?.policy);
+  const optionSummary = MODEL_UPGRADE_POLICY_OPTIONS
+    .map((option) => `${option.label}: ${option.description}`)
+    .join(' ');
+  return `${target?.label || 'Model'} upgrade policy. Current: ${currentOption.label}. ${currentOption.description} Options: ${optionSummary}`;
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, convergenceOnFinalRound, maxDebateRounds, webSearchModel, strictWebSearch,
     retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
+    modelUpgradeNotificationsEnabled, modelUpgradeTargets, modelUpgradeSuggestions, dismissedModelUpgradeSuggestionCount,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
     cachePersistenceEnabled, themeMode, cacheHitCount, cacheEntryCount,
     rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, capabilityRegistry,
   } = useDebateSettings();
   const { showSettings } = useDebateUi();
-  const { clearResponseCache, resetDiagnostics, dispatch } = useDebateActions();
+  const {
+    clearResponseCache,
+    resetDiagnostics,
+    dismissModelUpgrade,
+    resetDismissedModelUpgrades,
+    setModelUpgradePolicy,
+    dispatch,
+  } = useDebateActions();
   const [keyInput, setKeyInput] = useState(apiKey);
   const [models, setModels] = useState(selectedModels);
   const [synth, setSynth] = useState(synthesizerModel);
@@ -217,6 +311,7 @@ export default function SettingsModal() {
   const [rankingPreferFlagship, setRankingPreferFlagship] = useState(Boolean(smartRankingPreferFlagship));
   const [rankingPreferNew, setRankingPreferNew] = useState(Boolean(smartRankingPreferNew));
   const [rankingAllowPreview, setRankingAllowPreview] = useState(Boolean(smartRankingAllowPreview));
+  const [upgradeNotificationsEnabled, setUpgradeNotificationsEnabled] = useState(Boolean(modelUpgradeNotificationsEnabled));
   const [virtualizationEnabled, setVirtualizationEnabled] = useState(Boolean(streamVirtualizationEnabled));
   const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
   const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
@@ -397,6 +492,156 @@ export default function SettingsModal() {
     }),
     [modelCatalog, metrics, rankingMode, rankingPreferFlagship, rankingPreferNew, rankingAllowPreview, capabilityRegistry, rankingWorkloadProfile]
   );
+  const modelUpgradeTargetLookup = useMemo(() => {
+    const lookup = new Map();
+    for (const target of modelUpgradeTargets) {
+      const modelKey = target.role === 'debate' ? target.modelId : '';
+      lookup.set(`${target.role}::${modelKey}`, target);
+    }
+    return lookup;
+  }, [modelUpgradeTargets]);
+  const modelUpgradeSuggestionLookup = useMemo(() => {
+    const lookup = new Map();
+    for (const suggestion of modelUpgradeSuggestions) {
+      for (const target of suggestion.targets || []) {
+        lookup.set(target.key, suggestion);
+      }
+    }
+    return lookup;
+  }, [modelUpgradeSuggestions]);
+  const getInlineModelUpgradeTarget = (role, modelId = '') => {
+    const lookupKey = role === 'debate' ? `${role}::${modelId}` : `${role}::`;
+    return modelUpgradeTargetLookup.get(lookupKey) || null;
+  };
+  const renderCompactModelUpgradePolicyControl = (target, options = {}) => {
+    if (!target) return null;
+    const currentOption = getModelUpgradePolicyOption(target.policy);
+    const tooltipText = buildModelUpgradePolicyTooltipText(target);
+    const selectClassName = [
+      'settings-input',
+      'settings-select',
+      'settings-inline-upgrade-select',
+      'compact',
+      options.className || '',
+    ].filter(Boolean).join(' ');
+
+    return (
+      <div className={`settings-inline-upgrade-control compact${options.className ? ` ${options.className}` : ''}`}>
+        {options.label && (
+          <span className="settings-inline-upgrade-label">{options.label}</span>
+        )}
+        <div className="settings-inline-upgrade-select-wrap">
+          <select
+            className={selectClassName}
+            value={target.policy}
+            onChange={(event) => setModelUpgradePolicy(target.key, event.target.value)}
+            title={tooltipText}
+            aria-label={`${target.label} upgrade policy`}
+          >
+            {MODEL_UPGRADE_POLICY_OPTIONS.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+                title={option.description}
+                aria-label={`${option.label}. ${option.description}`}
+              >
+                {option.compactLabel || option.label}
+              </option>
+            ))}
+          </select>
+          <div className="settings-inline-upgrade-tooltip" role="tooltip" aria-hidden="true">
+            <strong className="settings-inline-upgrade-tooltip-title">{target.label}</strong>
+            <span className="settings-inline-upgrade-tooltip-current">
+              Current: <strong>{currentOption.label}</strong>. {currentOption.description}
+            </span>
+            <div className="settings-inline-upgrade-tooltip-options">
+              {MODEL_UPGRADE_POLICY_OPTIONS.map((option) => (
+                <div
+                  key={option.value}
+                  className={`settings-inline-upgrade-tooltip-option${option.value === target.policy ? ' selected' : ''}`}
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.description}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  const renderResolvedModelUpgradeSuggestionNotice = (target) => {
+    if (!target) return null;
+    const suggestion = modelUpgradeSuggestionLookup.get(target.key) || null;
+    if (!suggestion) return null;
+    const statSummary = buildModelUpgradeStatLines(suggestion).slice(0, 2).join(' | ');
+
+    return (
+      <div className={`settings-inline-upgrade-notice${suggestion.isSafe === false ? ' unsafe' : ''}`}>
+        <div className="settings-inline-upgrade-notice-copy">
+          <span className="settings-inline-upgrade-notice-title">
+            <strong>{getModelDisplayName(suggestion.suggestedModel)}</strong> is available
+          </span>
+          <code>{suggestion.suggestedModel}</code>
+          {statSummary && (
+            <span className="settings-inline-upgrade-meta">{statSummary}</span>
+          )}
+          {suggestion.isSafe === false && suggestion.safetyMessage && (
+            <span className="settings-inline-upgrade-warning">{suggestion.safetyMessage}</span>
+          )}
+        </div>
+        <div className="settings-inline-upgrade-actions">
+          {suggestion.isSafe !== false && (
+            <>
+              <button
+                type="button"
+                className="settings-inline-upgrade-action primary"
+                onClick={() => dispatch({
+                  type: 'APPLY_MODEL_UPGRADE',
+                  payload: {
+                    currentModel: suggestion.currentModel,
+                    suggestedModel: suggestion.suggestedModel,
+                    targetKeys: [target.key],
+                    suggestionKey: suggestion.key,
+                  },
+                })}
+                title={`Replace ${suggestion.currentModel} with ${suggestion.suggestedModel} for ${target.label}.`}
+              >
+                Switch
+              </button>
+              <button
+                type="button"
+                className="settings-inline-upgrade-action"
+                onClick={() => {
+                  setModelUpgradePolicy(target.key, 'auto');
+                  dispatch({
+                    type: 'APPLY_MODEL_UPGRADE',
+                    payload: {
+                      currentModel: suggestion.currentModel,
+                      suggestedModel: suggestion.suggestedModel,
+                      targetKeys: [target.key],
+                      suggestionKey: suggestion.key,
+                    },
+                  });
+                }}
+                title={`Always auto-switch future turns from ${suggestion.currentModel} to ${suggestion.suggestedModel} for ${target.label}.`}
+              >
+                Auto-switch
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="settings-inline-upgrade-action"
+            onClick={() => dismissModelUpgrade(suggestion)}
+            title="Hide this upgrade notice until a different newer version appears."
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    );
+  };
   const currentPresetSnapshot = useMemo(() => ({
     models,
     synthesizerModel: normalizeModelForProvider(synthProvider, synth) || synth,
@@ -894,6 +1139,7 @@ export default function SettingsModal() {
     setRankingPreferFlagship(true);
     setRankingPreferNew(true);
     setRankingAllowPreview(true);
+    setUpgradeNotificationsEnabled(true);
     setVirtualizationEnabled(true);
     setVirtualizationKeepLatest(4);
     setCachePersistence(true);
@@ -923,6 +1169,7 @@ export default function SettingsModal() {
     setRankingPreferFlagship(Boolean(smartRankingPreferFlagship));
     setRankingPreferNew(Boolean(smartRankingPreferNew));
     setRankingAllowPreview(Boolean(smartRankingAllowPreview));
+    setUpgradeNotificationsEnabled(Boolean(modelUpgradeNotificationsEnabled));
     setVirtualizationEnabled(Boolean(streamVirtualizationEnabled));
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
@@ -957,6 +1204,7 @@ export default function SettingsModal() {
     smartRankingPreferFlagship,
     smartRankingPreferNew,
     smartRankingAllowPreview,
+    modelUpgradeNotificationsEnabled,
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
     cachePersistenceEnabled,
@@ -1030,6 +1278,9 @@ export default function SettingsModal() {
     if (Boolean(rankingAllowPreview) !== Boolean(smartRankingAllowPreview)) {
       dispatch({ type: 'SET_SMART_RANKING_ALLOW_PREVIEW', payload: rankingAllowPreview });
     }
+    if (Boolean(upgradeNotificationsEnabled) !== Boolean(modelUpgradeNotificationsEnabled)) {
+      dispatch({ type: 'SET_MODEL_UPGRADE_NOTIFICATIONS_ENABLED', payload: upgradeNotificationsEnabled });
+    }
     if (Boolean(virtualizationEnabled) !== Boolean(streamVirtualizationEnabled)) {
       dispatch({ type: 'SET_STREAM_VIRTUALIZATION_ENABLED', payload: virtualizationEnabled });
     }
@@ -1078,6 +1329,8 @@ export default function SettingsModal() {
     smartRankingPreferNew,
     rankingAllowPreview,
     smartRankingAllowPreview,
+    upgradeNotificationsEnabled,
+    modelUpgradeNotificationsEnabled,
     virtualizationEnabled,
     streamVirtualizationEnabled,
     virtualizationKeepLatest,
@@ -1457,26 +1710,64 @@ export default function SettingsModal() {
                 />
               </span>
             </label>
+            <div className="settings-upgrade-toolbar">
+              <label className="settings-checkbox" title="Show a banner or inline notice when a newer safe same-track model is available.">
+                <input
+                  type="checkbox"
+                  checked={upgradeNotificationsEnabled}
+                  onChange={(event) => setUpgradeNotificationsEnabled(event.target.checked)}
+                />
+                <span className="settings-checkbox-copy">
+                  <span>Show upgrade notices</span>
+                  <InfoTip
+                    label="Upgrade notification help"
+                    content={[
+                      'Each model selector below has its own upgrade policy. Set it to pinned, notify, or auto-upgrade safe.',
+                      'This toggle only controls visible notices. Auto-upgrade targets can still switch future turns automatically, while historical turns keep their original model IDs.',
+                    ]}
+                  />
+                </span>
+              </label>
+              {dismissedModelUpgradeSuggestionCount > 0 && (
+                <button
+                  type="button"
+                  className="settings-inline-upgrade-action"
+                  onClick={resetDismissedModelUpgrades}
+                  title="Show dismissed upgrade notices again."
+                >
+                  Reset dismissed
+                </button>
+              )}
+            </div>
             <div className="model-list">
-              {models.map((model, i) => (
-                <div key={i} className="model-item">
-                  <ModelStatsHoverCard
-                    modelId={model}
-                    modelCatalog={modelCatalog}
-                    modelCatalogStatus={modelCatalogStatus}
-                  >
-                    <span className="model-item-name">{model}</span>
-                  </ModelStatsHoverCard>
-                  <button
-                    className="model-item-remove"
-                    onClick={() => removeModel(i)}
-                    disabled={models.length <= 1}
-                    title={models.length <= 1 ? 'At least one debate model is required.' : 'Remove this model from the debate roster.'}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
+              {models.map((model, i) => {
+                const upgradeTarget = getInlineModelUpgradeTarget('debate', model);
+                return (
+                  <div key={i} className="model-item">
+                    <div className="model-item-main">
+                      <ModelStatsHoverCard
+                        modelId={model}
+                        modelCatalog={modelCatalog}
+                        modelCatalogStatus={modelCatalogStatus}
+                      >
+                        <span className="model-item-name">{model}</span>
+                      </ModelStatsHoverCard>
+                      <div className="model-item-actions">
+                        {renderCompactModelUpgradePolicyControl(upgradeTarget)}
+                        <button
+                          className="model-item-remove"
+                          onClick={() => removeModel(i)}
+                          disabled={models.length <= 1}
+                          title={models.length <= 1 ? 'At least one debate model is required.' : 'Remove this model from the debate roster.'}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {renderResolvedModelUpgradeSuggestionNotice(upgradeTarget)}
+                  </div>
+                );
+              })}
             </div>
             <div className="model-add-row">
               <select
@@ -1750,7 +2041,11 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
+              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('synth'), {
+                className: 'settings-inline-upgrade-control-inline',
+              })}
             </div>
+            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('synth'))}
           </div>
 
           <div className="settings-section">
@@ -1810,7 +2105,11 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
+              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('convergence'), {
+                className: 'settings-inline-upgrade-control-inline',
+              })}
             </div>
+            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('convergence'))}
             <p className="settings-hint">
               A fast model used to check if debaters have reached consensus between rounds.
             </p>
@@ -1868,7 +2167,11 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
+              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('search'), {
+                className: 'settings-inline-upgrade-control-inline',
+              })}
             </div>
+            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('search'))}
             {getProviderModelOptions(searchProvider).length > 0 && (
               <datalist id={`provider-models-search-${searchProvider}`}>
                 {getProviderModelOptions(searchProvider).slice(0, 200).map((modelId) => (
@@ -2311,4 +2614,3 @@ export default function SettingsModal() {
     </div>
   );
 }
-

@@ -59,6 +59,12 @@ import { createConversationHistoryBranch } from '../lib/conversationBranching.js
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
 import { buildRankingTaskRequirements } from '../lib/modelRanking.js';
 import { buildEnsembleQualityObservations } from '../lib/modelQualityTelemetry.js';
+import {
+  buildConfiguredModelUpgradeTargets,
+  buildModelUpgradeSuggestions,
+  getModelUpgradeTargetKey,
+  normalizeModelUpgradePolicy,
+} from '../lib/modelUpgrades.js';
 import { getCatalogModelLookupId } from '../lib/modelStats';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload.js';
 import { isMostRecentConversation } from '../lib/sidebarOrdering.js';
@@ -99,7 +105,11 @@ const LIVE_RUN_HEARTBEAT_INTERVAL_MS = 5000;
 const LIVE_RUN_TICK_INTERVAL_MS = 1000;
 const IDLE_CONVERSATION_PERSIST_DELAY_MS = 1200;
 const RESUME_RECOVERY_MIN_STALE_MS = 15000;
+const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1000;
 const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
+const MODEL_UPGRADE_POLICIES_STORAGE_KEY = 'model_upgrade_policies';
+const MODEL_UPGRADE_NOTIFICATIONS_ENABLED_STORAGE_KEY = 'model_upgrade_notifications_enabled';
+const DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY = 'dismissed_model_upgrade_suggestions';
 
 function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
@@ -288,6 +298,44 @@ function clearLegacyResponseCacheStorage() {
   } catch {
     // ignore storage access failures
   }
+}
+
+function normalizeDismissedModelUpgradeSuggestions(raw) {
+  return Array.from(
+    new Set(
+      (Array.isArray(raw) ? raw : [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )
+  ).slice(-200);
+}
+
+function normalizeStoredModelUpgradePolicies(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw)
+      .map(([key, value]) => [String(key || '').trim(), normalizeModelUpgradePolicy(value)])
+      .filter(([key, value]) => key && value !== 'notify')
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+  );
+}
+
+function areStringMapsEqual(left, right) {
+  const leftEntries = Object.entries(left || {});
+  const rightEntries = Object.entries(right || {});
+  if (leftEntries.length !== rightEntries.length) return false;
+  return leftEntries.every(([key, value]) => right[key] === value);
+}
+
+function buildModelCatalogLookup(models) {
+  const catalog = {};
+  for (const model of Array.isArray(models) ? models : []) {
+    const id = model?.id || model?.name || model?.model;
+    if (id) {
+      catalog[id] = model;
+    }
+  }
+  return catalog;
 }
 
 function hashCacheKeyPayload(value) {
@@ -499,6 +547,13 @@ const initialState = {
   smartRankingPreferFlagship: loadFromStorage('smart_ranking_prefer_flagship', true),
   smartRankingPreferNew: loadFromStorage('smart_ranking_prefer_new', true),
   smartRankingAllowPreview: loadFromStorage('smart_ranking_allow_preview', true),
+  modelUpgradePolicies: normalizeStoredModelUpgradePolicies(
+    loadFromStorage(MODEL_UPGRADE_POLICIES_STORAGE_KEY, {})
+  ),
+  modelUpgradeNotificationsEnabled: loadFromStorage(MODEL_UPGRADE_NOTIFICATIONS_ENABLED_STORAGE_KEY, true) !== false,
+  dismissedModelUpgradeSuggestions: normalizeDismissedModelUpgradeSuggestions(
+    loadFromStorage(DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY, [])
+  ),
   streamVirtualizationEnabled: loadFromStorage('stream_virtualization_enabled', true),
   streamVirtualizationKeepLatest: loadedVirtualizationKeepLatest,
   cachePersistenceEnabled: loadFromStorage('cache_persistence_enabled', true),
@@ -917,6 +972,159 @@ function reducer(state, action) {
       const enabled = Boolean(action.payload);
       saveToStorage('smart_ranking_allow_preview', enabled);
       return { ...state, smartRankingAllowPreview: enabled };
+    }
+    case 'SET_MODEL_UPGRADE_NOTIFICATIONS_ENABLED': {
+      const enabled = Boolean(action.payload);
+      saveToStorage(MODEL_UPGRADE_NOTIFICATIONS_ENABLED_STORAGE_KEY, enabled);
+      return { ...state, modelUpgradeNotificationsEnabled: enabled };
+    }
+    case 'SET_MODEL_UPGRADE_POLICY': {
+      const key = String(action.payload?.key || '').trim();
+      if (!key) return state;
+      const nextPolicies = normalizeStoredModelUpgradePolicies({
+        ...state.modelUpgradePolicies,
+        [key]: action.payload?.policy,
+      });
+      if (areStringMapsEqual(nextPolicies, state.modelUpgradePolicies)) {
+        return state;
+      }
+      saveToStorage(MODEL_UPGRADE_POLICIES_STORAGE_KEY, nextPolicies);
+      return { ...state, modelUpgradePolicies: nextPolicies };
+    }
+    case 'SET_MODEL_UPGRADE_POLICIES': {
+      const updates = action.payload && typeof action.payload === 'object' && !Array.isArray(action.payload)
+        ? action.payload
+        : {};
+      const nextPolicies = normalizeStoredModelUpgradePolicies({
+        ...state.modelUpgradePolicies,
+        ...updates,
+      });
+      if (areStringMapsEqual(nextPolicies, state.modelUpgradePolicies)) {
+        return state;
+      }
+      saveToStorage(MODEL_UPGRADE_POLICIES_STORAGE_KEY, nextPolicies);
+      return { ...state, modelUpgradePolicies: nextPolicies };
+    }
+    case 'DISMISS_MODEL_UPGRADE_SUGGESTION': {
+      const key = String(action.payload || '').trim();
+      if (!key) return state;
+      const next = normalizeDismissedModelUpgradeSuggestions([
+        ...state.dismissedModelUpgradeSuggestions,
+        key,
+      ]);
+      saveToStorage(DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY, next);
+      return { ...state, dismissedModelUpgradeSuggestions: next };
+    }
+    case 'DISMISS_MODEL_UPGRADE_SUGGESTIONS': {
+      const next = normalizeDismissedModelUpgradeSuggestions([
+        ...state.dismissedModelUpgradeSuggestions,
+        ...(Array.isArray(action.payload) ? action.payload : []),
+      ]);
+      if (next.length === state.dismissedModelUpgradeSuggestions.length) {
+        return state;
+      }
+      saveToStorage(DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY, next);
+      return { ...state, dismissedModelUpgradeSuggestions: next };
+    }
+    case 'RESET_DISMISSED_MODEL_UPGRADE_SUGGESTIONS': {
+      saveToStorage(DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY, []);
+      return { ...state, dismissedModelUpgradeSuggestions: [] };
+    }
+    case 'APPLY_MODEL_UPGRADE': {
+      const currentModel = String(action.payload?.currentModel || '').trim();
+      const suggestedModel = String(
+        action.payload?.suggestedModel || action.payload?.nextModel || ''
+      ).trim();
+      const roles = new Set(
+        (Array.isArray(action.payload?.roles) ? action.payload.roles : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      );
+      const targetKeys = new Set(
+        (Array.isArray(action.payload?.targetKeys) ? action.payload.targetKeys : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      );
+      const hasExplicitTargets = targetKeys.size > 0;
+      const suggestionKeys = normalizeDismissedModelUpgradeSuggestions([
+        action.payload?.suggestionKey,
+        ...(Array.isArray(action.payload?.suggestionKeys) ? action.payload.suggestionKeys : []),
+      ]);
+
+      if (!currentModel || !suggestedModel || (!hasExplicitTargets && roles.size === 0)) {
+        return state;
+      }
+
+      const shouldApplyTarget = (role, modelId = '') => (
+        hasExplicitTargets
+          ? targetKeys.has(getModelUpgradeTargetKey(role, modelId))
+          : roles.has(role)
+      );
+
+      let changed = false;
+      let selectedModels = state.selectedModels;
+      let synthesizerModel = state.synthesizerModel;
+      let convergenceModel = state.convergenceModel;
+      let webSearchModel = state.webSearchModel;
+
+      if (hasExplicitTargets ? Array.from(targetKeys).some((key) => key.startsWith('debate:')) : roles.has('debate')) {
+        const nextSelectedModels = Array.from(
+          new Set(
+            (Array.isArray(state.selectedModels) ? state.selectedModels : [])
+              .map((modelId) => (
+                modelId === currentModel && shouldApplyTarget('debate', modelId)
+                  ? suggestedModel
+                  : modelId
+              ))
+              .filter(Boolean)
+          )
+        );
+        if (nextSelectedModels.join('|') !== state.selectedModels.join('|')) {
+          selectedModels = nextSelectedModels;
+          saveToStorage('debate_models', nextSelectedModels);
+          changed = true;
+        }
+      }
+
+      if (shouldApplyTarget('synth') && state.synthesizerModel === currentModel) {
+        synthesizerModel = suggestedModel;
+        saveToStorage('synthesizer_model', suggestedModel);
+        changed = true;
+      }
+
+      if (shouldApplyTarget('convergence') && state.convergenceModel === currentModel) {
+        convergenceModel = suggestedModel;
+        saveToStorage('convergence_model', suggestedModel);
+        changed = true;
+      }
+
+      if (shouldApplyTarget('search') && state.webSearchModel === currentModel) {
+        webSearchModel = suggestedModel;
+        saveToStorage('web_search_model', suggestedModel);
+        changed = true;
+      }
+
+      const nextDismissedSuggestions = suggestionKeys.length > 0
+        ? state.dismissedModelUpgradeSuggestions.filter((key) => !suggestionKeys.includes(key))
+        : state.dismissedModelUpgradeSuggestions;
+      const dismissedChanged = nextDismissedSuggestions.length !== state.dismissedModelUpgradeSuggestions.length;
+
+      if (!changed && !dismissedChanged) {
+        return state;
+      }
+
+      if (dismissedChanged) {
+        saveToStorage(DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY, nextDismissedSuggestions);
+      }
+
+      return {
+        ...state,
+        selectedModels,
+        synthesizerModel,
+        convergenceModel,
+        webSearchModel,
+        dismissedModelUpgradeSuggestions: nextDismissedSuggestions,
+      };
     }
     case 'SET_STREAM_VIRTUALIZATION_ENABLED': {
       saveToStorage('stream_virtualization_enabled', action.payload);
@@ -1531,6 +1739,7 @@ export function DebateProvider({ children }) {
   const liveRunScopesRef = useRef([]);
   const lastConversationPersistAtRef = useRef(0);
   const lastRunHeartbeatAtRef = useRef(0);
+  const lastModelCatalogRefreshAtRef = useRef(0);
   const recoveredInterruptedRunsRef = useRef(false);
   const metricsRef = useRef(state.metrics);
   const cacheStatsRef = useRef({
@@ -1906,12 +2115,8 @@ export function DebateProvider({ children }) {
       fetchModels(state.apiKey, { signal: controller.signal })
         .then((models) => {
           if (cancelled) return;
-          const catalog = {};
-          for (const model of models) {
-            const id = model.id || model.name || model.model;
-            if (id) catalog[id] = model;
-          }
-          dispatch({ type: 'SET_MODEL_CATALOG', payload: catalog });
+          lastModelCatalogRefreshAtRef.current = Date.now();
+          dispatch({ type: 'SET_MODEL_CATALOG', payload: buildModelCatalogLookup(models) });
           dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'ready', error: null } });
         })
         .catch((err) => {
@@ -1928,6 +2133,55 @@ export function DebateProvider({ children }) {
       controller.abort();
     };
   }, [state.apiKey]);
+
+  useEffect(() => {
+    if (state.modelCatalogStatus !== 'ready') return undefined;
+
+    let cancelled = false;
+    let activeController = null;
+
+    const refreshCatalog = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+
+      fetchModels(state.apiKey, { signal: controller.signal, refresh: true })
+        .then((models) => {
+          if (cancelled) return;
+          lastModelCatalogRefreshAtRef.current = Date.now();
+          dispatch({ type: 'SET_MODEL_CATALOG', payload: buildModelCatalogLookup(models) });
+          dispatch({ type: 'SET_MODEL_CATALOG_STATUS', payload: { status: 'ready', error: null } });
+        })
+        .catch((err) => {
+          if (cancelled || err?.name === 'AbortError') return;
+          // Background refresh failures should not knock the app out of a ready state.
+        });
+    };
+
+    const intervalId = window.setInterval(refreshCatalog, MODEL_CATALOG_BACKGROUND_REFRESH_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (
+        lastModelCatalogRefreshAtRef.current > 0 &&
+        (Date.now() - lastModelCatalogRefreshAtRef.current) < MODEL_CATALOG_BACKGROUND_REFRESH_MS
+      ) {
+        return;
+      }
+      refreshCatalog();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      activeController?.abort();
+    };
+  }, [dispatch, state.apiKey, state.modelCatalogStatus]);
 
   useEffect(() => {
     if (state.modelCatalogStatus !== 'ready') return;
@@ -2042,6 +2296,68 @@ export function DebateProvider({ children }) {
       isConversationInProgress,
     )
   ), [isConversationInProgress, state.activeConversationId, state.conversations]);
+  const modelUpgradeTargets = useMemo(() => (
+    buildConfiguredModelUpgradeTargets({
+      selectedModels: state.selectedModels,
+      synthesizerModel: state.synthesizerModel,
+      convergenceModel: state.convergenceModel,
+      webSearchModel: state.webSearchModel,
+      policies: state.modelUpgradePolicies,
+    })
+  ), [
+    state.selectedModels,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.webSearchModel,
+    state.modelUpgradePolicies,
+  ]);
+  const allModelUpgradeSuggestions = useMemo(() => (
+    buildModelUpgradeSuggestions({
+      selectedModels: state.selectedModels,
+      synthesizerModel: state.synthesizerModel,
+      convergenceModel: state.convergenceModel,
+      webSearchModel: state.webSearchModel,
+      modelCatalog: state.modelCatalog,
+      policies: state.modelUpgradePolicies,
+      dismissedSuggestionKeys: state.dismissedModelUpgradeSuggestions,
+    })
+  ), [
+    state.selectedModels,
+    state.synthesizerModel,
+    state.convergenceModel,
+    state.webSearchModel,
+    state.modelCatalog,
+    state.modelUpgradePolicies,
+    state.dismissedModelUpgradeSuggestions,
+  ]);
+  const modelUpgradeSuggestions = useMemo(() => (
+    state.modelUpgradeNotificationsEnabled
+      ? allModelUpgradeSuggestions.filter((suggestion) => suggestion.notifyTargetCount > 0)
+      : []
+  ), [state.modelUpgradeNotificationsEnabled, allModelUpgradeSuggestions]);
+
+  useEffect(() => {
+    const autoSuggestions = allModelUpgradeSuggestions.filter((suggestion) => suggestion.autoTargetCount > 0);
+    if (autoSuggestions.length === 0) return;
+
+    for (const suggestion of autoSuggestions) {
+      const autoTargetKeys = suggestion.targets
+        .filter((target) => target.policy === 'auto')
+        .map((target) => target.key)
+        .filter(Boolean);
+      if (autoTargetKeys.length === 0) continue;
+
+      dispatch({
+        type: 'APPLY_MODEL_UPGRADE',
+        payload: {
+          currentModel: suggestion.currentModel,
+          suggestedModel: suggestion.suggestedModel,
+          targetKeys: autoTargetKeys,
+          suggestionKey: suggestion.key,
+        },
+      });
+    }
+  }, [allModelUpgradeSuggestions, dispatch]);
   const requestAutoConversationTitle = useCallback(({
     conversationId,
     userPrompt,
@@ -5906,6 +6222,76 @@ export function DebateProvider({ children }) {
       replacementModel,
     });
   }, [retryStream, suggestReplacementModel]);
+  const applyModelUpgrade = useCallback((suggestion) => {
+    if (!suggestion) return;
+    const targetKeys = (Array.isArray(suggestion.targets) ? suggestion.targets : [])
+      .map((target) => target?.key)
+      .filter(Boolean);
+    dispatch({
+      type: 'APPLY_MODEL_UPGRADE',
+      payload: {
+        currentModel: suggestion.currentModel,
+        suggestedModel: suggestion.suggestedModel,
+        targetKeys,
+        roles: suggestion.roles,
+        suggestionKey: suggestion.key,
+      },
+    });
+  }, [dispatch]);
+  const setModelUpgradePolicy = useCallback((targetKey, policy) => {
+    const key = String(targetKey || '').trim();
+    if (!key) return;
+    dispatch({
+      type: 'SET_MODEL_UPGRADE_POLICY',
+      payload: {
+        key,
+        policy,
+      },
+    });
+  }, [dispatch]);
+  const setModelUpgradePolicies = useCallback((updates) => {
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) return;
+    dispatch({ type: 'SET_MODEL_UPGRADE_POLICIES', payload: updates });
+  }, [dispatch]);
+  const enableModelUpgradeAutoSwitch = useCallback((suggestion) => {
+    if (!suggestion) return;
+    const targetKeys = (Array.isArray(suggestion.targets) ? suggestion.targets : [])
+      .map((target) => target?.key)
+      .filter(Boolean);
+    if (targetKeys.length === 0) return;
+
+    dispatch({
+      type: 'SET_MODEL_UPGRADE_POLICIES',
+      payload: Object.fromEntries(targetKeys.map((key) => [key, 'auto'])),
+    });
+    dispatch({
+      type: 'APPLY_MODEL_UPGRADE',
+      payload: {
+        currentModel: suggestion.currentModel,
+        suggestedModel: suggestion.suggestedModel,
+        targetKeys,
+        roles: suggestion.roles,
+        suggestionKey: suggestion.key,
+      },
+    });
+  }, [dispatch]);
+  const dismissModelUpgrade = useCallback((suggestionOrKey) => {
+    const key = typeof suggestionOrKey === 'string'
+      ? suggestionOrKey
+      : suggestionOrKey?.key;
+    if (!key) return;
+    dispatch({ type: 'DISMISS_MODEL_UPGRADE_SUGGESTION', payload: key });
+  }, [dispatch]);
+  const dismissAllModelUpgrades = useCallback((suggestions = modelUpgradeSuggestions) => {
+    const keys = (Array.isArray(suggestions) ? suggestions : modelUpgradeSuggestions)
+      .map((item) => item?.key)
+      .filter(Boolean);
+    if (keys.length === 0) return;
+    dispatch({ type: 'DISMISS_MODEL_UPGRADE_SUGGESTIONS', payload: keys });
+  }, [dispatch, modelUpgradeSuggestions]);
+  const resetDismissedModelUpgrades = useCallback(() => {
+    dispatch({ type: 'RESET_DISMISSED_MODEL_UPGRADE_SUGGESTIONS', payload: null });
+  }, [dispatch]);
 
   const settingsValue = useMemo(() => ({
     apiKey: state.apiKey,
@@ -5925,6 +6311,11 @@ export function DebateProvider({ children }) {
     smartRankingPreferFlagship: state.smartRankingPreferFlagship,
     smartRankingPreferNew: state.smartRankingPreferNew,
     smartRankingAllowPreview: state.smartRankingAllowPreview,
+    modelUpgradePolicies: state.modelUpgradePolicies,
+    modelUpgradeNotificationsEnabled: state.modelUpgradeNotificationsEnabled,
+    modelUpgradeTargets,
+    modelUpgradeSuggestions,
+    dismissedModelUpgradeSuggestionCount: state.dismissedModelUpgradeSuggestions.length,
     streamVirtualizationEnabled: state.streamVirtualizationEnabled,
     streamVirtualizationKeepLatest: state.streamVirtualizationKeepLatest,
     cachePersistenceEnabled: state.cachePersistenceEnabled,
@@ -5958,6 +6349,11 @@ export function DebateProvider({ children }) {
     state.smartRankingPreferFlagship,
     state.smartRankingPreferNew,
     state.smartRankingAllowPreview,
+    state.modelUpgradePolicies,
+    state.modelUpgradeNotificationsEnabled,
+    modelUpgradeTargets,
+    modelUpgradeSuggestions,
+    state.dismissedModelUpgradeSuggestions.length,
     state.streamVirtualizationEnabled,
     state.streamVirtualizationKeepLatest,
     state.cachePersistenceEnabled,
@@ -6047,6 +6443,13 @@ export function DebateProvider({ children }) {
     retryStream,
     replaceStreamModel,
     suggestReplacementModel,
+    applyModelUpgrade,
+    setModelUpgradePolicy,
+    setModelUpgradePolicies,
+    enableModelUpgradeAutoSwitch,
+    dismissModelUpgrade,
+    dismissAllModelUpgrades,
+    resetDismissedModelUpgrades,
     retryRound,
     retrySynthesis,
     branchFromRound,
@@ -6066,6 +6469,13 @@ export function DebateProvider({ children }) {
     retryStream,
     replaceStreamModel,
     suggestReplacementModel,
+    applyModelUpgrade,
+    setModelUpgradePolicy,
+    setModelUpgradePolicies,
+    enableModelUpgradeAutoSwitch,
+    dismissModelUpgrade,
+    dismissAllModelUpgrades,
+    resetDismissedModelUpgrades,
     retryRound,
     retrySynthesis,
     branchFromRound,

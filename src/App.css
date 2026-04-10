@@ -278,6 +278,68 @@
   flex-direction: column;
 }
 
+.model-upgrade-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin: clamp(18px, 3vw, 28px) clamp(20px, 4vw, 48px) 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(79, 143, 247, 0.28);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(79, 143, 247, 0.14), rgba(16, 185, 129, 0.09));
+  color: var(--text-secondary);
+}
+
+.model-upgrade-banner-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-upgrade-banner-copy strong {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.model-upgrade-banner-copy span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-upgrade-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.model-upgrade-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-medium);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.model-upgrade-banner-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-strong);
+}
+
+.model-upgrade-banner-btn.primary {
+  border-color: rgba(79, 143, 247, 0.35);
+  background: rgba(79, 143, 247, 0.14);
+  color: var(--accent-blue);
+}
+
 .turns-virtuoso {
   flex: 1;
   min-height: 0;
@@ -402,6 +464,12 @@
   .turns-container {
     padding: 24px 16px 32px;
     gap: var(--space-lg);
+  }
+
+  .model-upgrade-banner {
+    margin: 16px 16px 0;
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .turns-virtuoso-item {

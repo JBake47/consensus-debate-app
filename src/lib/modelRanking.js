@@ -83,7 +83,7 @@ function parseTimestampToMs(value) {
   return null;
 }
 
-function getModelReleaseTimestampMs(modelInfo = {}) {
+export function getModelReleaseTimestampMs(modelInfo = {}) {
   const createdCandidates = [
     modelInfo.created,
     modelInfo.created_at,
@@ -130,7 +130,7 @@ function getReleaseNoveltyScore(releasedAtMs, nowMs = Date.now()) {
   return clamp(100 - Math.log2(1 + ageDays) * 10, 20, 100);
 }
 
-function isPreviewModel(modelId, modelInfo = {}) {
+export function isPreviewModel(modelId, modelInfo = {}) {
   if (modelInfo?.is_preview === true || modelInfo?.preview === true || modelInfo?.top_provider?.is_preview === true) {
     return true;
   }
@@ -690,7 +690,7 @@ function getWeightsByMode(preferredMode) {
   return weightsByMode[preferredMode] || weightsByMode.balanced;
 }
 
-function getModelFamily(modelId, modelInfo = {}) {
+export function getModelFamily(modelId, modelInfo = {}) {
   const text = [
     modelId,
     modelInfo?.name,

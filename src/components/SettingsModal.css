@@ -222,13 +222,29 @@
 
 .model-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: var(--space-sm) var(--space-md);
+  padding: 10px 12px;
+}
+
+.model-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.model-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .model-hover-card {
@@ -356,6 +372,210 @@
 .model-item-remove:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+.settings-upgrade-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.settings-inline-upgrade {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.settings-inline-upgrade-row,
+.settings-inline-upgrade-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-inline-upgrade-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-inline-upgrade-select {
+  min-width: 160px;
+  max-width: 220px;
+}
+
+.settings-inline-upgrade-select-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.settings-inline-upgrade-control.compact {
+  flex-shrink: 0;
+}
+
+.settings-inline-upgrade-control.settings-inline-upgrade-control-inline {
+  margin-left: auto;
+}
+
+.settings-inline-upgrade-select.compact {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
+  padding: 7px 28px 7px 10px;
+  font-size: 12px;
+}
+
+.settings-inline-upgrade-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(280px, calc(100vw - 64px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  background: var(--surface-popover);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  z-index: 10;
+}
+
+.settings-inline-upgrade-select-wrap:hover .settings-inline-upgrade-tooltip,
+.settings-inline-upgrade-select-wrap:focus-within .settings-inline-upgrade-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.settings-inline-upgrade-tooltip-title {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.settings-inline-upgrade-tooltip-current {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.settings-inline-upgrade-tooltip-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-inline-upgrade-tooltip-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.settings-inline-upgrade-tooltip-option strong {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.settings-inline-upgrade-tooltip-option.selected strong {
+  color: var(--accent-blue);
+}
+
+.settings-inline-upgrade-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(79, 143, 247, 0.22);
+  background: rgba(79, 143, 247, 0.08);
+}
+
+.settings-inline-upgrade-notice.unsafe {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.settings-inline-upgrade-notice-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-inline-upgrade-notice-title {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.settings-inline-upgrade-notice-copy code {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.settings-inline-upgrade-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-inline-upgrade-warning {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-inline-upgrade-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-inline-upgrade-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.settings-inline-upgrade-action:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-inline-upgrade-action.primary {
+  border-color: rgba(79, 143, 247, 0.35);
+  background: rgba(79, 143, 247, 0.14);
+  color: var(--accent-blue);
+}
+
+.settings-inline-upgrade-action.primary:hover {
+  background: rgba(79, 143, 247, 0.2);
 }
 
 .model-add-row {
@@ -686,6 +906,50 @@
   border-color: rgba(239, 68, 68, 0.28);
   background: rgba(239, 68, 68, 0.1);
   color: #fecaca;
+}
+
+@media (max-width: 640px) {
+  .settings-upgrade-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-inline-upgrade-row,
+  .settings-inline-upgrade-control,
+  .settings-inline-upgrade-notice {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-inline-upgrade-select {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .settings-inline-upgrade-actions {
+    width: 100%;
+  }
+
+  .settings-inline-upgrade-action {
+    flex: 1 1 auto;
+  }
+
+  .model-item-main,
+  .model-item-actions {
+    align-items: stretch;
+  }
+
+  .model-item-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .settings-inline-upgrade-control.settings-inline-upgrade-control-inline {
+    margin-left: 0;
+  }
+
 }
 
 .preset-selector-card {
@@ -1031,6 +1295,7 @@
 }
 
 :root[data-theme='light'] .model-item,
+:root[data-theme='light'] .settings-inline-upgrade-notice,
 :root[data-theme='light'] .settings-smart-ranking,
 :root[data-theme='light'] .settings-ranked-item,
 :root[data-theme='light'] .settings-diagnostics-card,

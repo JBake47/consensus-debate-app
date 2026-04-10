@@ -1,8 +1,9 @@
 import { forwardRef, useCallback, useState, useEffect, useMemo, lazy, Suspense, useRef } from 'react';
-import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon } from 'lucide-react';
+import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon, Sparkles } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
 import { isTypingShortcutTarget, matchesShortcut } from './lib/keyboardShortcuts';
+import { getModelDisplayName } from './lib/openrouter';
 import {
   computeConversationCostMeta,
   formatCostWithQuality,
@@ -24,9 +25,24 @@ const TurnList = forwardRef(function TurnList(props, ref) {
 });
 
 function AppContent() {
-  const { dispatch, retryLastTurn, retryAllFailed, clearResponseCache } = useDebateActions();
+  const {
+    dispatch,
+    retryLastTurn,
+    retryAllFailed,
+    clearResponseCache,
+    applyModelUpgrade,
+    enableModelUpgradeAutoSwitch,
+    dismissModelUpgrade,
+    dismissAllModelUpgrades,
+  } = useDebateActions();
   const { activeConversation, debateInProgress } = useDebateConversations();
-  const { themeMode, apiKey, providerStatus, providerStatusState } = useDebateSettings();
+  const {
+    themeMode,
+    apiKey,
+    providerStatus,
+    providerStatusState,
+    modelUpgradeSuggestions,
+  } = useDebateSettings();
   const { webSearchEnabled, showSettings, pendingTurnFocus, conversationStoreStatus } = useDebateUi();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -54,6 +70,17 @@ function AppContent() {
     || Object.values(providerStatus || {}).some(Boolean);
   const providerStateReady = providerStatusState === 'ready';
   const requiresProviderSetup = providerStateReady && !hasConfiguredProvider;
+  const primaryUpgradeSuggestion = modelUpgradeSuggestions[0] || null;
+  const modelUpgradeBannerMessage = useMemo(() => {
+    if (modelUpgradeSuggestions.length === 0) return '';
+    if (modelUpgradeSuggestions.length === 1 && primaryUpgradeSuggestion) {
+      if (primaryUpgradeSuggestion.isSafe === false) {
+        return `${getModelDisplayName(primaryUpgradeSuggestion.suggestedModel)} is available for ${primaryUpgradeSuggestion.roleLabels.join(', ')}, but it is not marked safe for auto-switching. ${primaryUpgradeSuggestion.safetyMessage || ''}`.trim();
+      }
+      return `${getModelDisplayName(primaryUpgradeSuggestion.suggestedModel)} can replace ${getModelDisplayName(primaryUpgradeSuggestion.currentModel)} for ${primaryUpgradeSuggestion.roleLabels.join(', ')}.`;
+    }
+    return `${modelUpgradeSuggestions.length} newer model upgrades are available for your current lineup.`;
+  }, [modelUpgradeSuggestions, primaryUpgradeSuggestion]);
 
   useEffect(() => {
     setEditingHeader(false);
@@ -381,6 +408,67 @@ function AppContent() {
         <div className="chat-window-shell">
           <div className="chat-content-shell">
             <div className="main-content">
+              {modelUpgradeSuggestions.length > 0 && (
+                <div className="model-upgrade-banner">
+                  <div className="model-upgrade-banner-copy">
+                    <strong>
+                      {modelUpgradeSuggestions.length === 1 ? 'Newer Model Available' : 'Model Upgrades Available'}
+                    </strong>
+                    <span>{modelUpgradeBannerMessage}</span>
+                  </div>
+                  <div className="model-upgrade-banner-actions">
+                    {modelUpgradeSuggestions.length === 1 && primaryUpgradeSuggestion && primaryUpgradeSuggestion.isSafe !== false ? (
+                      <>
+                        <button
+                          className="model-upgrade-banner-btn primary"
+                          type="button"
+                          onClick={() => applyModelUpgrade(primaryUpgradeSuggestion)}
+                          title={`Replace ${primaryUpgradeSuggestion.currentModel} with ${primaryUpgradeSuggestion.suggestedModel} for the listed targets.`}
+                        >
+                          <Sparkles size={13} />
+                          <span>Switch</span>
+                        </button>
+                        <button
+                          className="model-upgrade-banner-btn"
+                          type="button"
+                          onClick={() => enableModelUpgradeAutoSwitch(primaryUpgradeSuggestion)}
+                          title={`Always auto-switch future turns from ${primaryUpgradeSuggestion.currentModel} to ${primaryUpgradeSuggestion.suggestedModel} for the listed targets.`}
+                        >
+                          Always auto-switch
+                        </button>
+                        <button
+                          className="model-upgrade-banner-btn"
+                          type="button"
+                          onClick={() => dismissModelUpgrade(primaryUpgradeSuggestion)}
+                          title="Dismiss this upgrade notice until a different newer version appears."
+                        >
+                          Dismiss
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="model-upgrade-banner-btn primary"
+                          type="button"
+                          onClick={openSettings}
+                          title="Review available model upgrades in Settings > Models."
+                        >
+                          <Sparkles size={13} />
+                          <span>Review</span>
+                        </button>
+                        <button
+                          className="model-upgrade-banner-btn"
+                          type="button"
+                          onClick={() => dismissAllModelUpgrades(modelUpgradeSuggestions)}
+                          title="Dismiss the current upgrade notices until a different newer version appears."
+                        >
+                          Dismiss
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               {turns.length === 0 ? (
                 <WelcomeScreen
                   loading={conversationStoreStatus !== 'ready'}

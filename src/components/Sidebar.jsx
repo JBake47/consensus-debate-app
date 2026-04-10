@@ -108,8 +108,7 @@ export default function Sidebar({ open, onClose }) {
   };
 
   const handleSettings = () => {
-    dispatch({ type: 'TOGGLE_SETTINGS' });
-    onClose?.();
+    dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
   };
 
   const startEditing = (e, conv) => {

@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.33] - 2026-04-09
+
+### Added
+- Model upgrade tracking with per-target policies, background catalog refreshes, inline safe-upgrade actions, and regression coverage for same-track replacements such as `z-ai/glm-5` to `z-ai/glm-5.1`
+
 ### Changed
+- Debate, synthesis, convergence, and web search selectors now keep upgrade controls inline with compact policy dropdowns, hover help, and a main banner for available replacements
+- Historical turns retain their original model IDs while upgrade actions only affect future selections
 - Hardened in-app updates so local edits to `package.json`, `package-lock.json`, or `npm-shrinkwrap.json` block update attempts up front instead of being auto-stashed into likely restore conflicts
 - The updater now uses a safer stash-restore flow that leaves the pulled commit intact and preserves local work in the stash if reapplying changes fails
 
 ### Fixed
+- Upgrade notices now surface newer same-track models even when they are not safe for auto-switching, instead of hiding them entirely
+- The Settings button no longer collapses the sidebar when opening the modal
 - App updates no longer leave the working tree stuck in an unresolved-conflict state after a failed post-update stash restore, and the Settings UI now explains when manual stash recovery is required
 
 ## [0.3.32] - 2026-04-04
