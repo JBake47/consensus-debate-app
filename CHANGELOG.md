@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.34] - 2026-04-10
+
+### Added
+- Compact and extended transfer packets for handing a chat off to another LLM, with one-click copy/download actions in the chat header
+
 ### Changed
 - Unsafe inline model-upgrade notices now include a one-click `Replace` action so you can adopt the suggested model without enabling auto-switching
 - The upgrade banner `Review` action now opens Settings directly to the affected model selector instead of landing at the top of the Models pane

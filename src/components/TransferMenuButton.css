@@ -1,0 +1,106 @@
+.transfer-menu-root {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.transfer-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.transfer-menu-trigger.copied {
+  color: var(--status-success);
+}
+
+.transfer-menu-caret {
+  transition: transform var(--transition-fast);
+}
+
+.transfer-menu-caret.open {
+  transform: rotate(180deg);
+}
+
+.transfer-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(280px, 80vw);
+  padding: 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  background: var(--surface-header);
+  backdrop-filter: blur(var(--blur-md));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 90;
+}
+
+.transfer-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.transfer-menu-item:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+
+.transfer-menu-item:focus-visible {
+  outline: 2px solid rgba(79, 143, 247, 0.55);
+  outline-offset: 2px;
+}
+
+.transfer-menu-item-icon {
+  display: inline-flex;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.transfer-menu-item.copy .transfer-menu-item-icon {
+  color: var(--accent-blue);
+}
+
+.transfer-menu-item.download .transfer-menu-item-icon {
+  color: var(--accent-cyan);
+}
+
+.transfer-menu-item-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.transfer-menu-item-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.transfer-menu-item-description {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .transfer-menu-panel {
+    right: auto;
+    left: 0;
+    width: min(280px, calc(100vw - 32px));
+  }
+}

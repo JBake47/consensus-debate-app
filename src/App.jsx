@@ -12,6 +12,7 @@ import {
 import Sidebar from './components/Sidebar';
 import ChatInput from './components/ChatInput';
 import DebateView from './components/DebateView';
+import TransferMenuButton from './components/TransferMenuButton';
 import WelcomeScreen from './components/WelcomeScreen';
 import './App.css';
 
@@ -408,6 +409,12 @@ function AppContent() {
           >
             {themeMode === 'light' ? <Moon size={14} /> : <Sun size={14} />}
           </button>
+          {activeConversation && (
+            <TransferMenuButton
+              conversation={activeConversation}
+              className="main-header-share"
+            />
+          )}
           {activeConversation && (
             <button
               className="main-header-share"
