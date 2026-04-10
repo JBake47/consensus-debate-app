@@ -424,6 +424,14 @@
     margin-left: 0;
   }
 
+  .app-layout.sidebar-open .menu-toggle {
+    position: fixed;
+    top: 14px;
+    right: 16px;
+    left: auto;
+    z-index: 60;
+  }
+
   .main-header {
     flex-wrap: wrap;
     align-items: flex-start;

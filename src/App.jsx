@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useState, useEffect, useMemo, lazy, Suspense, useRef } from 'react';
-import { Menu, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon, Sparkles } from 'lucide-react';
+import { PanelLeft, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon, Sparkles } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
 import { isTypingShortcutTarget, matchesShortcut } from './lib/keyboardShortcuts';
@@ -200,6 +200,10 @@ function AppContent() {
     virtuosoRef.current?.scrollToIndex({ index: turns.length - 1, align: 'end', behavior: 'smooth' });
   };
 
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((open) => !open);
+  }, []);
+
   const commands = useMemo(() => ([
     {
       id: 'new-chat',
@@ -323,20 +327,20 @@ function AppContent() {
 
   return (
     <div className={`app-layout ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} />
 
       <main className="main-area">
         <header className="main-header">
           <button
             className="menu-toggle"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            onClick={toggleSidebar}
             aria-controls="app-sidebar"
             aria-expanded={sidebarOpen}
             aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
             type="button"
             title={sidebarOpen ? 'Hide the chat list and library actions.' : 'Show the chat list, search, import/export, and settings.'}
           >
-            <Menu size={20} />
+            <PanelLeft size={18} />
           </button>
           {editingHeader ? (
             <div className="main-header-edit">

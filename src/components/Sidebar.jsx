@@ -8,7 +8,7 @@ import { sortSidebarConversations } from '../lib/sidebarOrdering';
 import InfoTip from './InfoTip';
 import './Sidebar.css';
 
-export default function Sidebar({ open, onClose }) {
+export default function Sidebar({ open }) {
   const { dispatch } = useDebateActions();
   const {
     conversations,
@@ -79,17 +79,14 @@ export default function Sidebar({ open, onClose }) {
       });
     }
     setSearchQuery('');
-    onClose?.();
   };
 
   const handleNew = () => {
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: null });
-    onClose?.();
   };
 
   const handleSelect = (id) => {
     dispatch({ type: 'SET_ACTIVE_CONVERSATION', payload: id });
-    onClose?.();
   };
 
   const handleDelete = (e, conv) => {
@@ -356,7 +353,7 @@ export default function Sidebar({ open, onClose }) {
 
   return (
     <>
-      {open && <div className="sidebar-overlay" onClick={onClose} />}
+      {open && <div className="sidebar-overlay" />}
       <aside id="app-sidebar" className={`sidebar ${open ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
