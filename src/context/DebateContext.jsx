@@ -577,6 +577,7 @@ const initialState = {
   debateInProgress: false,
   showSettings: false,
   editingTurn: null,
+  pendingSettingsFocus: null,
   pendingTurnFocus: null,
   conversationStoreStatus: 'loading',
 };
@@ -1693,10 +1694,22 @@ function reducer(state, action) {
       return { ...state, debateInProgress: action.payload };
     }
     case 'TOGGLE_SETTINGS': {
-      return { ...state, showSettings: !state.showSettings };
+      const nextShowSettings = !state.showSettings;
+      return {
+        ...state,
+        showSettings: nextShowSettings,
+        pendingSettingsFocus: nextShowSettings ? state.pendingSettingsFocus : null,
+      };
     }
     case 'SET_SHOW_SETTINGS': {
-      return { ...state, showSettings: action.payload };
+      return {
+        ...state,
+        showSettings: action.payload,
+        pendingSettingsFocus: action.payload ? state.pendingSettingsFocus : null,
+      };
+    }
+    case 'SET_PENDING_SETTINGS_FOCUS': {
+      return { ...state, pendingSettingsFocus: action.payload || null };
     }
     case 'SET_EDITING_TURN': {
       return { ...state, editingTurn: action.payload };
@@ -6377,6 +6390,7 @@ export function DebateProvider({ children }) {
     webSearchEnabled: state.webSearchEnabled,
     chatMode: state.chatMode,
     focusedMode: state.focusedMode,
+    pendingSettingsFocus: state.pendingSettingsFocus,
     pendingTurnFocus: state.pendingTurnFocus,
     conversationStoreStatus: state.conversationStoreStatus,
   }), [
@@ -6385,6 +6399,7 @@ export function DebateProvider({ children }) {
     state.webSearchEnabled,
     state.chatMode,
     state.focusedMode,
+    state.pendingSettingsFocus,
     state.pendingTurnFocus,
     state.conversationStoreStatus,
   ]);

@@ -163,6 +163,17 @@ function AppContent() {
   const openSettings = useCallback(() => {
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
   }, [dispatch]);
+  const openModelUpgradeReview = useCallback((suggestion) => {
+    const primaryTarget = Array.isArray(suggestion?.targets) ? suggestion.targets[0] || null : null;
+    dispatch({
+      type: 'SET_PENDING_SETTINGS_FOCUS',
+      payload: {
+        pane: 'models',
+        targetKey: primaryTarget?.key || '',
+      },
+    });
+    dispatch({ type: 'SET_SHOW_SETTINGS', payload: true });
+  }, [dispatch]);
 
   const handleExportReport = useCallback(async () => {
     if (!activeConversation) return;
@@ -450,7 +461,7 @@ function AppContent() {
                         <button
                           className="model-upgrade-banner-btn primary"
                           type="button"
-                          onClick={openSettings}
+                          onClick={() => openModelUpgradeReview(primaryUpgradeSuggestion || modelUpgradeSuggestions[0] || null)}
                           title="Review available model upgrades in Settings > Models."
                         >
                           <Sparkles size={13} />

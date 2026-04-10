@@ -132,6 +132,20 @@
   gap: var(--space-sm);
 }
 
+.settings-scroll-target {
+  scroll-margin-top: calc(var(--space-lg) + 56px);
+  outline: none;
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.settings-scroll-target.is-focused {
+  box-shadow: 0 0 0 1px rgba(79, 143, 247, 0.42), 0 0 0 4px rgba(79, 143, 247, 0.12);
+}
+
+.settings-section.settings-scroll-target.is-focused {
+  border-radius: var(--radius-md);
+}
+
 .settings-label {
   display: flex;
   align-items: center;

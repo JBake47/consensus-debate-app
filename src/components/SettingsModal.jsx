@@ -289,7 +289,7 @@ export default function SettingsModal() {
     cachePersistenceEnabled, themeMode, cacheHitCount, cacheEntryCount,
     rememberApiKey, providerStatus, providerStatusState, providerStatusError, modelCatalog, modelCatalogStatus, modelPresets, metrics, capabilityRegistry,
   } = useDebateSettings();
-  const { showSettings } = useDebateUi();
+  const { showSettings, pendingSettingsFocus } = useDebateUi();
   const {
     clearResponseCache,
     resetDiagnostics,
@@ -340,6 +340,7 @@ export default function SettingsModal() {
   const [appUpdateError, setAppUpdateError] = useState('');
   const [appUpdateResult, setAppUpdateResult] = useState(null);
   const [activeSettingsPane, setActiveSettingsPane] = useState('general');
+  const [focusedSettingsTargetKey, setFocusedSettingsTargetKey] = useState('');
   const presetSheetInputRef = useRef(null);
   const presetEditorScopeRef = useRef('');
   const liveApplyReadyRef = useRef(false);
@@ -347,6 +348,9 @@ export default function SettingsModal() {
   const convEditingRef = useRef(false);
   const searchEditingRef = useRef(false);
   const appUpdateRequestIdRef = useRef(0);
+  const settingsBodyRef = useRef(null);
+  const settingsTargetRefs = useRef(new Map());
+  const settingsTargetHighlightTimeoutRef = useRef(0);
 
   const normalizeModelForProvider = (providerId, rawValue) => {
     const trimmed = String(rawValue || '').trim();
@@ -742,6 +746,23 @@ export default function SettingsModal() {
     { id: 'budget', label: 'Budget', help: SETTINGS_PANE_HELP.budget },
     { id: 'performance', label: 'Performance', help: SETTINGS_PANE_HELP.performance },
   ]), []);
+  const setSettingsTargetRef = useCallback((targetKey, node) => {
+    const normalizedKey = String(targetKey || '').trim();
+    if (!normalizedKey) return;
+    if (node) {
+      settingsTargetRefs.current.set(normalizedKey, node);
+      return;
+    }
+    settingsTargetRefs.current.delete(normalizedKey);
+  }, []);
+  const getSettingsTargetClassName = useCallback((baseClassName, targetKey) => {
+    const normalizedKey = String(targetKey || '').trim();
+    return [
+      baseClassName,
+      'settings-scroll-target',
+      normalizedKey && normalizedKey === focusedSettingsTargetKey ? 'is-focused' : '',
+    ].filter(Boolean).join(' ');
+  }, [focusedSettingsTargetKey]);
   const appUpdateFollowUp = useMemo(() => {
     if (!appUpdateResult) return null;
     if (appUpdateResult.localChangesRequireManualRestore) {
@@ -857,6 +878,60 @@ export default function SettingsModal() {
     convEditingRef.current = false;
     searchEditingRef.current = false;
   }, [showSettings]);
+
+  useEffect(() => () => {
+    if (settingsTargetHighlightTimeoutRef.current) {
+      window.clearTimeout(settingsTargetHighlightTimeoutRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showSettings) {
+      setFocusedSettingsTargetKey('');
+    }
+  }, [showSettings]);
+
+  useEffect(() => {
+    if (!focusedSettingsTargetKey) return undefined;
+    if (settingsTargetHighlightTimeoutRef.current) {
+      window.clearTimeout(settingsTargetHighlightTimeoutRef.current);
+    }
+    settingsTargetHighlightTimeoutRef.current = window.setTimeout(() => {
+      setFocusedSettingsTargetKey('');
+    }, 2200);
+    return () => {
+      if (settingsTargetHighlightTimeoutRef.current) {
+        window.clearTimeout(settingsTargetHighlightTimeoutRef.current);
+        settingsTargetHighlightTimeoutRef.current = 0;
+      }
+    };
+  }, [focusedSettingsTargetKey]);
+
+  useEffect(() => {
+    if (!showSettings || !pendingSettingsFocus) return undefined;
+    const nextPane = String(pendingSettingsFocus.pane || 'models').trim() || 'models';
+    if (activeSettingsPane !== nextPane) {
+      setActiveSettingsPane(nextPane);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      const targetKey = String(pendingSettingsFocus.targetKey || '').trim();
+      const targetNode = targetKey ? settingsTargetRefs.current.get(targetKey) : null;
+
+      if (targetNode) {
+        targetNode.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        targetNode.focus?.({ preventScroll: true });
+        setFocusedSettingsTargetKey(targetKey);
+      } else {
+        settingsBodyRef.current?.scrollTo?.({ top: 0, behavior: 'smooth' });
+      }
+
+      dispatch({ type: 'SET_PENDING_SETTINGS_FOCUS', payload: null });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [activeSettingsPane, dispatch, pendingSettingsFocus, showSettings]);
 
   useEffect(() => {
     if (!showSettings) return undefined;
@@ -1357,6 +1432,10 @@ export default function SettingsModal() {
     dispatch,
   ]);
 
+  const synthUpgradeTarget = getInlineModelUpgradeTarget('synth');
+  const convergenceUpgradeTarget = getInlineModelUpgradeTarget('convergence');
+  const searchUpgradeTarget = getInlineModelUpgradeTarget('search');
+
   if (!showSettings) return null;
 
   return (
@@ -1369,7 +1448,7 @@ export default function SettingsModal() {
           </button>
         </div>
 
-        <div className="settings-body">
+        <div className="settings-body" ref={settingsBodyRef}>
           <div className="settings-pane-tabs" role="tablist" aria-label="Settings sections">
             {settingsPanes.map((pane) => (
               <button
@@ -1758,7 +1837,13 @@ export default function SettingsModal() {
               {models.map((model, i) => {
                 const upgradeTarget = getInlineModelUpgradeTarget('debate', model);
                 return (
-                  <div key={i} className="model-item">
+                  <div
+                    key={i}
+                    ref={(node) => setSettingsTargetRef(upgradeTarget?.key, node)}
+                    data-settings-target-key={upgradeTarget?.key || undefined}
+                    tabIndex={upgradeTarget?.key ? -1 : undefined}
+                    className={getSettingsTargetClassName('model-item', upgradeTarget?.key)}
+                  >
                     <div className="model-item-main">
                       <ModelStatsHoverCard
                         modelId={model}
@@ -1955,7 +2040,12 @@ export default function SettingsModal() {
             )}
           </div>
 
-          <div className="settings-section">
+          <div
+            ref={(node) => setSettingsTargetRef(synthUpgradeTarget?.key, node)}
+            data-settings-target-key={synthUpgradeTarget?.key || undefined}
+            tabIndex={synthUpgradeTarget?.key ? -1 : undefined}
+            className={getSettingsTargetClassName('settings-section', synthUpgradeTarget?.key)}
+          >
             <label className="settings-label">
               <RotateCcw size={14} />
               <span className="settings-label-copy">
@@ -2056,14 +2146,19 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
-              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('synth'), {
+              {renderCompactModelUpgradePolicyControl(synthUpgradeTarget, {
                 className: 'settings-inline-upgrade-control-inline',
               })}
             </div>
-            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('synth'))}
+            {renderResolvedModelUpgradeSuggestionNotice(synthUpgradeTarget)}
           </div>
 
-          <div className="settings-section">
+          <div
+            ref={(node) => setSettingsTargetRef(convergenceUpgradeTarget?.key, node)}
+            data-settings-target-key={convergenceUpgradeTarget?.key || undefined}
+            tabIndex={convergenceUpgradeTarget?.key ? -1 : undefined}
+            className={getSettingsTargetClassName('settings-section', convergenceUpgradeTarget?.key)}
+          >
             <label className="settings-label">
               <GitCompareArrows size={14} />
               <span className="settings-label-copy">
@@ -2120,17 +2215,22 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
-              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('convergence'), {
+              {renderCompactModelUpgradePolicyControl(convergenceUpgradeTarget, {
                 className: 'settings-inline-upgrade-control-inline',
               })}
             </div>
-            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('convergence'))}
+            {renderResolvedModelUpgradeSuggestionNotice(convergenceUpgradeTarget)}
             <p className="settings-hint">
               A fast model used to check if debaters have reached consensus between rounds.
             </p>
           </div>
 
-          <div className="settings-section">
+          <div
+            ref={(node) => setSettingsTargetRef(searchUpgradeTarget?.key, node)}
+            data-settings-target-key={searchUpgradeTarget?.key || undefined}
+            tabIndex={searchUpgradeTarget?.key ? -1 : undefined}
+            className={getSettingsTargetClassName('settings-section', searchUpgradeTarget?.key)}
+          >
             <label className="settings-label">
               <Globe size={14} />
               <span className="settings-label-copy">
@@ -2182,11 +2282,11 @@ export default function SettingsModal() {
               >
                 Browse
               </button>
-              {renderCompactModelUpgradePolicyControl(getInlineModelUpgradeTarget('search'), {
+              {renderCompactModelUpgradePolicyControl(searchUpgradeTarget, {
                 className: 'settings-inline-upgrade-control-inline',
               })}
             </div>
-            {renderResolvedModelUpgradeSuggestionNotice(getInlineModelUpgradeTarget('search'))}
+            {renderResolvedModelUpgradeSuggestionNotice(searchUpgradeTarget)}
             {getProviderModelOptions(searchProvider).length > 0 && (
               <datalist id={`provider-models-search-${searchProvider}`}>
                 {getProviderModelOptions(searchProvider).slice(0, 200).map((modelId) => (

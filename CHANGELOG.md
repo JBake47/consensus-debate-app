@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Unsafe inline model-upgrade notices now include a one-click `Replace` action so you can adopt the suggested model without enabling auto-switching
+- The upgrade banner `Review` action now opens Settings directly to the affected model selector instead of landing at the top of the Models pane
 
 ### Fixed
 - In-app updates once again auto-stash routine unstaged `package-lock.json` drift instead of blocking before pull, while still blocking `package.json`, `npm-shrinkwrap.json`, staged lockfile edits, and unresolved conflicts
