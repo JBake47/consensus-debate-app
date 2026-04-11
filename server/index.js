@@ -1945,7 +1945,7 @@ function validateIncomingAttachments(rawAttachments = []) {
   const accepted = [];
   const rejected = [];
 
-  for (const attachment of attachments) {
+  for (const [index, attachment] of attachments.entries()) {
     const name = String(attachment?.name || '').trim();
     const category = String(attachment?.category || 'text').toLowerCase();
     const declaredType = String(attachment?.type || '').toLowerCase();
@@ -1953,13 +1953,14 @@ function validateIncomingAttachments(rawAttachments = []) {
     const parsed = parseDataUrl(attachment?.dataUrl || '');
     const contentPreview = truncateText(attachment?.content || '', 2500);
     if (!name) {
-      rejected.push({ name: '(unnamed)', reason: 'Missing attachment name.' });
+      rejected.push({ index, name: '(unnamed)', reason: 'Missing attachment name.' });
       continue;
     }
 
     if (!parsed) {
       // Text-only attachments are accepted without binary validation.
       accepted.push({
+        index,
         name,
         category,
         type: declaredType || 'text/plain',
@@ -1972,28 +1973,28 @@ function validateIncomingAttachments(rawAttachments = []) {
 
     const binary = safeBase64ToBuffer(parsed.data);
     if (!binary || binary.length === 0) {
-      rejected.push({ name, reason: 'Attachment payload could not be decoded.' });
+      rejected.push({ index, name, reason: 'Attachment payload could not be decoded.' });
       continue;
     }
     if (binary.length > DOC_GENERATION_MAX_BYTES) {
-      rejected.push({ name, reason: `Attachment exceeds ${DOC_GENERATION_MAX_BYTES} byte limit.` });
+      rejected.push({ index, name, reason: `Attachment exceeds ${DOC_GENERATION_MAX_BYTES} byte limit.` });
       continue;
     }
 
     const sniffed = detectMimeFromBuffer(binary);
     if (declaredType && sniffed && declaredType !== sniffed && !(declaredType.includes('officedocument') && sniffed === 'application/zip')) {
-      rejected.push({ name, reason: 'Attachment mime/type mismatch detected.' });
+      rejected.push({ index, name, reason: 'Attachment mime/type mismatch detected.' });
       continue;
     }
 
     if (sniffed === 'application/zip' || declaredType.includes('officedocument')) {
       const zipSafety = inspectZipSafety(binary);
       if (!zipSafety.ok) {
-        rejected.push({ name, reason: zipSafety.reason || 'Unsafe ZIP payload.' });
+        rejected.push({ index, name, reason: zipSafety.reason || 'Unsafe ZIP payload.' });
         continue;
       }
       if (zipSafety.hasMacroPayload) {
-        rejected.push({ name, reason: 'Attachment contains macro payload and was blocked.' });
+        rejected.push({ index, name, reason: 'Attachment contains macro payload and was blocked.' });
         continue;
       }
     }
@@ -2002,18 +2003,19 @@ function validateIncomingAttachments(rawAttachments = []) {
       const pageMatches = binary.toString('latin1').match(/\/Type\s*\/Page\b/g);
       const pageCount = Array.isArray(pageMatches) ? pageMatches.length : 0;
       if (pageCount > 500) {
-        rejected.push({ name, reason: `PDF page count too high (${pageCount}).` });
+        rejected.push({ index, name, reason: `PDF page count too high (${pageCount}).` });
         continue;
       }
     }
 
     const malware = scanBufferForMalwareHeuristics(binary);
     if (malware.suspicious) {
-      rejected.push({ name, reason: malware.reason || 'Malware heuristics flagged this attachment.' });
+      rejected.push({ index, name, reason: malware.reason || 'Malware heuristics flagged this attachment.' });
       continue;
     }
 
     accepted.push({
+      index,
       name,
       category,
       type: declaredType || parsed.mimeType || sniffed || 'application/octet-stream',
@@ -2038,6 +2040,7 @@ async function extractFallbackInsights({
 }) {
   const insights = [];
   const routing = [];
+  const attachmentAugmentations = [];
 
   const imagesForOcr = attachments
     .filter((attachment) => attachment?.category === 'image' && attachment?.dataUrl)
@@ -2079,10 +2082,9 @@ async function extractFallbackInsights({
           });
           const extracted = truncateText(ocrResult?.content || '', 2800);
           if (extracted) {
-            insights.push({
-              source: image.name,
-              type: 'ocr',
-              text: extracted,
+            attachmentAugmentations.push({
+              index: image.index,
+              content: extracted,
             });
           }
         } catch {
@@ -2141,7 +2143,7 @@ async function extractFallbackInsights({
     }
   }
 
-  return { insights, routing };
+  return { insights, routing, attachmentAugmentations };
 }
 
 async function executeMultimodalOrchestration({
@@ -2313,12 +2315,16 @@ async function executeMultimodalOrchestration({
   }
 
   return {
-    handled: generatedAttachments.length > 0 || youtubeUrls.length > 0 || extractionFallback.insights.length > 0,
+    handled: generatedAttachments.length > 0
+      || youtubeUrls.length > 0
+      || extractionFallback.insights.length > 0
+      || extractionFallback.attachmentAugmentations.length > 0,
     modelOverrides,
     generatedAttachments,
     youtubeUrls,
     promptAugmentation: promptAugmentationParts.join('\n\n'),
     routingDecisions,
+    attachmentAugmentations: extractionFallback.attachmentAugmentations,
     rejectedAttachments: attachmentValidation.rejected,
     capabilityRegistry,
   };

@@ -55,7 +55,11 @@ import {
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
 import { loadConversationStoreSnapshot, queueConversationStorePersist } from '../lib/conversationStore.js';
-import { createConversationHistoryBranch } from '../lib/conversationBranching.js';
+import {
+  buildConversationSnapshotWithoutLastTurn,
+  createConversationHistoryBranch,
+  shouldCreateConversationHistoryBranch,
+} from '../lib/conversationBranching.js';
 import { applyThemeMode, getStoredThemeMode, normalizeThemeMode, THEME_STORAGE_KEY } from '../lib/theme';
 import { buildRankingTaskRequirements } from '../lib/modelRanking.js';
 import { buildEnsembleQualityObservations } from '../lib/modelQualityTelemetry.js';
@@ -120,11 +124,7 @@ function createConversationId() {
 }
 
 function buildConversationWithoutLastTurn(conversation) {
-  if (!conversation || typeof conversation !== 'object') return null;
-  return {
-    ...conversation,
-    turns: Array.isArray(conversation.turns) ? conversation.turns.slice(0, -1) : [],
-  };
+  return buildConversationSnapshotWithoutLastTurn(conversation);
 }
 
 function createDefaultMetrics() {
@@ -1642,6 +1642,7 @@ function reducer(state, action) {
       if (sourceRounds.length === 0) return state;
 
       const keepCount = Math.max(1, Math.min(sourceRounds.length, Math.floor(Number(roundIndex)) + 1));
+      const createdAt = Date.now();
       const branchedRounds = sourceRounds.slice(0, keepCount).map((round) => ({
         ...round,
         streams: (round.streams || []).map((stream) => ({ ...stream })),
@@ -1649,10 +1650,10 @@ function reducer(state, action) {
 
       const branchTurn = {
         ...sourceLastTurn,
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        timestamp: Date.now(),
+        id: createConversationId(),
+        timestamp: createdAt,
         activeRunId: null,
-        lastRunActivityAt: Date.now(),
+        lastRunActivityAt: createdAt,
         rounds: branchedRounds,
         synthesis: {
           model: state.synthesizerModel || sourceLastTurn.synthesis?.model || '',
@@ -1668,23 +1669,21 @@ function reducer(state, action) {
         },
       };
 
-      const branchConversationId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const branchConversation = enrichConversationDerivedData({
-        ...sourceConversation,
-        id: branchConversationId,
-        title: `${sourceConversation.title || 'Debate'} (Branch R${keepCount})`,
-        titleSource: TITLE_SOURCE_SEED,
-        titleLocked: false,
-        titleEditedAt: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        parentConversationId: sourceConversation.id,
-        branchedFrom: {
-          roundIndex: keepCount - 1,
+      const branchConversationId = createConversationId();
+      const branchConversation = enrichConversationDerivedData(
+        createConversationHistoryBranch(sourceConversation, {
+          branchConversationId,
+          createdAt,
+          titleLabel: `After Round ${keepCount}`,
+          titleSource: TITLE_SOURCE_SEED,
+          branchKind: 'checkpoint',
+          sourceStage: 'round',
+          sourceRoundIndex: keepCount - 1,
+          sourceSummary: `After Round ${keepCount}`,
+          turnsOverride: [...sourceConversation.turns.slice(0, -1), branchTurn],
           sourceTurnId: sourceLastTurn.id || null,
-        },
-        turns: [...sourceConversation.turns.slice(0, -1), branchTurn],
-      });
+        })
+      );
 
       const conversations = [branchConversation, ...state.conversations];
       saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, branchConversationId);
@@ -2486,6 +2485,10 @@ export function DebateProvider({ children }) {
   const prepareConversationForHistoryMutation = useCallback((conversationId, {
     titleLabel = 'Branch',
     branchKind = 'branch',
+    sourceStage = null,
+    sourceRoundIndex = null,
+    sourceSummary = null,
+    forceBranch = false,
   } = {}) => {
     const sourceConversation = state.conversations.find((conversation) => conversation.id === conversationId) || null;
     if (!sourceConversation) {
@@ -2496,7 +2499,15 @@ export function DebateProvider({ children }) {
       };
     }
 
-    if (isMostRecentConversation(state.conversations, conversationId, isConversationInProgress)) {
+    const currentConversationIsMostRecent = isMostRecentConversation(
+      state.conversations,
+      conversationId,
+      isConversationInProgress,
+    );
+    if (!shouldCreateConversationHistoryBranch({
+      isMostRecent: currentConversationIsMostRecent,
+      forceBranch,
+    })) {
       return {
         conversationId,
         conversationSnapshot: sourceConversation,
@@ -2511,6 +2522,9 @@ export function DebateProvider({ children }) {
         titleLabel,
         titleSource: TITLE_SOURCE_SEED,
         branchKind,
+        sourceStage,
+        sourceRoundIndex,
+        sourceSummary,
       })
     );
     dispatch({ type: 'ADD_CONVERSATION', payload: { conversation: branchConversation } });
@@ -2521,6 +2535,13 @@ export function DebateProvider({ children }) {
       branched: true,
     };
   }, [dispatch, isConversationInProgress, state.conversations]);
+
+  const focusComposerSoon = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('consensus:focus-composer'));
+    });
+  }, []);
 
   useEffect(() => {
     if (abortControllersRef.current.size === 0) return;
@@ -4813,6 +4834,8 @@ export function DebateProvider({ children }) {
     } = prepareConversationForHistoryMutation(activeConversation.id, {
       titleLabel: 'Retry',
       branchKind: 'retry',
+      sourceStage: options.sourceStage || 'turn',
+      sourceSummary: options.sourceSummary || 'Retry Turn',
     });
     const targetConversation = conversationSnapshot || activeConversation;
     const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
@@ -4866,6 +4889,8 @@ export function DebateProvider({ children }) {
     } = prepareConversationForHistoryMutation(activeConversation.id, {
       titleLabel: 'Retry',
       branchKind: 'retry',
+      sourceStage: options.sourceStage || 'synthesis',
+      sourceSummary: options.sourceSummary || 'Retry Synthesis',
     });
     const targetConversation = conversationSnapshot || activeConversation;
     const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
@@ -4899,12 +4924,12 @@ export function DebateProvider({ children }) {
     setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
-    const convForContext = { ...targetConversation, turns: targetConversation.turns.slice(0, -1) };
+    const convForContext = buildConversationWithoutLastTurn(targetConversation);
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
-      runningSummary: targetConversation.runningSummary || null,
-      summarizedTurnCount: targetConversation.summarizedTurnCount || 0,
-      pendingSummaryUntilTurnCount: targetConversation.pendingSummaryUntilTurnCount || targetConversation.summarizedTurnCount || 0,
+      runningSummary: convForContext?.runningSummary || null,
+      summarizedTurnCount: convForContext?.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: convForContext?.pendingSummaryUntilTurnCount || convForContext?.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -5002,6 +5027,23 @@ export function DebateProvider({ children }) {
     setAbortController,
   ]);
 
+  const branchFromSynthesis = useCallback(() => {
+    if (!activeConversation || !activeConversation.id || activeConversation.turns.length === 0) return;
+    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    if (lastTurn?.synthesis?.status !== 'complete') return;
+
+    const { branched } = prepareConversationForHistoryMutation(activeConversation.id, {
+      titleLabel: 'After Synthesis',
+      branchKind: 'checkpoint',
+      sourceStage: 'synthesis',
+      sourceSummary: 'After Synthesized Answer',
+      forceBranch: true,
+    });
+    if (branched) {
+      focusComposerSoon();
+    }
+  }, [activeConversation, focusComposerSoon, prepareConversationForHistoryMutation]);
+
   const branchFromRound = useCallback((roundIndex) => {
     if (!activeConversation || !activeConversation.id) return;
     dispatch({
@@ -5011,7 +5053,8 @@ export function DebateProvider({ children }) {
         roundIndex,
       },
     });
-  }, [activeConversation, dispatch]);
+    focusComposerSoon();
+  }, [activeConversation, dispatch, focusComposerSoon]);
 
   const retryRound = useCallback(async (roundIndex, options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
@@ -5029,6 +5072,9 @@ export function DebateProvider({ children }) {
     } = prepareConversationForHistoryMutation(activeConversation.id, {
       titleLabel: 'Retry',
       branchKind: 'retry',
+      sourceStage: options.sourceStage || 'round',
+      sourceRoundIndex: roundIndex,
+      sourceSummary: options.sourceSummary || `Retry Round ${roundIndex + 1}`,
     });
     const targetConversation = conversationSnapshot || activeConversation;
     const lastTurn = targetConversation.turns[targetConversation.turns.length - 1];
@@ -5064,12 +5110,12 @@ export function DebateProvider({ children }) {
     setAbortController(convId, abortController);
 
     // Build conversation context (excluding current turn)
-    const convForContext = { ...targetConversation, turns: targetConversation.turns.slice(0, -1) };
+    const convForContext = buildConversationWithoutLastTurn(targetConversation);
     const { messages: contextMessages } = buildConversationContext({
       conversation: convForContext,
-      runningSummary: targetConversation.runningSummary || null,
-      summarizedTurnCount: targetConversation.summarizedTurnCount || 0,
-      pendingSummaryUntilTurnCount: targetConversation.pendingSummaryUntilTurnCount || targetConversation.summarizedTurnCount || 0,
+      runningSummary: convForContext?.runningSummary || null,
+      summarizedTurnCount: convForContext?.summarizedTurnCount || 0,
+      pendingSummaryUntilTurnCount: convForContext?.pendingSummaryUntilTurnCount || convForContext?.summarizedTurnCount || 0,
     });
     const conversationHistory = contextMessages;
 
@@ -6142,6 +6188,7 @@ export function DebateProvider({ children }) {
     retryRound(firstFailedRoundIndex, {
       forceRefresh: Boolean(options.forceRefresh),
       retryErroredCompleted: true,
+      sourceSummary: `Repair Round ${firstFailedRoundIndex + 1}`,
     });
   }, [activeConversation, retryRound]);
 
@@ -6152,7 +6199,11 @@ export function DebateProvider({ children }) {
     if (!lastTurn.webSearchEnabled || !lastTurn.webSearchResult) return;
     if (!Array.isArray(lastTurn.rounds) || lastTurn.rounds.length === 0) return;
     if (lastTurn.mode === 'parallel') {
-      retryLastTurn({ forceRefresh, forceLegacyWebSearch: true });
+      retryLastTurn({
+        forceRefresh,
+        forceLegacyWebSearch: true,
+        sourceSummary: 'Retry Web Search',
+      });
       return;
     }
     retryRound(0, {
@@ -6160,6 +6211,7 @@ export function DebateProvider({ children }) {
       retryErroredCompleted: true,
       redoRound: true,
       forceLegacyWebSearch: true,
+      sourceSummary: 'Retry Web Search',
     });
   }, [activeConversation, retryLastTurn, retryRound]);
 
@@ -6173,6 +6225,11 @@ export function DebateProvider({ children }) {
       retryErroredCompleted: true,
       streamIndices: [streamIndex],
       replacementModels: replacementModel ? { [streamIndex]: replacementModel } : undefined,
+      sourceSummary: options.sourceSummary || (
+        replacementModel
+          ? `Replace Model in Round ${roundIndex + 1}`
+          : `Retry Response in Round ${roundIndex + 1}`
+      ),
     });
   }, [retryRound]);
 
@@ -6467,6 +6524,7 @@ export function DebateProvider({ children }) {
     resetDismissedModelUpgrades,
     retryRound,
     retrySynthesis,
+    branchFromSynthesis,
     branchFromRound,
     clearResponseCache,
     resetDiagnostics,
@@ -6493,6 +6551,7 @@ export function DebateProvider({ children }) {
     resetDismissedModelUpgrades,
     retryRound,
     retrySynthesis,
+    branchFromSynthesis,
     branchFromRound,
     clearResponseCache,
     resetDiagnostics,

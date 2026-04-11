@@ -10,6 +10,13 @@ function truncateContent(content, maxChars) {
   return `${text.slice(0, maxChars)}\n... (truncated)`;
 }
 
+function buildTextAttachmentBlock(label, attachment) {
+  if (attachment.content) {
+    return `\n\n---\n**${label}: ${attachment.name}**\n\`\`\`\n${truncateContent(attachment.content, 50000)}\n\`\`\``;
+  }
+  return `\n\n---\n**${label}: ${attachment.name}**\n(Unable to extract text content from this file.)`;
+}
+
 export function buildAttachmentContent(text, attachments, options = {}) {
   return buildAttachmentContentForModel(text, attachments, options);
 }
@@ -29,18 +36,23 @@ export function buildAttachmentTextContent(text, attachments, options = {}) {
   if (textAttachments.length > 0) {
     const attachmentText = textAttachments
       .map((attachment) => {
-        if (attachment.content) {
-          return `\n\n---\n**Attached file: ${attachment.name}**\n\`\`\`\n${truncateContent(attachment.content, 50000)}\n\`\`\``;
-        }
-        return `\n\n---\n**Attached file: ${attachment.name}**\n(Unable to extract text content from this file.)`;
+        return buildTextAttachmentBlock('Attached file', attachment);
       })
       .join('');
     nextText += attachmentText;
   }
 
   const imageAttachments = safeAttachments.filter((attachment) => attachment.category === 'image');
-  if (imageAttachments.length > 0) {
-    const imageList = imageAttachments.map((attachment) => attachment.name).join(', ');
+  const imageTextAttachments = imageAttachments.filter((attachment) => String(attachment?.content || '').trim());
+  if (imageTextAttachments.length > 0) {
+    nextText += imageTextAttachments
+      .map((attachment) => buildTextAttachmentBlock('Attached image OCR text', attachment))
+      .join('');
+  }
+
+  const rawImageAttachments = imageAttachments.filter((attachment) => !String(attachment?.content || '').trim());
+  if (rawImageAttachments.length > 0) {
+    const imageList = rawImageAttachments.map((attachment) => attachment.name).join(', ');
     nextText += `\n\n---\n**Attached images (not included inline):** ${imageList}`;
   }
 

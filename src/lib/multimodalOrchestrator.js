@@ -1,3 +1,5 @@
+import { getAttachmentTransportForModel } from './attachmentRouting.js';
+
 const MULTIMODAL_ORCHESTRATE_URL = '/api/multimodal/orchestrate';
 const MULTIMODAL_JOBS_URL = '/api/multimodal/jobs';
 const MULTIMODAL_JOB_TIMEOUT_MS = 50_000;
@@ -7,9 +9,33 @@ const YOUTUBE_URL_REGEX = /https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?[^\s]+|y
 const IMAGE_INTENT_REGEX = /\b(generate|create|make|draw|design|render)\b[\s\S]{0,80}\b(image|picture|photo|illustration|logo|cover art|artwork|icon)\b/i;
 const DOC_INTENT_REGEX = /\b(generate|create|make|produce|export|output|save|convert)\b[\s\S]{0,80}\b(pdf|docx|word document|xlsx|excel|spreadsheet)\b/i;
 
-export function shouldCallOrchestrator(prompt) {
+function needsImageOcrFallback({
+  attachments = [],
+  selectedModels = [],
+  modelCatalog = {},
+  capabilityRegistry = null,
+}) {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  const safeModels = Array.isArray(selectedModels) ? selectedModels.filter(Boolean) : [];
+  if (safeAttachments.length === 0 || safeModels.length === 0) return false;
+
+  return safeAttachments.some((attachment) => {
+    if (String(attachment?.category || '').toLowerCase() !== 'image' || !attachment?.dataUrl) {
+      return false;
+    }
+    return safeModels.some((modelId) => {
+      const route = getAttachmentTransportForModel(attachment, modelId, modelCatalog, capabilityRegistry);
+      return route.mode === 'excluded';
+    });
+  });
+}
+
+export function shouldCallOrchestrator(prompt, options = {}) {
   const text = String(prompt || '');
-  return YOUTUBE_URL_REGEX.test(text) || IMAGE_INTENT_REGEX.test(text) || DOC_INTENT_REGEX.test(text);
+  return YOUTUBE_URL_REGEX.test(text)
+    || IMAGE_INTENT_REGEX.test(text)
+    || DOC_INTENT_REGEX.test(text)
+    || needsImageOcrFallback(options);
 }
 
 export function normalizeGeneratedAttachment(item) {
@@ -109,10 +135,24 @@ function normalizeOrchestrationResponse({
   prompt,
   attachments,
 }) {
+  const attachmentAugmentations = Array.isArray(data?.attachmentAugmentations)
+    ? data.attachmentAugmentations
+    : [];
+  const mergedInputAttachments = attachmentAugmentations.length > 0
+    ? attachments.map((attachment, index) => {
+      const augmentation = attachmentAugmentations.find((item) => Number(item?.index) === index);
+      if (!augmentation) return attachment;
+      const nextAttachment = { ...attachment };
+      if (typeof augmentation.content === 'string') {
+        nextAttachment.content = augmentation.content;
+      }
+      return nextAttachment;
+    })
+    : attachments;
   const generated = Array.isArray(data.generatedAttachments)
     ? data.generatedAttachments.map(normalizeGeneratedAttachment).filter(Boolean)
     : [];
-  const mergedAttachments = [...attachments, ...generated];
+  const mergedAttachments = [...mergedInputAttachments, ...generated];
   const promptAugmentation = String(data.promptAugmentation || '').trim();
   const nextPrompt = promptAugmentation
     ? `${prompt}\n\n---\n${promptAugmentation}`
@@ -162,9 +202,16 @@ export async function orchestrateMultimodalTurn({
   providerStatus = {},
   apiKey = '',
   routingPreferences = {},
+  modelCatalog = {},
+  capabilityRegistry = null,
 }) {
   const userPrompt = String(prompt || '').trim();
-  if (!shouldCallOrchestrator(userPrompt)) {
+  if (!shouldCallOrchestrator(userPrompt, {
+    attachments,
+    selectedModels,
+    modelCatalog,
+    capabilityRegistry,
+  })) {
     return {
       prompt: userPrompt,
       attachments,

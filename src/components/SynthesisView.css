@@ -131,9 +131,28 @@
   transition: all var(--transition-fast);
 }
 
+.synthesis-branch-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: rgba(79, 143, 247, 0.12);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
 .synthesis-retry-btn:hover {
   color: var(--accent-purple);
   background: rgba(168, 85, 247, 0.2);
+}
+
+.synthesis-branch-btn:hover {
+  color: var(--accent-blue);
+  background: rgba(79, 143, 247, 0.22);
 }
 
 .synthesis-streaming-badge {

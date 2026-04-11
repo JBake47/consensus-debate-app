@@ -44,6 +44,29 @@ await runTest('shouldCallOrchestrator detects multimodal intents', async () => {
   assert.equal(shouldCallOrchestrator('Please summarize https://youtu.be/dQw4w9WgXcQ'), true);
   assert.equal(shouldCallOrchestrator('Generate a PDF and an XLSX budget sheet.'), true);
   assert.equal(shouldCallOrchestrator('What is the weather in Boston?'), false);
+  assert.equal(shouldCallOrchestrator('What does this screenshot say?', {
+    attachments: [{
+      name: 'screen.png',
+      category: 'image',
+      dataUrl: 'data:image/png;base64,AA==',
+      content: '',
+    }],
+    selectedModels: ['meta-llama/llama-3.3-70b-instruct'],
+    modelCatalog: {
+      'meta-llama/llama-3.3-70b-instruct': {
+        modalities: ['text'],
+      },
+    },
+    capabilityRegistry: {
+      providers: {
+        openrouter: {
+          capabilities: {
+            imageInput: true,
+          },
+        },
+      },
+    },
+  }), true);
 });
 
 await runTest('normalizeGeneratedAttachment keeps signed url metadata', async () => {
@@ -107,6 +130,7 @@ await runTest('orchestrateMultimodalTurn consumes async job result', async () =>
           }],
           youtubeUrls: ['https://youtu.be/demo'],
           routingDecisions: [{ type: 'youtube' }],
+          attachmentAugmentations: [{ index: 0, content: 'Status: OK' }],
           rejectedAttachments: [{ name: 'bad.exe', reason: 'blocked' }],
           capabilityRegistry: { routingVersion: '2026-03-05' },
         },
@@ -123,6 +147,7 @@ await runTest('orchestrateMultimodalTurn consumes async job result', async () =>
     });
     assert.equal(result.prompt.includes('Generated artifacts attached'), true);
     assert.equal(result.attachments.length, 2);
+    assert.equal(result.attachments[0].content, 'Status: OK');
     assert.equal(result.attachments[1].downloadUrl, '/api/artifacts/a?token=t');
     assert.deepEqual(result.modelOverrides, ['gemini:gemini-2.5-flash']);
     assert.deepEqual(result.routeInfo.youtubeUrls, ['https://youtu.be/demo']);

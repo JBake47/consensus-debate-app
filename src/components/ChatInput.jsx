@@ -321,6 +321,8 @@ export default function ChatInput() {
       } = prepareConversationForHistoryMutation(editMeta.conversationId, {
         titleLabel: 'Edit',
         branchKind: 'edit',
+        sourceStage: 'turn',
+        sourceSummary: 'Edited Last Prompt',
       });
       if (!targetConversationId) return;
       dispatch({ type: 'REMOVE_LAST_TURN', payload: targetConversationId });
@@ -372,6 +374,8 @@ export default function ChatInput() {
         synthesizerModel,
         providerStatus,
         apiKey,
+        modelCatalog,
+        capabilityRegistry,
       });
 
       performSubmit({
@@ -393,6 +397,8 @@ export default function ChatInput() {
     synthesizerModel,
     providerStatus,
     apiKey,
+    modelCatalog,
+    capabilityRegistry,
     performSubmit,
     requiresProviderSetup,
   ]);
@@ -782,34 +788,37 @@ export default function ChatInput() {
           <div className="attachment-warning">{attachmentNotice}</div>
         )}
 
-        {attachments.length > 0 && (
-          <div className="attachment-tray">
-            {attachments.map((att, i) => (
-              <AttachmentCard
-                key={att.uploadId || `${att.name}-${i}`}
-                attachment={att}
-                routing={attachmentRouting[i]}
-                onPreview={() => setViewerAttachment(att)}
-                onRemove={() => removeAttachment(i)}
-              />
-            ))}
-          </div>
-        )}
-
         <div className="chat-input-row">
-          <textarea
-            ref={textareaRef}
-            className="chat-textarea"
-            placeholder={textareaPlaceholder}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            rows={1}
-            disabled={!conversationStoreReady}
-            aria-label="Prompt composer"
-            title="Prompt composer. Press Enter to send, Shift+Enter for a new line. Drag, paste, or attach files to include context."
-          />
+          <div className={`chat-textarea-shell ${attachments.length > 0 ? 'has-attachments' : ''}`}>
+            {attachments.length > 0 && (
+              <div className="attachment-tray attachment-tray-inline">
+                {attachments.map((att, i) => (
+                  <AttachmentCard
+                    key={att.uploadId || `${att.name}-${i}`}
+                    attachment={att}
+                    routing={attachmentRouting[i]}
+                    compact
+                    showTransport={false}
+                    onPreview={() => setViewerAttachment(att)}
+                    onRemove={() => removeAttachment(i)}
+                  />
+                ))}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              className="chat-textarea"
+              placeholder={textareaPlaceholder}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              rows={1}
+              disabled={!conversationStoreReady}
+              aria-label="Prompt composer"
+              title="Prompt composer. Press Enter to send, Shift+Enter for a new line. Drag, paste, or attach files to include context."
+            />
+          </div>
           <div className="chat-input-footer">
             <div className="chat-input-toggles">
               <div className="chat-control-with-help">

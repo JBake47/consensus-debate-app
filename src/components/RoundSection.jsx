@@ -97,7 +97,7 @@ function RoundSection({
                 e.stopPropagation();
                 branchFromRound(roundIndex);
               }}
-              title="Create a new branch from this round so you can continue from here without changing the current chat history."
+              title="Create a checkpoint branch after this round so you can continue from here without changing the current chat history."
             >
               <GitBranchPlus size={13} />
               <span>Branch</span>

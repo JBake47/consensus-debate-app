@@ -68,6 +68,38 @@ function renderModelNames(modelIds) {
   return modelIds.map((modelId) => getModelDisplayName(modelId)).join(', ');
 }
 
+function buildRoutingSummary(attachment, routing) {
+  if (!routing) return '';
+  const category = String(attachment?.category || '').toLowerCase();
+  const parts = [];
+  if (routing.nativeModels?.length > 0) {
+    parts.push(`${routing.nativeModels.length} native`);
+  }
+  if (routing.fallbackModels?.length > 0) {
+    parts.push(`${routing.fallbackModels.length} ${category === 'image' ? 'OCR' : 'text'}`);
+  }
+  if (routing.excludedModels?.length > 0) {
+    parts.push(`${routing.excludedModels.length} excluded`);
+  }
+  return parts.join(' | ');
+}
+
+function buildRoutingBreakdown(attachment, routing) {
+  if (!routing) return '';
+  const category = String(attachment?.category || '').toLowerCase();
+  const parts = [];
+  if (routing.nativeModels?.length > 0) {
+    parts.push(`${routing.nativeModels.length} native`);
+  }
+  if (routing.fallbackModels?.length > 0) {
+    parts.push(`${routing.fallbackModels.length} ${category === 'image' ? 'OCR' : 'text'}`);
+  }
+  if (routing.excludedModels?.length > 0) {
+    parts.push(`${routing.excludedModels.length} excluded`);
+  }
+  return parts.join(' • ');
+}
+
 function buildDocumentPreviewLines(attachment) {
   const baseText = String(attachment?.content || '')
     .slice(0, 4000)
@@ -114,10 +146,16 @@ function buildRoutingTooltip(routing) {
   }
   if (routing.excludedModels?.length > 0) {
     lines.push(`Excluded: ${renderModelNames(routing.excludedModels)}`);
-    const firstReason = routing.reasonsByModel?.[routing.excludedModels[0]];
-    if (firstReason) {
-      lines.push(firstReason);
-    }
+  }
+  const detailedModels = [
+    ...(routing.nativeModels || []),
+    ...(routing.fallbackModels || []),
+    ...(routing.excludedModels || []),
+  ];
+  for (const modelId of detailedModels) {
+    const reason = routing.reasonsByModel?.[modelId];
+    if (!reason) continue;
+    lines.push(`${getModelDisplayName(modelId)}: ${reason}`);
   }
   return lines.join('\n');
 }
@@ -134,6 +172,7 @@ function getWarningText(attachment, routing) {
 function getSecondaryLabel(attachment, previewMeta, routing, showTransport) {
   const metaParts = [previewMeta, formatFileSize(Number(attachment?.size || 0))].filter(Boolean);
   const metaLabel = metaParts.join(' - ');
+  const routingBreakdown = buildRoutingSummary(attachment, routing);
 
   if (attachment?.processingStatus === 'processing') {
     return 'Preparing preview';
@@ -145,13 +184,13 @@ function getSecondaryLabel(attachment, previewMeta, routing, showTransport) {
     return metaLabel || getCategoryLabel(attachment?.category);
   }
   if (routing.primaryTone === 'excluded') {
-    return 'Not sent';
+    return routingBreakdown || 'Not sent';
   }
   if (routing.primaryTone === 'fallback') {
-    return metaLabel ? `Text fallback - ${metaLabel}` : 'Text fallback';
+    return routingBreakdown || (metaLabel ? `Text fallback - ${metaLabel}` : 'Text fallback');
   }
   if (routing.primaryTone === 'mixed') {
-    return metaLabel ? `Mixed routing - ${metaLabel}` : 'Mixed routing';
+    return routingBreakdown || (metaLabel ? `Mixed routing - ${metaLabel}` : 'Mixed routing');
   }
   return metaLabel || routing.primaryLabel || getCategoryLabel(attachment?.category);
 }

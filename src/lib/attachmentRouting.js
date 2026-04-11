@@ -61,6 +61,8 @@ function buildFallbackAttachmentBlock(attachment) {
       ? 'Attached Word fallback text'
       : category === 'excel'
         ? 'Attached spreadsheet fallback text'
+        : category === 'image'
+          ? 'Attached image OCR text'
         : 'Attached file text';
   const content = String(attachment?.content || '').trim();
   if (!content) {
@@ -87,6 +89,13 @@ export function getAttachmentTransportForModel(attachment, modelId, modelCatalog
   if (category === 'image') {
     if (attachment.dataUrl && supportsNativeImage({ modelId, modelCatalog, capabilityRegistry })) {
       return { mode: 'native_image', label: 'Native image', reason: 'Image sent as a multimodal input.' };
+    }
+    if (String(attachment.content || '').trim()) {
+      return {
+        mode: 'text_fallback',
+        label: 'OCR fallback',
+        reason: 'OCR text from this image will be sent because the model cannot accept native image input.',
+      };
     }
     return {
       mode: 'excluded',
@@ -219,11 +228,13 @@ export function buildAttachmentRoutingOverview({
 
     let primaryLabel = 'Routing unavailable';
     let primaryTone = 'neutral';
+    const category = String(attachment?.category || '').toLowerCase();
+    const usesImageFallback = category === 'image' && fallbackModels.length > 0;
     if (nativeModels.length > 0 && fallbackModels.length === 0 && excludedModels.length === 0) {
       primaryLabel = routeModes.has('native_file') ? 'Native file' : 'Native image';
       primaryTone = 'native';
     } else if (fallbackModels.length > 0 && nativeModels.length === 0 && excludedModels.length === 0) {
-      primaryLabel = 'Text fallback';
+      primaryLabel = usesImageFallback ? 'OCR fallback' : 'Text fallback';
       primaryTone = 'fallback';
     } else if (excludedModels.length === selectedModels.length && selectedModels.length > 0) {
       primaryLabel = 'Not sent';

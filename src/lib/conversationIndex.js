@@ -320,6 +320,8 @@ export function buildConversationListItem(conversation) {
     description: conversation?.description || '',
     updatedAt: conversation?.updatedAt || conversation?.createdAt || 0,
     createdAt: conversation?.createdAt || 0,
+    parentConversationId: conversation?.parentConversationId || null,
+    branchedFrom: conversation?.branchedFrom || null,
     turnCount: turns.length,
     lastTurnTimestamp: lastTurn?.timestamp || lastTurn?.createdAt || 0,
     sidebarData,

@@ -47,6 +47,14 @@ runTest('buildConversationListItem exposes the current turn start timestamp', ()
     title: 'Task 1',
     createdAt: 10,
     updatedAt: 30,
+    parentConversationId: 'conv-0',
+    branchedFrom: {
+      branchKind: 'checkpoint',
+      sourceTurnId: 'turn-0',
+      sourceStage: 'synthesis',
+      sourceRoundIndex: null,
+      sourceSummary: 'After Synthesized Answer',
+    },
     turns: [
       { id: 'turn-1', timestamp: 20 },
       { id: 'turn-2', timestamp: 25 },
@@ -55,6 +63,8 @@ runTest('buildConversationListItem exposes the current turn start timestamp', ()
 
   assert.equal(result.lastTurnTimestamp, 25);
   assert.equal(result.turnCount, 2);
+  assert.equal(result.parentConversationId, 'conv-0');
+  assert.equal(result.branchedFrom.branchKind, 'checkpoint');
 });
 
 // eslint-disable-next-line no-console

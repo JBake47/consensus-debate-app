@@ -1,10 +1,11 @@
 import { useDeferredValue, useState, useMemo, useRef, useEffect } from 'react';
 import { Virtuoso } from 'react-virtuoso';
-import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2 } from 'lucide-react';
+import { MessageSquare, Plus, Settings, Trash2, Download, Upload, Search, X, Pencil, Check, Share2, GitBranchPlus } from 'lucide-react';
 import { useDebateActions, useDebateConversationList } from '../context/DebateContext';
 import { formatRelativeDate } from '../lib/formatDate';
 import { buildConversationSearchIndex, searchConversationIndex } from '../lib/searchConversations';
 import { sortSidebarConversations } from '../lib/sidebarOrdering';
+import { describeConversationBranch } from '../lib/conversationBranching';
 import InfoTip from './InfoTip';
 import './Sidebar.css';
 
@@ -232,6 +233,10 @@ export default function Sidebar({ open }) {
 
   const renderConversationItem = (conv) => {
     const conversationRunning = Boolean(isConversationInProgress?.(conv.id));
+    const parentConversation = conv.parentConversationId
+      ? getConversationById?.(conv.parentConversationId)
+      : null;
+    const branchLineage = describeConversationBranch(conv.branchedFrom, parentConversation?.title || '');
     return (
       <div
         key={conv.id}
@@ -277,8 +282,23 @@ export default function Sidebar({ open }) {
           </div>
         ) : (
           <div className="sidebar-item-text">
-            <span className="sidebar-item-title">{conv.title}</span>
-            <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
+            <div className="sidebar-item-title-row">
+              <span className="sidebar-item-title">{conv.title}</span>
+              {branchLineage && (
+                <span className="sidebar-branch-badge" title={branchLineage.tooltip}>
+                  <GitBranchPlus size={10} />
+                  <span>{branchLineage.badgeLabel}</span>
+                </span>
+              )}
+            </div>
+            <div className="sidebar-item-meta">
+              <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
+              {branchLineage?.parentLabel && (
+                <span className="sidebar-item-caption" title={branchLineage.tooltip}>
+                  {branchLineage.caption}
+                </span>
+              )}
+            </div>
             {conversationRunning && (
               <span className="sidebar-item-running">
                 <span className="sidebar-item-running-spinner" aria-hidden="true" />

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.35] - 2026-04-11
+
+### Added
+- Checkpoint branching from completed rounds and synthesized answers, with lineage badges in the header and sidebar so follow-on chats clearly show where they came from
+
+### Changed
+- The composer now keeps attachment previews inline above the textarea, and attachment routing labels better distinguish native delivery, OCR fallback, and exclusions
+
+### Fixed
+- Text-only models now receive OCR fallback text from attached images through multimodal orchestration instead of dropping that context when native image input is unavailable
+- Retry, edit, and checkpoint flows no longer reuse running summaries that already included the turn being replaced, preventing stale context from leaking into rebuilt chats
+
 ## [0.3.34] - 2026-04-10
 
 ### Added

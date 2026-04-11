@@ -142,16 +142,62 @@
   gap: 1px;
 }
 
+.sidebar-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .sidebar-item-title {
   font-size: var(--text-sm);
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.sidebar-branch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 48%;
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  background: rgba(79, 143, 247, 0.12);
+  color: var(--accent-blue);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-branch-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .sidebar-item-date {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.sidebar-item-caption {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-item-running {

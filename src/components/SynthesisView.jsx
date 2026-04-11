@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useRef, useEffect, useState } from 'react';
-import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye, Link2 } from 'lucide-react';
+import { Sparkles, Loader2, AlertCircle, CheckCircle2, RotateCcw, ChevronDown, ChevronUp, Eye, Link2, GitBranchPlus } from 'lucide-react';
 import { useDebateActions, useDebateConversations } from '../context/DebateContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import CopyButton from './CopyButton';
@@ -172,11 +172,12 @@ function SynthesisView({
   showInternals = true,
   branchesConversation = false,
 }) {
-  const { retrySynthesis } = useDebateActions();
+  const { retrySynthesis, branchFromSynthesis } = useDebateActions();
   const { debateInProgress } = useDebateConversations();
   const { model, content, status, error } = synthesis;
   const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
+  const canBranch = isLastTurn && !debateInProgress && status === 'complete';
   const [citationsExpanded, setCitationsExpanded] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
@@ -235,6 +236,15 @@ function SynthesisView({
               title={`${synthesisRetryScope} Shift bypasses cache.`}
             >
               <RotateCcw size={13} />
+            </button>
+          )}
+          {canBranch && (
+            <button
+              className="synthesis-branch-btn"
+              onClick={() => branchFromSynthesis()}
+              title="Create a checkpoint branch from this synthesized answer so you can continue from here without changing the current chat history."
+            >
+              <GitBranchPlus size={13} />
             </button>
           )}
           {isProvisional && (

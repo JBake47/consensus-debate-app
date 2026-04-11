@@ -1,9 +1,10 @@
 import { forwardRef, useCallback, useState, useEffect, useMemo, lazy, Suspense, useRef } from 'react';
-import { PanelLeft, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon, Sparkles } from 'lucide-react';
+import { PanelLeft, Pencil, Check, X, DollarSign, Share2, Command, Settings2, RotateCcw, RefreshCcw, Globe, Trash2, Sun, Moon, Sparkles, GitBranchPlus } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
-import { useDebateActions, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
+import { useDebateActions, useDebateConversationList, useDebateConversations, useDebateSettings, useDebateUi } from './context/DebateContext';
 import { isTypingShortcutTarget, matchesShortcut } from './lib/keyboardShortcuts';
 import { getModelDisplayName } from './lib/openrouter';
+import { describeConversationBranch } from './lib/conversationBranching';
 import {
   computeConversationCostMeta,
   formatCostWithQuality,
@@ -30,6 +31,7 @@ function AppContent() {
     dispatch,
     retryLastTurn,
     retryAllFailed,
+    branchFromSynthesis,
     clearResponseCache,
     applyModelUpgrade,
     enableModelUpgradeAutoSwitch,
@@ -37,6 +39,7 @@ function AppContent() {
     dismissAllModelUpgrades,
   } = useDebateActions();
   const { activeConversation, debateInProgress } = useDebateConversations();
+  const { getConversationById } = useDebateConversationList();
   const {
     themeMode,
     apiKey,
@@ -61,6 +64,23 @@ function AppContent() {
   const highlightedTurnTimeoutRef = useRef(0);
 
   const turns = activeConversation?.turns || [];
+  const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+  const activeConversationParent = useMemo(() => (
+    activeConversation?.parentConversationId
+      ? getConversationById(activeConversation.parentConversationId)
+      : null
+  ), [activeConversation?.parentConversationId, getConversationById]);
+  const activeConversationLineage = useMemo(() => (
+    describeConversationBranch(
+      activeConversation?.branchedFrom,
+      activeConversationParent?.title || '',
+    )
+  ), [activeConversation?.branchedFrom, activeConversationParent?.title]);
+  const canBranchFromSynthesis = Boolean(
+    activeConversation
+    && !debateInProgress
+    && lastTurn?.synthesis?.status === 'complete'
+  );
   const conversationCostMeta = useMemo(() => (
     activeConversation
       ? computeConversationCostMeta(activeConversation)
@@ -262,6 +282,14 @@ function AppContent() {
       keywords: 'retry failed streams',
       run: () => retryAllFailed?.({ forceRefresh: false }),
     },
+    canBranchFromSynthesis && {
+      id: 'branch-synthesis',
+      title: 'Branch From Synthesized Answer',
+      shortcut: 'Alt+B',
+      icon: <GitBranchPlus size={14} />,
+      keywords: 'branch checkpoint synthesis answer continue',
+      run: () => branchFromSynthesis?.(),
+    },
     {
       id: 'clear-cache',
       title: 'Clear Response Cache',
@@ -278,12 +306,14 @@ function AppContent() {
       keywords: 'export markdown report',
       run: handleExportReport,
     },
-  ].filter((item) => Boolean(item.run))), [
+  ].filter((item) => Boolean(item?.run))), [
     dispatch,
     themeMode,
     webSearchEnabled,
     retryLastTurn,
     retryAllFailed,
+    canBranchFromSynthesis,
+    branchFromSynthesis,
     clearResponseCache,
     handleExportReport,
     openSettings,
@@ -379,15 +409,42 @@ function AppContent() {
               aria-label={activeConversation ? 'Edit chat title and description' : undefined}
               title={activeConversation ? 'Click to rename this chat and add a short description.' : undefined}
             >
-              <h1 className="main-title">
-                {activeConversation?.title || 'New Chat'}
-              </h1>
-              {activeConversation?.description && (
-                <span className="main-description">{activeConversation.description}</span>
-              )}
-              {activeConversation && (
-                <Pencil size={12} className="main-header-edit-icon" />
-              )}
+              <div className="main-header-copy">
+                <div className="main-header-heading">
+                  <h1 className="main-title">
+                    {activeConversation?.title || 'New Chat'}
+                  </h1>
+                  {activeConversation && (
+                    <Pencil size={12} className="main-header-edit-icon" />
+                  )}
+                </div>
+                {(activeConversation?.description || activeConversationLineage) && (
+                  <div className="main-header-meta">
+                    {activeConversation?.description && (
+                      <span className="main-description">{activeConversation.description}</span>
+                    )}
+                    {activeConversationLineage && (
+                      <>
+                        <span
+                          className="main-header-lineage-badge"
+                          title={activeConversationLineage.tooltip}
+                        >
+                          <GitBranchPlus size={11} />
+                          <span>{activeConversationLineage.badgeLabel}</span>
+                        </span>
+                        {activeConversationLineage.parentLabel && (
+                          <span
+                            className="main-header-lineage-caption"
+                            title={activeConversationLineage.tooltip}
+                          >
+                            {activeConversationLineage.caption}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {activeConversation && conversationCostLabel && (

@@ -3,6 +3,7 @@ import {
   buildAttachmentContentForModel,
   buildAttachmentRoutingOverview,
 } from './attachmentRouting.js';
+import { buildAttachmentTextContent } from './attachmentContent.js';
 
 const pdfAttachment = {
   name: 'brief.pdf',
@@ -79,6 +80,58 @@ test('Images are excluded for models marked text-only', () => {
   assert.equal(content.includes('diagram.png'), true);
 });
 
+test('Images with OCR text fall back to plaintext for text-only models', () => {
+  const content = buildAttachmentContentForModel('Explain this screenshot.', [{
+    ...imageAttachment,
+    content: 'Button: Submit\nStatus: Success',
+  }], {
+    modelId: 'meta-llama/llama-3.3-70b-instruct',
+    modelCatalog: {
+      'meta-llama/llama-3.3-70b-instruct': {
+        modalities: ['text'],
+      },
+    },
+    capabilityRegistry: {
+      providers: {
+        openrouter: {
+          capabilities: {
+            imageInput: true,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(typeof content, 'string');
+  assert.equal(content.includes('Attached image OCR text: diagram.png'), true);
+  assert.equal(content.includes('Button: Submit'), true);
+});
+
+test('Routing overview reports OCR fallback for images with extracted text', () => {
+  const routing = buildAttachmentRoutingOverview({
+    attachments: [{
+      ...imageAttachment,
+      content: 'Settings panel\nDark mode',
+    }],
+    models: ['meta-llama/llama-3.3-70b-instruct'],
+    modelCatalog: {
+      'meta-llama/llama-3.3-70b-instruct': {
+        modalities: ['text'],
+      },
+    },
+    capabilityRegistry: {
+      providers: {
+        openrouter: {
+          capabilities: {
+            imageInput: true,
+          },
+        },
+      },
+    },
+  })[0];
+  assert.deepEqual(routing.fallbackModels, ['meta-llama/llama-3.3-70b-instruct']);
+  assert.equal(routing.primaryLabel, 'OCR fallback');
+});
+
 test('Routing overview reports mixed native and fallback handling', () => {
   const routing = buildAttachmentRoutingOverview({
     attachments: [pdfAttachment],
@@ -87,4 +140,13 @@ test('Routing overview reports mixed native and fallback handling', () => {
   assert.deepEqual(routing.nativeModels, ['anthropic/claude-3.7-sonnet']);
   assert.deepEqual(routing.fallbackModels, ['openai:gpt-4.1-mini']);
   assert.equal(routing.primaryLabel, 'Mixed routing');
+});
+
+test('Plaintext attachment builder includes OCR text for image fallbacks', () => {
+  const content = buildAttachmentTextContent('Summarize the screenshot.', [{
+    ...imageAttachment,
+    content: 'Error: Missing API key',
+  }]);
+  assert.equal(content.includes('Attached image OCR text: diagram.png'), true);
+  assert.equal(content.includes('Missing API key'), true);
 });
