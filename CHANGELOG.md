@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Branching from synthesis now works from any completed synthesized answer in the timeline, not just the latest one
+- Restart-required in-app updates now prompt for confirmation and, if approved, relaunch the local backend automatically instead of leaving restart as a fully manual follow-up
+
+### Fixed
+- Automatic backend restarts now preserve Node runtime flags and verify that a genuinely new backend instance is online before the updater reloads the UI
+
 ## [0.3.35] - 2026-04-11
 
 ### Added

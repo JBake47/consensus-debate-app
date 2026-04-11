@@ -2488,6 +2488,8 @@ export function DebateProvider({ children }) {
     sourceStage = null,
     sourceRoundIndex = null,
     sourceSummary = null,
+    turnsOverride = null,
+    sourceTurnId = null,
     forceBranch = false,
   } = {}) => {
     const sourceConversation = state.conversations.find((conversation) => conversation.id === conversationId) || null;
@@ -2525,6 +2527,8 @@ export function DebateProvider({ children }) {
         sourceStage,
         sourceRoundIndex,
         sourceSummary,
+        turnsOverride,
+        sourceTurnId,
       })
     );
     dispatch({ type: 'ADD_CONVERSATION', payload: { conversation: branchConversation } });
@@ -5027,16 +5031,20 @@ export function DebateProvider({ children }) {
     setAbortController,
   ]);
 
-  const branchFromSynthesis = useCallback(() => {
+  const branchFromSynthesis = useCallback((turnIndex = activeConversation?.turns?.length - 1) => {
     if (!activeConversation || !activeConversation.id || activeConversation.turns.length === 0) return;
-    const lastTurn = activeConversation.turns[activeConversation.turns.length - 1];
-    if (lastTurn?.synthesis?.status !== 'complete') return;
+    if (!Number.isInteger(turnIndex) || turnIndex < 0 || turnIndex >= activeConversation.turns.length) return;
+    const targetTurn = activeConversation.turns[turnIndex];
+    if (targetTurn?.synthesis?.status !== 'complete') return;
+    const turnsOverride = activeConversation.turns.slice(0, turnIndex + 1);
 
     const { branched } = prepareConversationForHistoryMutation(activeConversation.id, {
       titleLabel: 'After Synthesis',
       branchKind: 'checkpoint',
       sourceStage: 'synthesis',
       sourceSummary: 'After Synthesized Answer',
+      turnsOverride,
+      sourceTurnId: targetTurn.id || null,
       forceBranch: true,
     });
     if (branched) {

@@ -934,6 +934,7 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
             <SynthesisView
               synthesis={turn.synthesis}
               debateMetadata={turn.debateMetadata}
+              turnIndex={index}
               isLastTurn={isLastTurn}
               rounds={turn.rounds}
               showInternals={false}
@@ -977,6 +978,7 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
                 <SynthesisView
                   synthesis={turn.synthesis}
                   debateMetadata={turn.debateMetadata}
+                  turnIndex={index}
                   isLastTurn={isLastTurn}
                   rounds={turn.rounds}
                   ensembleResult={turn.ensembleResult}
@@ -1034,6 +1036,7 @@ function DebateView({ turn, index, isLastTurn, highlighted = false }) {
             <SynthesisView
               synthesis={turn.synthesis}
               debateMetadata={turn.debateMetadata}
+              turnIndex={index}
               isLastTurn={isLastTurn}
               rounds={turn.rounds}
               branchesConversation={branchesConversation}

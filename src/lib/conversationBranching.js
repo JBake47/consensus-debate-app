@@ -189,11 +189,13 @@ export function createConversationHistoryBranch(sourceConversation, {
   const sourceTurns = Array.isArray(sourceConversation.turns) ? sourceConversation.turns : [];
   const sourceLastTurn = sourceTurns.length > 0 ? sourceTurns[sourceTurns.length - 1] : null;
   const turns = cloneStructuredData(Array.isArray(turnsOverride) ? turnsOverride : sourceTurns);
+  const overrideLastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
   const normalizedBranchKind = normalizeBranchText(branchKind)?.toLowerCase() || 'branch';
   const normalizedSourceStage = normalizeBranchText(sourceStage)?.toLowerCase() || null;
   const normalizedSourceRoundIndex = normalizeRoundIndex(sourceRoundIndex);
   const normalizedSourceSummary = normalizeBranchText(sourceSummary);
   const normalizedSourceTurnId = normalizeBranchText(sourceTurnId)
+    || normalizeBranchText(overrideLastTurn?.id)
     || normalizeBranchText(sourceLastTurn?.id);
   const nextConversationId = String(branchConversationId || '').trim()
     || `${createdAt}-${Math.random().toString(36).slice(2, 10)}`;

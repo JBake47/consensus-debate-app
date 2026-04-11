@@ -284,10 +284,10 @@ function AppContent() {
     },
     canBranchFromSynthesis && {
       id: 'branch-synthesis',
-      title: 'Branch From Synthesized Answer',
+      title: 'Branch From Latest Synthesized Answer',
       shortcut: 'Alt+B',
       icon: <GitBranchPlus size={14} />,
-      keywords: 'branch checkpoint synthesis answer continue',
+      keywords: 'branch checkpoint latest synthesis answer continue',
       run: () => branchFromSynthesis?.(),
     },
     {

@@ -10,7 +10,12 @@ import {
   getModelDisplayName,
   getProviderName,
 } from '../lib/openrouter';
-import { applyAppUpdate as requestAppUpdate, fetchAppUpdateStatus } from '../lib/appUpdate';
+import {
+  applyAppUpdate as requestAppUpdate,
+  fetchAppUpdateStatus,
+  requestAppRestart,
+  waitForAppRestart,
+} from '../lib/appUpdate';
 import { DEFAULT_RETRY_POLICY } from '../lib/retryPolicy';
 import { rankModels, selectDiverseModels } from '../lib/modelRanking';
 import {
@@ -837,6 +842,32 @@ export default function SettingsModal() {
       if (result?.status) {
         setAppUpdateStatus(result.status);
       }
+
+      if (result?.restartRequired && !result?.localChangesRequireManualRestore) {
+        const shouldRestartNow = typeof window !== 'undefined'
+          && typeof window.confirm === 'function'
+          && window.confirm('This update changed backend code or dependencies and needs a restart. Restart the app now?');
+
+        if (shouldRestartNow) {
+          setAppUpdateState('restarting');
+          try {
+            const restartResult = await requestAppRestart();
+            await waitForAppRestart({
+              previousPid: restartResult?.pid ?? null,
+              previousStartedAt: restartResult?.startedAt ?? null,
+            });
+            if (typeof window !== 'undefined') {
+              window.location.reload();
+            }
+            return;
+          } catch (error) {
+            setAppUpdateError(error?.message || 'The update finished, but automatic restart failed. Restart the app manually.');
+            setAppUpdateState('error');
+            return;
+          }
+        }
+      }
+
       setAppUpdateState('ready');
     } catch (error) {
       setAppUpdateError(error?.message || 'Unable to apply the app update.');
@@ -1635,7 +1666,7 @@ export default function SettingsModal() {
                   className="settings-btn-secondary"
                   type="button"
                   onClick={() => loadAppUpdateStatus({ refresh: true, clearResult: true })}
-                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating'}
+                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating' || appUpdateState === 'restarting'}
                   title="Fetch the latest upstream status without applying any changes."
                 >
                   {appUpdateState === 'loading' ? 'Checking...' : 'Check for Updates'}
@@ -1644,10 +1675,10 @@ export default function SettingsModal() {
                   className="settings-btn-primary"
                   type="button"
                   onClick={handleApplyAppUpdate}
-                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating' || !appUpdateStatus?.canUpdate}
+                  disabled={appUpdateState === 'loading' || appUpdateState === 'updating' || appUpdateState === 'restarting' || !appUpdateStatus?.canUpdate}
                   title="Pull the newest code from the tracked branch into this local clone."
                 >
-                  {appUpdateState === 'updating' ? 'Updating...' : 'Update Now'}
+                  {appUpdateState === 'restarting' ? 'Restarting...' : appUpdateState === 'updating' ? 'Updating...' : 'Update Now'}
                 </button>
               </div>
 

@@ -280,6 +280,11 @@ await withServer({
       method: 'POST',
     });
     assert.equal(bareApplyResponse.status, 403);
+
+    const bareRestartResponse = await fetch(`${baseUrl}/api/update/restart`, {
+      method: 'POST',
+    });
+    assert.equal(bareRestartResponse.status, 403);
   });
 });
 

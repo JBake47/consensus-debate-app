@@ -19,6 +19,7 @@ import {
 } from 'docx';
 import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
 import { buildOpenRouterPlugins } from './openrouterPayload.js';
+import { AppRestartError, scheduleSelfRestart } from './restartManager.js';
 import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateManager.js';
 import { createModelCatalogCache, DEFAULT_MODEL_CATALOG_CACHE_TTL_MS, filterModelCatalog } from './modelCatalog.js';
 
@@ -74,6 +75,11 @@ const multimodalJobFingerprints = new Map();
 const modelCatalogCache = createModelCatalogCache({ ttlMs: MODEL_CATALOG_CACHE_TTL_MS });
 const multimodalQueue = [];
 let multimodalWorkerRunning = false;
+const SERVER_STARTED_AT = new Date().toISOString();
+const APP_RESTART_EXIT_TIMEOUT_MS = 5000;
+let apiServer = null;
+let appRestartPending = false;
+let appRestartShutdownQueued = false;
 const providerHealth = {
   openrouter: { attempts: 0, successes: 0, failures: 0, totalMs: 0, lastError: '', updatedAt: 0 },
   anthropic: { attempts: 0, successes: 0, failures: 0, totalMs: 0, lastError: '', updatedAt: 0 },
@@ -186,6 +192,39 @@ function requireTrustedUpdateRequest(req, res, next) {
     error: 'Update requests must come from the local app UI or include SERVER_AUTH_TOKEN.',
     code: 'update_request_forbidden',
   });
+}
+
+function exitProcess(code = 0) {
+  process.exit(code);
+}
+
+function shutdownAppServerForRestart() {
+  const forceExitTimer = setTimeout(() => {
+    exitProcess(0);
+  }, APP_RESTART_EXIT_TIMEOUT_MS);
+  forceExitTimer.unref?.();
+
+  if (!apiServer || typeof apiServer.close !== 'function') {
+    clearTimeout(forceExitTimer);
+    exitProcess(0);
+    return;
+  }
+
+  apiServer.close(() => {
+    clearTimeout(forceExitTimer);
+    exitProcess(0);
+  });
+  apiServer.closeIdleConnections?.();
+  apiServer.closeAllConnections?.();
+}
+
+function scheduleAppRestartShutdown() {
+  if (appRestartShutdownQueued) return;
+  appRestartShutdownQueued = true;
+  const timer = setTimeout(() => {
+    shutdownAppServerForRestart();
+  }, 100);
+  timer.unref?.();
 }
 
 function createRequestAbortContext(req, res) {
@@ -2699,9 +2738,37 @@ app.post('/api/update/apply', requireTrustedUpdateRequest, async (_req, res) => 
   }
 });
 
+app.post('/api/update/restart', requireTrustedUpdateRequest, async (_req, res) => {
+  try {
+    if (!appRestartPending) {
+      appRestartPending = true;
+      scheduleSelfRestart();
+      res.once('finish', scheduleAppRestartShutdown);
+      res.once('close', scheduleAppRestartShutdown);
+    }
+
+    res.status(202).json({
+      restarting: true,
+      pid: process.pid,
+      startedAt: SERVER_STARTED_AT,
+    });
+  } catch (error) {
+    if (!appRestartShutdownQueued) {
+      appRestartPending = false;
+    }
+    const status = error instanceof AppRestartError ? error.status : 500;
+    res.status(status).json({
+      error: error?.message || 'Failed to restart the app.',
+      code: error instanceof AppRestartError ? error.code : 'update_restart_failed',
+    });
+  }
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
     providers: {
       openrouter: Boolean(process.env.OPENROUTER_API_KEY),
       anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
@@ -2711,7 +2778,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.listen(PORT, HOST, () => {
+apiServer = app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
   console.log(`API server listening on http://${HOST}:${PORT}`);
 });

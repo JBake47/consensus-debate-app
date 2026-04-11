@@ -145,6 +145,77 @@ runTest('createConversationHistoryBranch supports checkpointed turn overrides wi
   assert.equal(overriddenTurns[0].rounds[0].streams[0].content, 'Checkpoint content');
 });
 
+runTest('createConversationHistoryBranch can branch from an earlier synthesized answer', () => {
+  const sourceConversation = {
+    id: 'conv-older-turn',
+    title: 'Long chat',
+    turns: [
+      {
+        id: 'turn-1',
+        userPrompt: 'First question',
+        synthesis: {
+          model: 'openai/test',
+          content: 'First synthesis',
+          status: 'complete',
+        },
+      },
+      {
+        id: 'turn-2',
+        userPrompt: 'Second question',
+        synthesis: {
+          model: 'openai/test',
+          content: 'Second synthesis',
+          status: 'complete',
+        },
+      },
+    ],
+  };
+
+  const branch = createConversationHistoryBranch(sourceConversation, {
+    branchConversationId: 'branch-from-first',
+    createdAt: 333,
+    titleLabel: 'After Synthesis',
+    branchKind: 'checkpoint',
+    sourceStage: 'synthesis',
+    sourceSummary: 'After Synthesized Answer',
+    turnsOverride: sourceConversation.turns.slice(0, 1),
+    sourceTurnId: 'turn-1',
+  });
+
+  assert.equal(branch.title, 'Long chat (After Synthesis)');
+  assert.equal(branch.turns.length, 1);
+  assert.equal(branch.turns[0].id, 'turn-1');
+  assert.deepEqual(branch.branchedFrom, {
+    branchKind: 'checkpoint',
+    sourceTurnId: 'turn-1',
+    sourceStage: 'synthesis',
+    sourceRoundIndex: null,
+    sourceSummary: 'After Synthesized Answer',
+  });
+});
+
+runTest('createConversationHistoryBranch infers sourceTurnId from the override when not supplied', () => {
+  const sourceConversation = {
+    id: 'conv-infer-turn',
+    title: 'Long chat',
+    turns: [
+      { id: 'turn-1', synthesis: { status: 'complete', content: 'One' } },
+      { id: 'turn-2', synthesis: { status: 'complete', content: 'Two' } },
+    ],
+  };
+
+  const branch = createConversationHistoryBranch(sourceConversation, {
+    branchConversationId: 'branch-infer-turn',
+    createdAt: 444,
+    titleLabel: 'After Synthesis',
+    branchKind: 'checkpoint',
+    sourceStage: 'synthesis',
+    turnsOverride: sourceConversation.turns.slice(0, 1),
+  });
+
+  assert.equal(branch.branchedFrom.sourceTurnId, 'turn-1');
+});
+
 runTest('buildConversationSnapshotWithoutLastTurn clears stale summaries that included the removed turn', () => {
   const snapshot = buildConversationSnapshotWithoutLastTurn({
     id: 'conv-1',

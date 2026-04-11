@@ -166,6 +166,7 @@ function DebateInternals({ rounds, debateMetadata }) {
 function SynthesisView({
   synthesis,
   debateMetadata,
+  turnIndex = null,
   isLastTurn,
   rounds,
   ensembleResult,
@@ -177,7 +178,7 @@ function SynthesisView({
   const { model, content, status, error } = synthesis;
   const isProvisional = status === 'streaming' && typeof content === 'string' && content.startsWith('### Provisional Synthesis');
   const canRetry = isLastTurn && !debateInProgress && (status === 'complete' || status === 'error');
-  const canBranch = isLastTurn && !debateInProgress && status === 'complete';
+  const canBranch = !debateInProgress && status === 'complete' && Number.isInteger(turnIndex);
   const [citationsExpanded, setCitationsExpanded] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
   const contentRef = useRef(null);
@@ -241,7 +242,7 @@ function SynthesisView({
           {canBranch && (
             <button
               className="synthesis-branch-btn"
-              onClick={() => branchFromSynthesis()}
+              onClick={() => branchFromSynthesis(turnIndex)}
               title="Create a checkpoint branch from this synthesized answer so you can continue from here without changing the current chat history."
             >
               <GitBranchPlus size={13} />
