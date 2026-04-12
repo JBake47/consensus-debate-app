@@ -119,6 +119,39 @@ function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
 }
 
+function normalizeConversationTransferPins(raw) {
+  const pins = raw && typeof raw === 'object' ? raw : {};
+  const normalizeLines = (value) => Array.from(new Set(
+    (Array.isArray(value)
+      ? value
+      : (typeof value === 'string'
+          ? value.replace(/\r\n/g, '\n').split('\n')
+          : []))
+      .map((item) => String(item || '').replace(/^[-*]\s*/, '').trim())
+      .filter(Boolean)
+  ));
+  return {
+    settledFacts: normalizeLines(pins.settledFacts ?? pins.facts),
+    constraints: normalizeLines(pins.constraints),
+  };
+}
+
+function areTransferPinListsEqual(left, right) {
+  if (left === right) return true;
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function areConversationTransferPinsEqual(left, right) {
+  const leftPins = normalizeConversationTransferPins(left);
+  const rightPins = normalizeConversationTransferPins(right);
+  return (
+    areTransferPinListsEqual(leftPins.settledFacts, rightPins.settledFacts)
+    && areTransferPinListsEqual(leftPins.constraints, rightPins.constraints)
+  );
+}
+
 function createConversationId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -483,6 +516,10 @@ function migrateConversations(conversations, options = {}) {
     if (conv.titleEditedAt !== titleEditedAt) {
       migrated = true;
     }
+    const transferPins = normalizeConversationTransferPins(conv.transferPins);
+    if (!areConversationTransferPinsEqual(conv.transferPins, transferPins)) {
+      migrated = true;
+    }
     const derivedConversation = enrichConversationDerivedData({
       ...conv,
       turns,
@@ -490,6 +527,7 @@ function migrateConversations(conversations, options = {}) {
       titleSource,
       titleLocked,
       titleEditedAt,
+      transferPins,
     });
     if (
       conv.summarizedTurnCount !== derivedConversation.summarizedTurnCount
@@ -1314,6 +1352,7 @@ function reducer(state, action) {
         titleEditedAt: action.payload.titleEditedAt || null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        transferPins: normalizeConversationTransferPins(action.payload.transferPins),
         turns: [],
       });
       const conversations = [conv, ...state.conversations];
@@ -1604,6 +1643,20 @@ function reducer(state, action) {
           ? updateConversationSidebarHeader({ ...c, description, updatedAt: Date.now() })
           : c
       );
+      return { ...state, conversations };
+    }
+    case 'SET_CONVERSATION_TRANSFER_PINS': {
+      const { conversationId, transferPins } = action.payload || {};
+      if (!conversationId) return state;
+      const normalizedPins = normalizeConversationTransferPins(transferPins);
+      const conversations = state.conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          transferPins: normalizedPins,
+          updatedAt: Date.now(),
+        };
+      });
       return { ...state, conversations };
     }
     case 'DELETE_CONVERSATION': {

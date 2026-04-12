@@ -207,7 +207,8 @@ export default function AttachmentCard({
 }) {
   const [imageMeta, setImageMeta] = useState(null);
   const imageSrc = attachment?.dataUrl || attachment?.downloadUrl || '';
-  const canPreview = Boolean(onPreview) && attachment?.processingStatus !== 'processing' && !disabled;
+  const isProcessing = attachment?.processingStatus === 'processing';
+  const canPreview = Boolean(onPreview) && !isProcessing && !disabled;
   const canReuse = Boolean(onReuse) && !disabled;
   const previewMeta = useMemo(() => formatPreviewMeta(attachment, imageMeta), [attachment, imageMeta]);
   const documentPreviewLines = useMemo(() => buildDocumentPreviewLines(attachment), [attachment]);
@@ -271,17 +272,27 @@ export default function AttachmentCard({
 
   return (
     <div
-      className={`attachment-card ${category} ${compact ? 'compact' : ''} ${disabled ? 'disabled' : ''} ${canPreview ? 'clickable' : ''}`}
+      className={`attachment-card ${category} ${compact ? 'compact' : ''} ${disabled ? 'disabled' : ''} ${canPreview ? 'clickable' : ''} ${isProcessing ? 'processing' : ''}`}
       onClick={handlePreview}
       onKeyDown={handleKeyDown}
       role={canPreview ? 'button' : undefined}
       tabIndex={canPreview ? 0 : undefined}
+      aria-busy={isProcessing || undefined}
       title={tooltip || undefined}
     >
       <div className="attachment-card-preview">
-        {attachment?.processingStatus === 'processing' ? (
+        {isProcessing ? (
           <div className="attachment-card-preview-placeholder processing">
-            <Loader2 size={20} className="spinning" />
+            <div className={`attachment-card-loading ${compact ? 'compact' : ''}`}>
+              <span className="attachment-card-loading-halo" aria-hidden="true" />
+              <span className="attachment-card-loading-core" aria-hidden="true">
+                <Loader2 size={compact ? 18 : 20} className="attachment-card-loading-spinner" />
+              </span>
+              <span className="attachment-card-loading-copy">
+                <span className="attachment-card-loading-title">Loading</span>
+                <span className="attachment-card-loading-detail">Preparing preview and routing</span>
+              </span>
+            </div>
           </div>
         ) : attachment?.processingStatus === 'error' || attachment?.category === 'error' ? (
           <div className="attachment-card-preview-placeholder error">

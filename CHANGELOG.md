@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.36] - 2026-04-12
+
+### Added
+- Transfer packets now open in an editor before handoff, with compact and extended variants, general/coding/research profiles, persistent pinned facts and constraints, and copy/download actions from the same modal
+
 ### Changed
 - Branching from synthesis now works from any completed synthesized answer in the timeline, not just the latest one
 - Restart-required in-app updates now prompt for confirmation and, if approved, relaunch the local backend automatically instead of leaving restart as a fully manual follow-up
+- Attachment cards and the composer now show richer loading states while previews and routing are still being prepared
 
 ### Fixed
 - Automatic backend restarts now preserve Node runtime flags and verify that a genuinely new backend instance is online before the updater reloads the UI
+- Transfer packet size warnings no longer claim empty optional sections were omitted for size, and pinned facts/constraints now survive legacy string-shaped stored data
+- Attachment intake now blocks overlapping drag, paste, and picker batches so pending preview work cannot race into duplicate or over-limit uploads
 
 ## [0.3.35] - 2026-04-11
 
@@ -651,7 +659,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.31...HEAD
+[Unreleased]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.36...HEAD
+[0.3.36]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.35...v0.3.36
+[0.3.35]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.34...v0.3.35
+[0.3.34]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.33...v0.3.34
+[0.3.33]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.32...v0.3.33
+[0.3.32]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.31...v0.3.32
 [0.3.31]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.30...v0.3.31
 [0.3.30]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.29...v0.3.30
 [0.3.29]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.28...v0.3.29

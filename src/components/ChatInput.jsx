@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Swords, Square, Globe, Paperclip, X, Send, Zap, Layers, MessageSquare, ChevronDown } from 'lucide-react';
+import { Swords, Square, Globe, Paperclip, X, Send, Zap, Layers, MessageSquare, ChevronDown, Loader2 } from 'lucide-react';
 import {
   useDebateActions,
   useDebateConversations,
@@ -95,6 +95,16 @@ function createPendingAttachment(file, uploadId) {
   };
 }
 
+function formatAttachmentLoadingLabel(processingAttachments) {
+  const pending = Array.isArray(processingAttachments) ? processingAttachments : [];
+  if (pending.length === 0) return '';
+  if (pending.length === 1) {
+    const name = String(pending[0]?.name || 'attachment').trim() || 'attachment';
+    return `Loading ${name}`;
+  }
+  return `Loading ${pending.length} attachments`;
+}
+
 export default function ChatInput() {
   const {
     startDebate,
@@ -144,6 +154,7 @@ export default function ChatInput() {
   const modeOptionRefs = useRef([]);
   const fileWorkerRef = useRef(null);
   const fileWorkerRequestRef = useRef(0);
+  const fileProcessingLockRef = useRef(false);
   const conversationStoreReady = conversationStoreStatus === 'ready';
   const hasConfiguredProvider = Boolean(String(apiKey || '').trim())
     || Object.values(providerStatus || {}).some(Boolean);
@@ -273,6 +284,12 @@ export default function ChatInput() {
       setAttachmentNotice(noticeParts.join(' '));
       return;
     }
+    if (fileProcessingLockRef.current) {
+      noticeParts.push('Wait for current attachment previews to finish loading before adding more.');
+      setAttachmentNotice(noticeParts.join(' '));
+      return;
+    }
+    fileProcessingLockRef.current = true;
     const pendingEntries = acceptedFiles.map((file, index) => ({
       file,
       uploadId: `upload-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
@@ -293,6 +310,7 @@ export default function ChatInput() {
         processedById.get(attachment.uploadId) || attachment
       )));
     } finally {
+      fileProcessingLockRef.current = false;
       setProcessing(false);
     }
   }, [attachments.length, conversationStoreReady, processFilesInWorker, processFilesOnMainThread]);
@@ -443,7 +461,19 @@ export default function ChatInput() {
     return count + ((route.nativeModels.length > 0 || route.fallbackModels.length > 0) ? 1 : 0);
   }, 0), [attachmentRouting]);
 
-  const anyAttachmentProcessing = attachments.some((attachment) => attachment.processingStatus === 'processing');
+  const processingAttachments = useMemo(
+    () => attachments.filter((attachment) => attachment.processingStatus === 'processing'),
+    [attachments]
+  );
+  const anyAttachmentProcessing = processingAttachments.length > 0;
+  const attachmentLoadingLabel = useMemo(
+    () => formatAttachmentLoadingLabel(processingAttachments),
+    [processingAttachments]
+  );
+  const attachmentLoadingDetail = processingAttachments.length > 1
+    ? 'Preparing previews and routing before you can send.'
+    : 'Preparing the preview and routing before you can send.';
+  const attachmentControlBusy = processing || anyAttachmentProcessing;
   const canSubmit = (!input.trim() && sendableAttachmentCount === 0)
     ? false
     : (conversationStoreReady && !debateInProgress && !orchestrating && !anyAttachmentProcessing && !requiresProviderSetup);
@@ -805,6 +835,17 @@ export default function ChatInput() {
                 ))}
               </div>
             )}
+            {anyAttachmentProcessing && (
+              <div className="attachment-processing-banner" role="status" aria-live="polite">
+                <span className="attachment-processing-banner-icon" aria-hidden="true">
+                  <Loader2 size={14} className="attachment-processing-spinner" />
+                </span>
+                <span className="attachment-processing-banner-copy">
+                  <span className="attachment-processing-banner-title">{attachmentLoadingLabel}</span>
+                  <span className="attachment-processing-banner-detail">{attachmentLoadingDetail}</span>
+                </span>
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               className="chat-textarea"
@@ -943,11 +984,19 @@ export default function ChatInput() {
                 <button
                   className="chat-toggle"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!conversationStoreReady || debateInProgress || processing || orchestrating}
-                  aria-label={`Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY}`}
-                  title={`Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY} Hover each attachment after upload to see how it will be routed.`}
+                  disabled={!conversationStoreReady || debateInProgress || attachmentControlBusy || orchestrating}
+                  aria-label={attachmentControlBusy
+                    ? 'Loading attached files into the app. Wait for previews to finish preparing.'
+                    : `Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY}`}
+                  title={attachmentControlBusy
+                    ? 'Loading attached files into the app. Wait for previews and routing to finish before adding more.'
+                    : `Attach files to this turn. ${ATTACHMENT_SUPPORT_SUMMARY} Hover each attachment after upload to see how it will be routed.`}
                 >
-                  <Paperclip size={15} />
+                  {attachmentControlBusy ? (
+                    <Loader2 size={15} className="chat-attachment-button-spinner" />
+                  ) : (
+                    <Paperclip size={15} />
+                  )}
                 </button>
                 <InfoTip
                   content={[
@@ -1020,7 +1069,7 @@ export default function ChatInput() {
         Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line {' | '} Drag and drop or paste files
         {!conversationStoreReady && ' | Restoring saved chats...'}
         {requiresProviderSetup && ' | Open Settings to connect a provider'}
-        {anyAttachmentProcessing && ' | Processing attachments...'}
+        {anyAttachmentProcessing && ' | Loading attachments...'}
         {orchestrating && ' | Preparing multimodal tools...'}
         {budgetEstimateLabel && (
           <>
