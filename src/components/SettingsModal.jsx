@@ -337,6 +337,7 @@ export default function SettingsModal() {
   const [presetNameInput, setPresetNameInput] = useState('');
   const [presetSheet, setPresetSheet] = useState(null);
   const [presetSheetValue, setPresetSheetValue] = useState('');
+  const [appUpdateRestartSheetOpen, setAppUpdateRestartSheetOpen] = useState(false);
   const [synthProvider, setSynthProvider] = useState('openrouter');
   const [convProvider, setConvProvider] = useState('openrouter');
   const [searchProvider, setSearchProvider] = useState('openrouter');
@@ -439,6 +440,7 @@ export default function SettingsModal() {
     liveApplyReadyRef.current = false;
     setPresetSheet(null);
     setPresetSheetValue('');
+    setAppUpdateRestartSheetOpen(false);
     dispatch({ type: 'SET_SHOW_SETTINGS', payload: false });
   };
 
@@ -771,13 +773,17 @@ export default function SettingsModal() {
   const appUpdateFollowUp = useMemo(() => {
     if (!appUpdateResult) return null;
     if (appUpdateResult.localChangesRequireManualRestore) {
+      const manualRestoreMessage = appUpdateResult.stashRef
+        ? `The app updated, but your local changes were saved in ${appUpdateResult.stashRef}. Reapply them manually if you still need them.`
+        : 'The app updated, but your local changes were not reapplied automatically. Restore them manually if you still need them.';
       return {
         tone: 'warning',
         title: 'Manual Restore Required',
-        description: appUpdateResult.stashRef
-          ? `The app updated, but your local changes were saved in ${appUpdateResult.stashRef}. Reapply them manually if you still need them.`
-          : 'The app updated, but your local changes were not reapplied automatically. Restore them manually if you still need them.',
+        description: appUpdateResult.restartRequired
+          ? `${manualRestoreMessage} Restart this app on this machine after restoring anything you still need.`
+          : manualRestoreMessage,
         allowReload: false,
+        allowRestart: Boolean(appUpdateResult.restartRequired),
       };
     }
     if (appUpdateResult.restartRequired) {
@@ -786,6 +792,7 @@ export default function SettingsModal() {
         title: 'Restart Required',
         description: 'The update changed backend code or dependencies. Restart this app or the local backend process on this machine to finish loading it.',
         allowReload: false,
+        allowRestart: true,
       };
     }
     if (appUpdateResult.reloadRecommended) {
@@ -794,6 +801,7 @@ export default function SettingsModal() {
         title: 'Reload Recommended',
         description: 'Frontend files changed. Reload the UI now if it does not refresh automatically.',
         allowReload: true,
+        allowRestart: false,
       };
     }
     if (appUpdateResult.updated) {
@@ -802,6 +810,7 @@ export default function SettingsModal() {
         title: 'Update Complete',
         description: 'The latest app version is installed and no restart should be required.',
         allowReload: false,
+        allowRestart: false,
       };
     }
     return null;
@@ -814,6 +823,7 @@ export default function SettingsModal() {
     setAppUpdateError('');
     if (clearResult) {
       setAppUpdateResult(null);
+      setAppUpdateRestartSheetOpen(false);
     }
 
     try {
@@ -835,6 +845,7 @@ export default function SettingsModal() {
     setAppUpdateState('updating');
     setAppUpdateError('');
     setAppUpdateResult(null);
+    setAppUpdateRestartSheetOpen(false);
 
     try {
       const result = await requestAppUpdate();
@@ -844,28 +855,9 @@ export default function SettingsModal() {
       }
 
       if (result?.restartRequired && !result?.localChangesRequireManualRestore) {
-        const shouldRestartNow = typeof window !== 'undefined'
-          && typeof window.confirm === 'function'
-          && window.confirm('This update changed backend code or dependencies and needs a restart. Restart the app now?');
-
-        if (shouldRestartNow) {
-          setAppUpdateState('restarting');
-          try {
-            const restartResult = await requestAppRestart();
-            await waitForAppRestart({
-              previousPid: restartResult?.pid ?? null,
-              previousStartedAt: restartResult?.startedAt ?? null,
-            });
-            if (typeof window !== 'undefined') {
-              window.location.reload();
-            }
-            return;
-          } catch (error) {
-            setAppUpdateError(error?.message || 'The update finished, but automatic restart failed. Restart the app manually.');
-            setAppUpdateState('error');
-            return;
-          }
-        }
+        setAppUpdateState('ready');
+        setAppUpdateRestartSheetOpen(true);
+        return;
       }
 
       setAppUpdateState('ready');
@@ -1031,15 +1023,19 @@ export default function SettingsModal() {
   }, [presetSheet]);
 
   useEffect(() => {
-    if (!presetSheet) return;
+    if (!presetSheet && !appUpdateRestartSheetOpen) return;
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        closePresetSheet();
+      if (event.key !== 'Escape') return;
+      if (presetSheet) {
+        setPresetSheet(null);
+        setPresetSheetValue('');
+        return;
       }
+      setAppUpdateRestartSheetOpen(false);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [presetSheet]);
+  }, [presetSheet, appUpdateRestartSheetOpen]);
 
   const coerceDirectModelToOpenRouter = (value) => {
     if (!value || !value.includes(':')) return value;
@@ -1098,6 +1094,29 @@ export default function SettingsModal() {
     setPresetSheet(null);
     setPresetSheetValue('');
   };
+
+  const closeAppUpdateRestartSheet = () => {
+    setAppUpdateRestartSheetOpen(false);
+  };
+
+  const handleConfirmAppRestart = useCallback(async () => {
+    setAppUpdateRestartSheetOpen(false);
+    setAppUpdateState('restarting');
+    setAppUpdateError('');
+    try {
+      const restartResult = await requestAppRestart();
+      await waitForAppRestart({
+        previousPid: restartResult?.pid ?? null,
+        previousStartedAt: restartResult?.startedAt ?? null,
+      });
+      if (typeof window !== 'undefined') {
+        window.location.reload();
+      }
+    } catch (error) {
+      setAppUpdateError(error?.message || 'The update finished, but automatic restart failed. Restart the app manually.');
+      setAppUpdateState('error');
+    }
+  }, []);
 
   const loadPresetValues = (preset) => {
     if (!preset?.models?.length) return;
@@ -1656,6 +1675,17 @@ export default function SettingsModal() {
                       title="Reload the frontend so the newly pulled UI files are used immediately."
                     >
                       Reload UI
+                    </button>
+                  )}
+                  {appUpdateFollowUp.allowRestart && (
+                    <button
+                      className="settings-btn-secondary"
+                      type="button"
+                      onClick={() => setAppUpdateRestartSheetOpen(true)}
+                      disabled={appUpdateState === 'restarting'}
+                      title="Open the in-app restart confirmation for this machine."
+                    >
+                      {appUpdateState === 'restarting' ? 'Restarting...' : 'Restart App'}
                     </button>
                   )}
                 </div>
@@ -2681,10 +2711,16 @@ export default function SettingsModal() {
         </div>
         {presetSheet && (
           <div className="settings-sheet-backdrop" onClick={closePresetSheet}>
-            <div className="settings-sheet glass-panel" onClick={(event) => event.stopPropagation()}>
+            <div
+              className="settings-sheet glass-panel"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label={presetSheet.title}
+            >
               <div className="settings-sheet-header">
                 <h3>{presetSheet.title}</h3>
-                <button className="settings-close" onClick={closePresetSheet}>
+                <button className="settings-close" type="button" onClick={closePresetSheet} aria-label={`Close ${presetSheet.title}`}>
                   <X size={16} />
                 </button>
               </div>
@@ -2720,6 +2756,58 @@ export default function SettingsModal() {
                     disabled={presetSheet.requiresValue && !String(presetSheetValue || '').trim()}
                   >
                     {presetSheet.confirmLabel}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        {appUpdateRestartSheetOpen && (
+          <div className="settings-sheet-backdrop" onClick={closeAppUpdateRestartSheet}>
+            <div
+              className="settings-sheet glass-panel"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Restart app confirmation"
+            >
+              <div className="settings-sheet-header">
+                <h3>Restart App</h3>
+                <button
+                  className="settings-close"
+                  type="button"
+                  onClick={closeAppUpdateRestartSheet}
+                  aria-label="Close restart confirmation"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <form
+                className="settings-sheet-body"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  handleConfirmAppRestart();
+                }}
+              >
+                <p className="settings-hint settings-sheet-text">
+                  This update changed backend code or dependencies on this machine. Restart the app now to finish loading the new version?
+                </p>
+                <div className="settings-sheet-actions">
+                  <button
+                    type="button"
+                    className="settings-btn-secondary"
+                    onClick={closeAppUpdateRestartSheet}
+                    disabled={appUpdateState === 'restarting'}
+                  >
+                    Not Now
+                  </button>
+                  <button
+                    type="submit"
+                    className="settings-btn-primary"
+                    autoFocus
+                    disabled={appUpdateState === 'restarting'}
+                  >
+                    {appUpdateState === 'restarting' ? 'Restarting...' : 'Restart Now'}
                   </button>
                 </div>
               </form>
