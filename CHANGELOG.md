@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Automatic updater restarts now wait for the previous backend to actually stop, retry replacement startup if it exits early, and write failures to `server/.restart.log` so a missed relaunch does not silently strand the UI behind proxy 500s
+
 ## [0.3.36] - 2026-04-12
 
 ### Added

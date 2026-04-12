@@ -129,7 +129,7 @@ export async function waitForAppRestart({
   }
 
   throw new OpenRouterError(
-    'The app did not come back online after the restart. Restart it manually.',
+    'The app did not come back online after the restart. Restart it manually and, if needed, inspect server/.restart.log on that machine.',
     504,
     'restart_timeout',
   );

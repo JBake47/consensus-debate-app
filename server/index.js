@@ -2742,7 +2742,7 @@ app.post('/api/update/restart', requireTrustedUpdateRequest, async (_req, res) =
   try {
     if (!appRestartPending) {
       appRestartPending = true;
-      scheduleSelfRestart();
+      scheduleSelfRestart({ previousStartedAt: SERVER_STARTED_AT });
       res.once('finish', scheduleAppRestartShutdown);
       res.once('close', scheduleAppRestartShutdown);
     }

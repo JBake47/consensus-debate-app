@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   AppRestartError,
+  buildRestartHelperScript,
   getSelfRestartArgs,
   scheduleSelfRestart,
 } from './restartManager.js';
@@ -33,6 +35,22 @@ runTest('getSelfRestartArgs fails when no restartable entrypoint is available', 
   );
 });
 
+runTest('buildRestartHelperScript is syntactically valid', () => {
+  const result = spawnSync(process.execPath, ['-e', buildRestartHelperScript()], {
+    env: {
+      ...process.env,
+      CONSENSUS_RESTART_ARGS: JSON.stringify([]),
+      CONSENSUS_RESTART_EXEC_ARGV: JSON.stringify([]),
+      CONSENSUS_RESTART_DELAY_MS: '0',
+    },
+    encoding: 'utf8',
+  });
+
+  assert.notEqual(result.status, null);
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+});
+
 runTest('scheduleSelfRestart spawns a detached helper with restart metadata', () => {
   const calls = [];
   let unrefCalled = false;
@@ -44,6 +62,8 @@ runTest('scheduleSelfRestart spawns a detached helper with restart metadata', ()
     cwd: 'C:\\repo',
     env: { FOO: 'bar' },
     delayMs: 900,
+    previousStartedAt: '2026-04-12T10:00:00.000Z',
+    logPath: 'C:\\repo\\server\\.restart.log',
     spawnImpl(command, args, options) {
       calls.push({ command, args, options });
       return {
@@ -75,6 +95,8 @@ runTest('scheduleSelfRestart spawns a detached helper with restart metadata', ()
   );
   assert.equal(calls[0].options.env.CONSENSUS_RESTART_CWD, 'C:\\repo');
   assert.equal(calls[0].options.env.CONSENSUS_RESTART_DELAY_MS, '900');
+  assert.equal(calls[0].options.env.CONSENSUS_RESTART_PREVIOUS_STARTED_AT, '2026-04-12T10:00:00.000Z');
+  assert.equal(calls[0].options.env.CONSENSUS_RESTART_LOG_PATH, 'C:\\repo\\server\\.restart.log');
 });
 
 // eslint-disable-next-line no-console

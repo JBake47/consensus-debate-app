@@ -6,3 +6,4 @@ nul
 .env.local
 .env.*.local
 server/.artifacts/
+server/.restart.log
