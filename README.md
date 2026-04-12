@@ -55,8 +55,8 @@ A React application with an optional Node proxy that can route requests to OpenR
 
 1. Clone the public repository:
 ```bash
-git clone https://github.com/JBake47/openrouter-debate-app.git
-cd openrouter-debate-app
+git clone https://github.com/JBake47/consensus-debate-app.git
+cd consensus-debate-app
 ```
 
 If you plan to contribute through a fork, clone your fork instead and open pull requests from there.
@@ -108,7 +108,7 @@ npm install
 If you are working from a fork, keep the main repository as `upstream` and pull from it:
 
 ```bash
-git remote add upstream https://github.com/JBake47/openrouter-debate-app.git
+git remote add upstream https://github.com/JBake47/consensus-debate-app.git
 git fetch upstream
 git checkout master
 git pull --ff-only upstream master
@@ -215,4 +215,4 @@ All rights reserved.
 
 ## Support
 
-For issues or questions, please [open an issue](https://github.com/JBake47/openrouter-debate-app/issues) on GitHub.
+For issues or questions, please [open an issue](https://github.com/JBake47/consensus-debate-app/issues) on GitHub.
