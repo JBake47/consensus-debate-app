@@ -1,10 +1,15 @@
 import { prepareConversationsForPersistence } from './conversationPersistence.js';
+import {
+  mergeConversationStoreSnapshots,
+  normalizeConversationStoreSnapshot,
+} from './conversationStoreSnapshot.js';
 
 const CONVERSATION_STORE_DB_NAME = 'consensus-conversations';
 const CONVERSATION_STORE_DB_VERSION = 1;
 const CONVERSATION_STORE_NAME = 'snapshots';
 const CONVERSATION_STORE_KEY = 'latest';
 const CONVERSATION_STORE_STRATEGIES = ['balanced', 'aggressive', 'minimal'];
+const CONVERSATION_STORE_LOCK_NAME = 'consensus-conversation-store';
 
 let conversationStoreDbPromise = null;
 let queuedPersistPromise = Promise.resolve();
@@ -30,14 +35,25 @@ function transactionToPromise(transaction) {
 }
 
 function normalizeSnapshot(snapshot, strategy = 'balanced') {
-  const conversations = Array.isArray(snapshot?.conversations) ? snapshot.conversations : [];
-  const activeConversationId = snapshot?.activeConversationId ?? null;
+  const normalized = normalizeConversationStoreSnapshot({
+    ...snapshot,
+    strategy,
+  });
   return {
     savedAt: Date.now(),
     strategy,
-    activeConversationId,
-    conversations,
+    activeConversationId: normalized.activeConversationId,
+    conversations: normalized.conversations,
+    deletedConversationTombstones: normalized.deletedConversationTombstones,
   };
+}
+
+async function withConversationStoreLock(task) {
+  const lockManager = globalThis.navigator?.locks;
+  if (!lockManager?.request) {
+    return task();
+  }
+  return lockManager.request(CONVERSATION_STORE_LOCK_NAME, { mode: 'exclusive' }, task);
 }
 
 async function openConversationStoreDb() {
@@ -84,7 +100,7 @@ async function readConversationSnapshot(db) {
   if (!snapshot || typeof snapshot !== 'object') {
     return null;
   }
-  return normalizeSnapshot(snapshot, snapshot.strategy || 'balanced');
+  return normalizeConversationStoreSnapshot(snapshot);
 }
 
 async function writeConversationSnapshot(db, snapshot) {
@@ -104,29 +120,39 @@ async function persistConversationSnapshot(snapshot) {
     };
   }
 
-  let lastError = null;
-  for (const strategy of CONVERSATION_STORE_STRATEGIES) {
-    try {
-      const preparedSnapshot = normalizeSnapshot({
-        ...snapshot,
-        conversations: prepareConversationsForPersistence(snapshot?.conversations, strategy),
-      }, strategy);
-      await writeConversationSnapshot(db, preparedSnapshot);
-      return {
-        ok: true,
-        strategy,
-        savedAt: preparedSnapshot.savedAt,
-      };
-    } catch (error) {
-      lastError = error;
-    }
-  }
+  return withConversationStoreLock(async () => {
+    let lastError = null;
 
-  return {
-    ok: false,
-    strategy: null,
-    error: lastError || new Error('Failed to persist conversation snapshot.'),
-  };
+    for (const strategy of CONVERSATION_STORE_STRATEGIES) {
+      try {
+        const latestSnapshot = await readConversationSnapshot(db);
+        const preparedIncomingSnapshot = normalizeSnapshot({
+          ...snapshot,
+          conversations: prepareConversationsForPersistence(snapshot?.conversations, strategy),
+        }, strategy);
+        const preparedSnapshot = normalizeSnapshot(
+          mergeConversationStoreSnapshots(latestSnapshot, preparedIncomingSnapshot),
+          strategy,
+        );
+
+        await writeConversationSnapshot(db, preparedSnapshot);
+        return {
+          ok: true,
+          strategy,
+          savedAt: preparedSnapshot.savedAt,
+          snapshot: preparedSnapshot,
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    return {
+      ok: false,
+      strategy: null,
+      error: lastError || new Error('Failed to persist conversation snapshot.'),
+    };
+  });
 }
 
 export async function loadConversationStoreSnapshot() {

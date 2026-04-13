@@ -293,11 +293,6 @@ export default function Sidebar({ open }) {
             </div>
             <div className="sidebar-item-meta">
               <span className="sidebar-item-date">{formatRelativeDate(conv.updatedAt)}</span>
-              {branchLineage?.parentLabel && (
-                <span className="sidebar-item-caption" title={branchLineage.tooltip}>
-                  {branchLineage.caption}
-                </span>
-              )}
             </div>
             {conversationRunning && (
               <span className="sidebar-item-running">

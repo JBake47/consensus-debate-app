@@ -191,15 +191,6 @@
   color: var(--text-muted);
 }
 
-.sidebar-item-caption {
-  font-size: 10px;
-  color: var(--text-tertiary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-item-running {
   display: inline-flex;
   align-items: center;

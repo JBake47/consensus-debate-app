@@ -56,6 +56,13 @@ import {
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
 import { loadConversationStoreSnapshot, queueConversationStorePersist } from '../lib/conversationStore.js';
 import {
+  addConversationDeletionTombstone,
+  buildConversationStoreSnapshotSignature,
+  mergeConversationStoreSnapshots,
+  normalizeDeletedConversationTombstones,
+  removeConversationDeletionTombstones,
+} from '../lib/conversationStoreSnapshot.js';
+import {
   buildConversationSnapshotWithoutLastTurn,
   createConversationHistoryBranch,
   shouldCreateConversationHistoryBranch,
@@ -110,6 +117,8 @@ const LIVE_RUN_TICK_INTERVAL_MS = 1000;
 const IDLE_CONVERSATION_PERSIST_DELAY_MS = 1200;
 const RESUME_RECOVERY_MIN_STALE_MS = 15000;
 const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1000;
+const CONVERSATION_STORE_SYNC_CHANNEL_NAME = 'consensus-conversation-store-sync-v1';
+const CONVERSATION_STORE_SYNC_STORAGE_KEY = 'consensus_conversation_store_sync_v1';
 const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE_SOURCE_USER]);
 const MODEL_UPGRADE_POLICIES_STORAGE_KEY = 'model_upgrade_policies';
 const MODEL_UPGRADE_NOTIFICATIONS_ENABLED_STORAGE_KEY = 'model_upgrade_notifications_enabled';
@@ -319,6 +328,40 @@ function saveToStorage(key, value) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // storage full or unavailable
+  }
+}
+
+function loadOptionalFromSessionStorage(key) {
+  try {
+    const stored = sessionStorage.getItem(key);
+    return stored == null ? undefined : JSON.parse(stored);
+  } catch {
+    return undefined;
+  }
+}
+
+function saveToSessionStorage(key, value) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage full or unavailable
+  }
+}
+
+function loadActiveConversationId() {
+  const sessionValue = loadOptionalFromSessionStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
+  if (sessionValue !== undefined) {
+    return sessionValue ?? null;
+  }
+  return loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY) ?? null;
+}
+
+function saveActiveConversationId(value) {
+  saveToSessionStorage(ACTIVE_CONVERSATION_STORAGE_KEY, value ?? null);
+  try {
+    localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+  } catch {
+    // ignore storage access failures
   }
 }
 
@@ -542,7 +585,7 @@ function migrateConversations(conversations, options = {}) {
   return { conversations: result, migrated };
 }
 
-const storedActiveConversationId = loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
+const storedActiveConversationId = loadActiveConversationId();
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
 const loadedRetryPolicy = normalizeRetryPolicy(loadFromStorage('retry_policy', DEFAULT_RETRY_POLICY));
@@ -612,6 +655,7 @@ const initialState = {
   metrics: loadedMetrics,
   conversations: [],
   activeConversationId: storedActiveConversationId ?? null,
+  deletedConversationTombstones: {},
   debateInProgress: false,
   showSettings: false,
   editingTurn: null,
@@ -1257,15 +1301,54 @@ function reducer(state, action) {
         ? action.payload.conversations
         : [];
       const { conversations } = migrateConversations(rawConversations);
+      const deletedConversationTombstones = normalizeDeletedConversationTombstones(
+        action.payload?.deletedConversationTombstones,
+      );
       const nextActiveConversationId = resolveInitialActiveConversationId(
         conversations,
         action.payload?.activeConversationId ?? state.activeConversationId ?? null,
       );
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, nextActiveConversationId);
+      saveActiveConversationId(nextActiveConversationId);
       return {
         ...state,
         conversations,
         activeConversationId: nextActiveConversationId,
+        deletedConversationTombstones,
+        conversationStoreStatus: 'ready',
+      };
+    }
+    case 'MERGE_CONVERSATION_STORE': {
+      const mergedSnapshot = mergeConversationStoreSnapshots({
+        conversations: state.conversations,
+        activeConversationId: state.activeConversationId,
+        deletedConversationTombstones: state.deletedConversationTombstones,
+      }, action.payload);
+      const { conversations } = migrateConversations(mergedSnapshot.conversations);
+      const nextActiveConversationId = resolveInitialActiveConversationId(
+        conversations,
+        state.activeConversationId ?? mergedSnapshot.activeConversationId ?? null,
+      );
+      const currentSignature = buildConversationStoreSnapshotSignature({
+        conversations: state.conversations,
+        activeConversationId: state.activeConversationId,
+        deletedConversationTombstones: state.deletedConversationTombstones,
+      });
+      const nextSignature = buildConversationStoreSnapshotSignature({
+        conversations,
+        activeConversationId: nextActiveConversationId,
+        deletedConversationTombstones: mergedSnapshot.deletedConversationTombstones,
+      });
+
+      if (currentSignature === nextSignature) {
+        return state;
+      }
+
+      saveActiveConversationId(nextActiveConversationId);
+      return {
+        ...state,
+        conversations,
+        activeConversationId: nextActiveConversationId,
+        deletedConversationTombstones: mergedSnapshot.deletedConversationTombstones,
         conversationStoreStatus: 'ready',
       };
     }
@@ -1273,7 +1356,7 @@ function reducer(state, action) {
       return { ...state, conversationStoreStatus: action.payload || 'ready' };
     }
     case 'SET_ACTIVE_CONVERSATION': {
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, action.payload ?? null);
+      saveActiveConversationId(action.payload ?? null);
       return {
         ...state,
         activeConversationId: action.payload,
@@ -1356,8 +1439,17 @@ function reducer(state, action) {
         turns: [],
       });
       const conversations = [conv, ...state.conversations];
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, conv.id);
-      return { ...state, conversations, activeConversationId: conv.id };
+      const deletedConversationTombstones = removeConversationDeletionTombstones(
+        state.deletedConversationTombstones,
+        [conv.id],
+      );
+      saveActiveConversationId(conv.id);
+      return {
+        ...state,
+        conversations,
+        activeConversationId: conv.id,
+        deletedConversationTombstones,
+      };
     }
     case 'ADD_CONVERSATION': {
       const conversation = action.payload?.conversation
@@ -1368,11 +1460,20 @@ function reducer(state, action) {
         conversation,
         ...state.conversations.filter((existingConversation) => existingConversation.id !== conversation.id),
       ];
+      const deletedConversationTombstones = removeConversationDeletionTombstones(
+        state.deletedConversationTombstones,
+        [conversation.id],
+      );
       if (action.payload?.setActive === false) {
-        return { ...state, conversations };
+        return { ...state, conversations, deletedConversationTombstones };
       }
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, conversation.id);
-      return { ...state, conversations, activeConversationId: conversation.id };
+      saveActiveConversationId(conversation.id);
+      return {
+        ...state,
+        conversations,
+        activeConversationId: conversation.id,
+        deletedConversationTombstones,
+      };
     }
     case 'ADD_TURN': {
       const convId = action.payload.conversationId || state.activeConversationId;
@@ -1660,12 +1761,23 @@ function reducer(state, action) {
       return { ...state, conversations };
     }
     case 'DELETE_CONVERSATION': {
+      const deletedAt = Date.now();
       const conversations = state.conversations.filter(c => c.id !== action.payload);
       const activeConversationId = state.activeConversationId === action.payload
         ? null
         : state.activeConversationId;
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, activeConversationId);
-      return { ...state, conversations, activeConversationId };
+      const deletedConversationTombstones = addConversationDeletionTombstone(
+        state.deletedConversationTombstones,
+        action.payload,
+        deletedAt,
+      );
+      saveActiveConversationId(activeConversationId);
+      return {
+        ...state,
+        conversations,
+        activeConversationId,
+        deletedConversationTombstones,
+      };
     }
     case 'IMPORT_CONVERSATIONS': {
       const imported = action.payload;
@@ -1674,7 +1786,11 @@ function reducer(state, action) {
       if (newConvs.length === 0) return state;
       const { conversations: migratedNew } = migrateConversations(newConvs);
       const conversations = [...migratedNew, ...state.conversations];
-      return { ...state, conversations };
+      const deletedConversationTombstones = removeConversationDeletionTombstones(
+        state.deletedConversationTombstones,
+        migratedNew.map((conversation) => conversation.id),
+      );
+      return { ...state, conversations, deletedConversationTombstones };
     }
     case 'RECOVER_INTERRUPTED_RUNS': {
       const conversationIds = Array.isArray(action.payload?.conversationIds)
@@ -1739,7 +1855,7 @@ function reducer(state, action) {
       );
 
       const conversations = [branchConversation, ...state.conversations];
-      saveToStorage(ACTIVE_CONVERSATION_STORAGE_KEY, branchConversationId);
+      saveActiveConversationId(branchConversationId);
       return { ...state, conversations, activeConversationId: branchConversationId };
     }
     case 'SET_DEBATE_IN_PROGRESS': {
@@ -1801,12 +1917,15 @@ export function DebateProvider({ children }) {
   const providerCircuitRef = useRef({});
   const conversationsRef = useRef(state.conversations);
   const activeConversationIdRef = useRef(state.activeConversationId);
+  const deletedConversationTombstonesRef = useRef(state.deletedConversationTombstones);
   const liveRunScopesRef = useRef([]);
   const lastConversationPersistAtRef = useRef(0);
   const lastRunHeartbeatAtRef = useRef(0);
   const lastModelCatalogRefreshAtRef = useRef(0);
   const recoveredInterruptedRunsRef = useRef(false);
   const metricsRef = useRef(state.metrics);
+  const conversationStoreSyncChannelRef = useRef(null);
+  const conversationStoreTabIdRef = useRef(createConversationId());
   const cacheStatsRef = useRef({
     cacheHitCount: state.cacheHitCount,
     cacheEntryCount: state.cacheEntryCount,
@@ -1846,7 +1965,7 @@ export function DebateProvider({ children }) {
         );
         const legacyActiveConversationId = resolveInitialActiveConversationId(
           migratedLegacy,
-          loadOptionalFromStorage(ACTIVE_CONVERSATION_STORAGE_KEY),
+          loadActiveConversationId(),
         );
 
         if (migratedLegacy.length > 0) {
@@ -1902,6 +2021,10 @@ export function DebateProvider({ children }) {
   }, [state.activeConversationId]);
 
   useLayoutEffect(() => {
+    deletedConversationTombstonesRef.current = state.deletedConversationTombstones;
+  }, [state.deletedConversationTombstones]);
+
+  useLayoutEffect(() => {
     liveRunScopesRef.current = liveRunScopes;
   }, [liveRunScopes]);
 
@@ -1916,6 +2039,31 @@ export function DebateProvider({ children }) {
     };
   }, [state.cacheHitCount, state.cacheEntryCount]);
 
+  const announceConversationStoreChange = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
+    const payload = {
+      sourceTabId: conversationStoreTabIdRef.current,
+      updatedAt: Date.now(),
+    };
+
+    const channel = conversationStoreSyncChannelRef.current;
+    if (channel) {
+      try {
+        channel.postMessage(payload);
+        return;
+      } catch {
+        // Fall back to storage events below.
+      }
+    }
+
+    try {
+      window.localStorage.setItem(CONVERSATION_STORE_SYNC_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage access failures
+    }
+  }, []);
+
   const persistConversationsFallbackNow = useCallback(() => {
     if (typeof window === 'undefined') return false;
     const result = persistConversationsSnapshot(
@@ -1925,9 +2073,10 @@ export function DebateProvider({ children }) {
     );
     if (result.ok) {
       lastConversationPersistAtRef.current = Date.now();
+      announceConversationStoreChange();
     }
     return result.ok;
-  }, []);
+  }, [announceConversationStoreChange]);
 
   const persistConversationsNow = useCallback(async () => {
     if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return false;
@@ -1935,16 +2084,82 @@ export function DebateProvider({ children }) {
     const result = await queueConversationStorePersist({
       conversations: conversationsRef.current,
       activeConversationId: activeConversationIdRef.current ?? null,
+      deletedConversationTombstones: deletedConversationTombstonesRef.current,
     });
 
     if (result?.ok) {
       lastConversationPersistAtRef.current = Date.now();
       window.localStorage.removeItem(CONVERSATIONS_STORAGE_KEY);
+      if (result.snapshot) {
+        dispatch({ type: 'MERGE_CONVERSATION_STORE', payload: result.snapshot });
+      }
+      announceConversationStoreChange();
       return true;
     }
 
     return persistConversationsFallbackNow();
-  }, [persistConversationsFallbackNow, state.conversationStoreStatus]);
+  }, [announceConversationStoreChange, dispatch, persistConversationsFallbackNow, state.conversationStoreStatus]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || state.conversationStoreStatus !== 'ready') return undefined;
+    let cancelled = false;
+
+    const mergeConversationStoreFromDisk = async () => {
+      const snapshot = await loadConversationStoreSnapshot();
+      if (cancelled || !snapshot) return;
+      dispatch({ type: 'MERGE_CONVERSATION_STORE', payload: snapshot });
+    };
+
+    const handleExternalStoreSignal = (payload) => {
+      if (payload?.sourceTabId && payload.sourceTabId === conversationStoreTabIdRef.current) {
+        return;
+      }
+      mergeConversationStoreFromDisk();
+    };
+
+    let channel = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(CONVERSATION_STORE_SYNC_CHANNEL_NAME);
+      conversationStoreSyncChannelRef.current = channel;
+      channel.onmessage = (event) => {
+        handleExternalStoreSignal(event?.data || null);
+      };
+    }
+
+    const handleStorage = (event) => {
+      if (event.key !== CONVERSATION_STORE_SYNC_STORAGE_KEY || !event.newValue) {
+        return;
+      }
+      try {
+        handleExternalStoreSignal(JSON.parse(event.newValue));
+      } catch {
+        // ignore malformed sync payloads
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        mergeConversationStoreFromDisk();
+      }
+    };
+
+    if (!channel) {
+      window.addEventListener('storage', handleStorage);
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (!channel) {
+        window.removeEventListener('storage', handleStorage);
+      }
+      if (conversationStoreSyncChannelRef.current === channel) {
+        conversationStoreSyncChannelRef.current = null;
+      }
+      channel?.close();
+    };
+  }, [dispatch, state.conversationStoreStatus]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

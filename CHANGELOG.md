@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-04-13
+
+### Added
+- Conversation history now syncs across tabs with snapshot merging and deletion tombstones so chats created elsewhere appear without clobbering local work
+
+### Changed
+- Active chat selection is now tracked per tab, and sidebar branch lineage uses a more compact badge treatment
+
 ### Fixed
 - Automatic updater restarts now wait for the previous backend to actually stop, retry replacement startup if it exits early, and write failures to `server/.restart.log` so a missed relaunch does not silently strand the UI behind proxy 500s
 - Restart-required updates now ask for confirmation with an in-app dialog and keep a restart action available in Settings if you choose not to restart immediately
+- Concurrent conversation saves no longer overwrite chats created in another tab or resurrect chats that were deleted elsewhere
 
 ## [0.3.36] - 2026-04-12
 
