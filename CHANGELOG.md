@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Creating a new chat while another chat is still running no longer reselects or interrupts the live chat during snapshot sync or startup hydration, and active chat selection now stays scoped to the current tab
+
 ## [0.3.37] - 2026-04-13
 
 ### Added

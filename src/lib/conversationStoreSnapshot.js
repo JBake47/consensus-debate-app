@@ -118,6 +118,30 @@ function sortMergedConversations(left, right) {
   return normalizeConversationId(left?.id).localeCompare(normalizeConversationId(right?.id));
 }
 
+function resolveMergedActiveConversationId(base, incoming, validConversationIds) {
+  const preferIncoming = incoming.savedAt >= base.savedAt;
+  const primaryActiveConversationId = preferIncoming
+    ? incoming.activeConversationId
+    : base.activeConversationId;
+  const fallbackActiveConversationId = preferIncoming
+    ? base.activeConversationId
+    : incoming.activeConversationId;
+
+  if (primaryActiveConversationId === null) {
+    return null;
+  }
+  if (validConversationIds.has(primaryActiveConversationId)) {
+    return primaryActiveConversationId;
+  }
+  if (fallbackActiveConversationId === null) {
+    return null;
+  }
+  if (validConversationIds.has(fallbackActiveConversationId)) {
+    return fallbackActiveConversationId;
+  }
+  return null;
+}
+
 export function normalizeConversationStoreSnapshot(snapshot) {
   const conversations = Array.isArray(snapshot?.conversations)
     ? snapshot.conversations.filter((conversation) => normalizeConversationId(conversation?.id))
@@ -191,10 +215,11 @@ export function mergeConversationStoreSnapshots(baseSnapshot, incomingSnapshot) 
     .sort(sortMergedConversations);
 
   const validConversationIds = new Set(conversations.map((conversation) => normalizeConversationId(conversation.id)));
-  const activeCandidates = incoming.savedAt >= base.savedAt
-    ? [incoming.activeConversationId, base.activeConversationId]
-    : [base.activeConversationId, incoming.activeConversationId];
-  const activeConversationId = activeCandidates.find((conversationId) => validConversationIds.has(conversationId)) || null;
+  const activeConversationId = resolveMergedActiveConversationId(
+    base,
+    incoming,
+    validConversationIds,
+  );
 
   return {
     savedAt: Math.max(base.savedAt, incoming.savedAt),

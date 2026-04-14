@@ -91,6 +91,7 @@ import {
   isLiveStatus,
   recoverInterruptedTurnState,
   resolveInitialActiveConversationId,
+  resolvePreferredActiveConversationId,
 } from '../lib/conversationRecovery';
 
 const DebateActionContext = createContext(null);
@@ -1304,9 +1305,10 @@ function reducer(state, action) {
       const deletedConversationTombstones = normalizeDeletedConversationTombstones(
         action.payload?.deletedConversationTombstones,
       );
-      const nextActiveConversationId = resolveInitialActiveConversationId(
+      const nextActiveConversationId = resolvePreferredActiveConversationId(
         conversations,
-        action.payload?.activeConversationId ?? state.activeConversationId ?? null,
+        state.activeConversationId,
+        action.payload?.activeConversationId,
       );
       saveActiveConversationId(nextActiveConversationId);
       return {
@@ -1324,9 +1326,10 @@ function reducer(state, action) {
         deletedConversationTombstones: state.deletedConversationTombstones,
       }, action.payload);
       const { conversations } = migrateConversations(mergedSnapshot.conversations);
-      const nextActiveConversationId = resolveInitialActiveConversationId(
+      const nextActiveConversationId = resolvePreferredActiveConversationId(
         conversations,
-        state.activeConversationId ?? mergedSnapshot.activeConversationId ?? null,
+        state.activeConversationId,
+        mergedSnapshot.activeConversationId,
       );
       const currentSignature = buildConversationStoreSnapshotSignature({
         conversations: state.conversations,

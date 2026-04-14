@@ -5,6 +5,7 @@ import {
   getResumeRecoveryConversationIds,
   recoverInterruptedTurnState,
   resolveInitialActiveConversationId,
+  resolvePreferredActiveConversationId,
 } from './conversationRecovery.js';
 
 function runTest(name, fn) {
@@ -224,6 +225,32 @@ runTest('pending final synthesis stays recoverable after model rounds finish', (
   assert.equal(recoveredTurn.synthesis.status, 'error');
   assert.equal(recoveredTurn.synthesis.error, 'Run interrupted before completion.');
   assert.equal(recoveredTurn.debateMetadata.terminationReason, 'interrupted');
+});
+
+runTest('resolvePreferredActiveConversationId preserves explicit new-chat selection and falls back when needed', () => {
+  const conversations = [
+    { id: 'conv-a', turns: [] },
+    { id: 'conv-b', turns: [] },
+  ];
+
+  assert.equal(resolvePreferredActiveConversationId(conversations, null, 'conv-a'), null);
+  assert.equal(resolvePreferredActiveConversationId(conversations, 'conv-b', null), 'conv-b');
+  assert.equal(resolvePreferredActiveConversationId(conversations, 'missing', 'conv-b'), 'conv-b');
+  assert.equal(resolvePreferredActiveConversationId(conversations, 'missing', undefined), 'conv-a');
+});
+
+runTest('explicit new-chat selection does not clear live runs from other conversations', () => {
+  const conversations = createConversationFixture();
+
+  assert.equal(resolvePreferredActiveConversationId(conversations, null, 'conv-live'), null);
+  assert.deepEqual(getLiveConversationRunScopes(conversations), [
+    {
+      conversationId: 'conv-live',
+      turnId: 'turn-live',
+      runId: 'run-live',
+    },
+  ]);
+  assert.equal(conversations[0].turns[0].activeRunId, 'run-live');
 });
 
 // eslint-disable-next-line no-console

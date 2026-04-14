@@ -117,6 +117,33 @@ runTest('mergeConversationStoreSnapshots keeps a newer recreation over an older 
   );
 });
 
+runTest('mergeConversationStoreSnapshots preserves a newer explicit blank-chat selection', () => {
+  const merged = mergeConversationStoreSnapshots(
+    {
+      savedAt: 4_000,
+      activeConversationId: 'conv-a',
+      conversations: [
+        createConversation('conv-a', { updatedAt: 4_000 }),
+        createConversation('conv-b', { updatedAt: 3_500 }),
+      ],
+    },
+    {
+      savedAt: 5_000,
+      activeConversationId: null,
+      conversations: [
+        createConversation('conv-a', { updatedAt: 4_000 }),
+        createConversation('conv-b', { updatedAt: 5_000 }),
+      ],
+    },
+  );
+
+  assert.equal(merged.activeConversationId, null);
+  assert.deepEqual(
+    merged.conversations.map((conversation) => conversation.id),
+    ['conv-b', 'conv-a'],
+  );
+});
+
 runTest('conversation deletion tombstones can be removed when a chat is reintroduced', () => {
   const tombstones = addConversationDeletionTombstone({}, 'conv-a', 8_000);
   const next = removeConversationDeletionTombstones(tombstones, ['conv-a']);

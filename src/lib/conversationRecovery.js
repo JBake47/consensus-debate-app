@@ -246,16 +246,23 @@ export function getResumeRecoveryConversationIds(conversations, options = {}) {
 }
 
 export function resolveInitialActiveConversationId(conversations, storedActiveConversationId) {
+  return resolvePreferredActiveConversationId(conversations, storedActiveConversationId);
+}
+
+export function resolvePreferredActiveConversationId(conversations, ...candidates) {
   const items = Array.isArray(conversations) ? conversations : [];
+  const conversationIds = new Set(
+    items
+      .map((conversation) => String(conversation?.id || '').trim())
+      .filter(Boolean),
+  );
 
-  if (storedActiveConversationId === null) {
-    return null;
-  }
-
-  if (typeof storedActiveConversationId === 'string' && storedActiveConversationId) {
-    const exists = items.some((conversation) => conversation.id === storedActiveConversationId);
-    if (exists) {
-      return storedActiveConversationId;
+  for (const candidate of candidates) {
+    if (candidate === null) {
+      return null;
+    }
+    if (typeof candidate === 'string' && candidate && conversationIds.has(candidate)) {
+      return candidate;
     }
   }
 
