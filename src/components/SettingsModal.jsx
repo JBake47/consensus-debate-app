@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, Sun, Download } from 'lucide-react';
+import { X, Key, Cpu, Sparkles, Plus, Trash2, RotateCcw, GitCompareArrows, Globe, Shield, DollarSign, Wand2, Gauge, Database, Activity, Sun, Download, Upload } from 'lucide-react';
 import { useDebateActions, useDebateSettings, useDebateUi } from '../context/DebateContext';
 import {
   DEFAULT_DEBATE_MODELS,
@@ -31,8 +31,10 @@ import { DEFAULT_THEME_MODE } from '../lib/theme';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload';
 import {
   buildUniquePresetName,
+  parseModelPresetImportText,
   presetMatchesDraft,
   resolvePresetSelection,
+  serializeModelPresetExport,
 } from '../lib/modelPresets';
 import ModelPickerModal from './ModelPickerModal';
 import InfoTip from './InfoTip';
@@ -187,6 +189,19 @@ function saveLastModelPresetId(presetId) {
   } catch {
     // Presets still work when storage is unavailable; only the remembered editor target is skipped.
   }
+}
+
+function downloadTextFile(content, filename, mimeType = 'text/plain') {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function arraysEqual(left, right) {
@@ -375,6 +390,7 @@ export default function SettingsModal() {
   const [presetNameInput, setPresetNameInput] = useState('');
   const [presetSheet, setPresetSheet] = useState(null);
   const [presetSheetValue, setPresetSheetValue] = useState('');
+  const [presetTransferNotice, setPresetTransferNotice] = useState(null);
   const [appUpdateRestartSheetOpen, setAppUpdateRestartSheetOpen] = useState(false);
   const [synthProvider, setSynthProvider] = useState('openrouter');
   const [convProvider, setConvProvider] = useState('openrouter');
@@ -386,6 +402,7 @@ export default function SettingsModal() {
   const [activeSettingsPane, setActiveSettingsPane] = useState('general');
   const [focusedSettingsTargetKey, setFocusedSettingsTargetKey] = useState('');
   const presetSheetInputRef = useRef(null);
+  const presetImportInputRef = useRef(null);
   const presetEditorScopeRef = useRef('');
   const presetSelectionInitializedRef = useRef(false);
   const liveApplyReadyRef = useRef(false);
@@ -1109,6 +1126,12 @@ export default function SettingsModal() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [presetSheet, appUpdateRestartSheetOpen]);
 
+  useEffect(() => {
+    if (!presetTransferNotice) return undefined;
+    const timer = window.setTimeout(() => setPresetTransferNotice(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [presetTransferNotice]);
+
   const coerceDirectModelToOpenRouter = (value) => {
     if (!value || !value.includes(':')) return value;
     const [prefix, rest] = value.split(':');
@@ -1353,6 +1376,71 @@ export default function SettingsModal() {
       presetEditorScopeRef.current = '';
       saveLastModelPresetId('');
       closePresetSheet();
+    }
+  };
+
+  const handleExportPresets = () => {
+    if (!modelPresets.length) return;
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    downloadTextFile(
+      serializeModelPresetExport(modelPresets),
+      `consensus-model-presets-${dateStamp}.json`,
+      'application/json',
+    );
+    setPresetTransferNotice({
+      tone: 'success',
+      message: `Exported ${modelPresets.length} preset${modelPresets.length === 1 ? '' : 's'}.`,
+    });
+  };
+
+  const openImportPresets = () => {
+    presetImportInputRef.current?.click();
+  };
+
+  const handleImportPresets = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const result = parseModelPresetImportText(await file.text(), { existingPresets: modelPresets });
+      if (result.presets.length === 0) {
+        setPresetTransferNotice({
+          tone: 'error',
+          message: result.skippedCount > 0
+            ? `No valid presets found. Skipped ${result.skippedCount} invalid entr${result.skippedCount === 1 ? 'y' : 'ies'}.`
+            : 'No valid presets found in that file.',
+        });
+        return;
+      }
+
+      [...result.presets].reverse().forEach((preset) => {
+        dispatch({
+          type: 'ADD_MODEL_PRESET',
+          payload: {
+            id: createPresetId(),
+            ...preset,
+          },
+        });
+      });
+
+      const details = [];
+      if (result.renamedCount > 0) {
+        details.push(`renamed ${result.renamedCount} duplicate${result.renamedCount === 1 ? '' : 's'}`);
+      }
+      if (result.skippedCount > 0) {
+        details.push(`skipped ${result.skippedCount} invalid entr${result.skippedCount === 1 ? 'y' : 'ies'}`);
+      }
+      setPresetTransferNotice({
+        tone: result.skippedCount > 0 ? 'warning' : 'success',
+        message: `Imported ${result.presets.length} preset${result.presets.length === 1 ? '' : 's'}${details.length ? ` (${details.join(', ')})` : ''}.`,
+      });
+    } catch (error) {
+      setPresetTransferNotice({
+        tone: 'error',
+        message: error?.message || 'Failed to import presets.',
+      });
+    } finally {
+      event.target.value = '';
     }
   };
 
@@ -1979,8 +2067,46 @@ export default function SettingsModal() {
                 </div>
               </div>
 
+              <div className="preset-transfer-row">
+                <button
+                  type="button"
+                  className="settings-btn-secondary preset-transfer-button"
+                  onClick={handleExportPresets}
+                  disabled={modelPresets.length === 0}
+                  title="Download all saved model presets as a JSON file."
+                >
+                  <Download size={14} />
+                  Export Presets
+                </button>
+                <button
+                  type="button"
+                  className="settings-btn-secondary preset-transfer-button"
+                  onClick={openImportPresets}
+                  title="Import model presets from a Consensus preset JSON file."
+                >
+                  <Upload size={14} />
+                  Import Presets
+                </button>
+                <input
+                  ref={presetImportInputRef}
+                  className="preset-import-input"
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportPresets}
+                />
+              </div>
+
+              {presetTransferNotice && (
+                <p
+                  className={`preset-transfer-notice is-${presetTransferNotice.tone}`}
+                  role={presetTransferNotice.tone === 'error' ? 'alert' : 'status'}
+                >
+                  {presetTransferNotice.message}
+                </p>
+              )}
+
               <p className="settings-hint">
-                Loaded presets stay selected while you tweak settings. Use New Preset when you want a separate preset instead of updating the loaded one.
+                Loaded presets stay selected while you tweak settings. Use New Preset when you want a separate preset instead of updating the loaded one. Export and import use JSON files that contain only model preset settings.
               </p>
             </div>
           </div>

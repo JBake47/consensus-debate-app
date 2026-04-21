@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.41] - 2026-04-21
+
+### Added
+- Model presets can now be exported to and imported from JSON files, with validation, duplicate-name renaming, invalid-entry reporting, and import/export status feedback in Settings
+
 ## [0.3.40] - 2026-04-21
 
 ### Changed
