@@ -29,11 +29,17 @@ import {
 } from '../lib/modelStats';
 import { DEFAULT_THEME_MODE } from '../lib/theme';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload';
+import {
+  buildUniquePresetName,
+  presetMatchesDraft,
+  resolvePresetSelection,
+} from '../lib/modelPresets';
 import ModelPickerModal from './ModelPickerModal';
 import InfoTip from './InfoTip';
 import './SettingsModal.css';
 
 const DEFAULT_CONVERGENCE_ON_FINAL_ROUND = true;
+const LAST_MODEL_PRESET_ID_STORAGE_KEY = 'last_model_preset_id';
 const SETTINGS_PANE_HELP = {
   general: 'Browser-local setup like provider credentials, theme, and app maintenance.',
   models: 'Choose who debates, how many rounds they run, who synthesizes, who checks convergence, and which model handles web search.',
@@ -157,42 +163,30 @@ function ModelStatsHoverCard({
   );
 }
 
-function presetMatchesDraft(preset, draft) {
-  if (!preset || !draft) return false;
-  const presetModels = Array.isArray(preset.models) ? preset.models : [];
-  const draftModels = Array.isArray(draft.models) ? draft.models : [];
-  if (presetModels.length !== draftModels.length) return false;
-  for (let index = 0; index < presetModels.length; index += 1) {
-    if (presetModels[index] !== draftModels[index]) return false;
-  }
-  return (
-    String(preset.synthesizerModel || '') === String(draft.synthesizerModel || '')
-    && String(preset.convergenceModel || '') === String(draft.convergenceModel || '')
-    && String(preset.webSearchModel || '') === String(draft.webSearchModel || '')
-    && Number(preset.maxDebateRounds || 0) === Number(draft.maxDebateRounds || 0)
-  );
-}
-
-function buildUniquePresetName(baseName, presets, excludeId = null) {
-  const root = String(baseName || 'New Preset').trim() || 'New Preset';
-  const existing = new Set(
-    (presets || [])
-      .filter((preset) => preset?.id !== excludeId)
-      .map((preset) => String(preset?.name || '').trim().toLowerCase())
-      .filter(Boolean)
-  );
-  if (!existing.has(root.toLowerCase())) return root;
-  let index = 2;
-  let candidate = `${root} ${index}`;
-  while (existing.has(candidate.toLowerCase())) {
-    index += 1;
-    candidate = `${root} ${index}`;
-  }
-  return candidate;
-}
-
 function createPresetId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadLastModelPresetId() {
+  try {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(LAST_MODEL_PRESET_ID_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveLastModelPresetId(presetId) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (presetId) {
+      window.localStorage.setItem(LAST_MODEL_PRESET_ID_STORAGE_KEY, presetId);
+    } else {
+      window.localStorage.removeItem(LAST_MODEL_PRESET_ID_STORAGE_KEY);
+    }
+  } catch {
+    // Presets still work when storage is unavailable; only the remembered editor target is skipped.
+  }
 }
 
 function arraysEqual(left, right) {
@@ -393,6 +387,7 @@ export default function SettingsModal() {
   const [focusedSettingsTargetKey, setFocusedSettingsTargetKey] = useState('');
   const presetSheetInputRef = useRef(null);
   const presetEditorScopeRef = useRef('');
+  const presetSelectionInitializedRef = useRef(false);
   const liveApplyReadyRef = useRef(false);
   const synthEditingRef = useRef(false);
   const convEditingRef = useRef(false);
@@ -734,6 +729,13 @@ export default function SettingsModal() {
     maxDebateRounds: Number.isFinite(Number(maxRounds)) ? Number(maxRounds) : 0,
     webSearchModel: normalizeModelForProvider(searchProvider, searchModel) || searchModel,
   }), [models, synthProvider, synth, convProvider, convModel, maxRounds, searchProvider, searchModel]);
+  const savedSettingsPresetSnapshot = useMemo(() => ({
+    models: selectedModels,
+    synthesizerModel,
+    convergenceModel,
+    maxDebateRounds: Number.isFinite(Number(maxDebateRounds)) ? Number(maxDebateRounds) : 0,
+    webSearchModel,
+  }), [selectedModels, synthesizerModel, convergenceModel, maxDebateRounds, webSearchModel]);
   const selectedPreset = useMemo(
     () => modelPresets.find((preset) => preset.id === selectedPresetId) || null,
     [modelPresets, selectedPresetId]
@@ -760,8 +762,10 @@ export default function SettingsModal() {
       ? 'is-modified'
       : 'is-match'
     : 'is-custom';
-  const presetStatusLabel = selectedPreset ? 'Editing Saved Preset' : 'Custom Draft';
-  let presetStatusMessage = 'This configuration is not saved as a preset yet.';
+  const presetStatusLabel = selectedPreset ? 'Loaded Preset' : 'New Preset Draft';
+  let presetStatusMessage = activePresetMatch
+    ? `Current settings match "${activePresetMatch.name}". Load that preset to edit it, or enter a new name to save a separate preset.`
+    : 'Enter a name to save the current settings as a new preset.';
   if (selectedPreset && selectedPresetHasUnsavedChanges) {
     if (selectedPresetIsModified && activePresetMatch && activePresetMatch.id !== selectedPreset.id) {
       presetStatusMessage = `Current settings match "${activePresetMatch.name}" instead of "${selectedPreset.name}".`;
@@ -1041,20 +1045,24 @@ export default function SettingsModal() {
   }, [providerOptions, newModelProvider]);
 
   useEffect(() => {
-    if (!showSettings) return;
-    setSelectedPresetId((current) => {
-      if (current && modelPresets.some((preset) => preset.id === current)) return current;
-      return activePresetMatch?.id || '';
-    });
-  }, [showSettings, modelPresets, activePresetMatch]);
+    if (!showSettings) {
+      presetSelectionInitializedRef.current = false;
+      return;
+    }
 
-  useEffect(() => {
-    if (!showSettings) return;
-    if (!activePresetMatch) return;
-    if (selectedPreset && selectedPresetIsModified) return;
-    if (selectedPresetId === activePresetMatch.id) return;
-    setSelectedPresetId(activePresetMatch.id);
-  }, [showSettings, activePresetMatch, selectedPreset, selectedPresetIsModified, selectedPresetId]);
+    const wasInitialized = presetSelectionInitializedRef.current;
+    presetSelectionInitializedRef.current = true;
+
+    setSelectedPresetId((current) => {
+      return resolvePresetSelection({
+        currentPresetId: current,
+        initialized: wasInitialized,
+        modelPresets,
+        rememberedPresetId: loadLastModelPresetId(),
+        savedSettingsSnapshot: savedSettingsPresetSnapshot,
+      });
+    });
+  }, [showSettings, modelPresets, savedSettingsPresetSnapshot]);
 
   useEffect(() => {
     if (!showSettings) {
@@ -1064,7 +1072,7 @@ export default function SettingsModal() {
 
     const scopeKey = selectedPreset
       ? `preset:${selectedPreset.id}:${selectedPreset.name}`
-      : `custom:${activePresetMatch?.id || 'none'}`;
+      : 'custom:new';
 
     if (presetEditorScopeRef.current === scopeKey) return;
     presetEditorScopeRef.current = scopeKey;
@@ -1074,12 +1082,8 @@ export default function SettingsModal() {
       return;
     }
 
-    setPresetNameInput(
-      activePresetMatch?.name
-        ? buildUniquePresetName(`${activePresetMatch.name} Copy`, modelPresets)
-        : buildUniquePresetName('New Preset', modelPresets)
-    );
-  }, [showSettings, selectedPreset, activePresetMatch, modelPresets]);
+    setPresetNameInput('');
+  }, [showSettings, selectedPreset]);
 
   useEffect(() => {
     if (!presetSheet?.requiresValue) return;
@@ -1199,14 +1203,25 @@ export default function SettingsModal() {
   };
 
   const applyPreset = (preset) => {
+    if (!preset) return;
     loadPresetValues(preset);
     setSelectedPresetId(preset.id);
+    setPresetNameInput(preset.name || '');
+    presetEditorScopeRef.current = '';
+    saveLastModelPresetId(preset.id);
+  };
+
+  const startNewPresetDraft = () => {
+    setSelectedPresetId('');
+    setPresetNameInput('');
+    presetEditorScopeRef.current = '';
+    closePresetSheet();
   };
 
   const handlePresetSelection = (event) => {
     const nextId = event.target.value;
     if (!nextId) {
-      setSelectedPresetId('');
+      startNewPresetDraft();
       return;
     }
     const preset = modelPresets.find((entry) => entry.id === nextId);
@@ -1239,7 +1254,8 @@ export default function SettingsModal() {
 
   const handleCreatePreset = () => {
     if (!trimmedPresetNameInput) return;
-    const payload = buildPresetPayload(buildUniquePresetName(trimmedPresetNameInput, modelPresets));
+    const uniqueName = buildUniquePresetName(trimmedPresetNameInput, modelPresets);
+    const payload = buildPresetPayload(uniqueName);
     if (!payload) return;
     const nextId = createPresetId();
     dispatch({
@@ -1250,11 +1266,15 @@ export default function SettingsModal() {
       },
     });
     setSelectedPresetId(nextId);
+    setPresetNameInput(payload.name);
+    presetEditorScopeRef.current = '';
+    saveLastModelPresetId(nextId);
   };
 
   const handleSavePresetEdits = () => {
     if (!selectedPreset || !trimmedPresetNameInput) return;
-    const payload = buildPresetPayload(buildUniquePresetName(trimmedPresetNameInput, modelPresets, selectedPreset.id));
+    const uniqueName = buildUniquePresetName(trimmedPresetNameInput, modelPresets, selectedPreset.id);
+    const payload = buildPresetPayload(uniqueName);
     if (!payload) return;
     dispatch({
       type: 'UPDATE_MODEL_PRESET',
@@ -1263,6 +1283,8 @@ export default function SettingsModal() {
         ...payload,
       },
     });
+    setPresetNameInput(payload.name);
+    saveLastModelPresetId(selectedPreset.id);
   };
 
   const handleRevertPreset = () => {
@@ -1277,9 +1299,9 @@ export default function SettingsModal() {
   const openSaveAsPresetSheet = () => {
     setPresetSheet({
       mode: 'save-as',
-      title: 'Save Copy',
-      confirmLabel: 'Save Copy',
-      description: 'Create a new preset from the current settings.',
+      title: 'Save as New Preset',
+      confirmLabel: 'Create Preset',
+      description: 'Create a separate preset from the current settings without changing the loaded preset.',
       requiresValue: true,
     });
     setPresetSheetValue(suggestPresetCopyName());
@@ -1304,7 +1326,8 @@ export default function SettingsModal() {
     if (presetSheet.mode === 'save-as') {
       const trimmedName = String(presetSheetValue || '').trim();
       if (!trimmedName) return;
-      const payload = buildPresetPayload(buildUniquePresetName(trimmedName, modelPresets));
+      const uniqueName = buildUniquePresetName(trimmedName, modelPresets);
+      const payload = buildPresetPayload(uniqueName);
       if (!payload) return;
       const nextId = createPresetId();
       dispatch({
@@ -1315,6 +1338,9 @@ export default function SettingsModal() {
         },
       });
       setSelectedPresetId(nextId);
+      setPresetNameInput(payload.name);
+      presetEditorScopeRef.current = '';
+      saveLastModelPresetId(nextId);
       closePresetSheet();
       return;
     }
@@ -1323,6 +1349,9 @@ export default function SettingsModal() {
       if (!selectedPreset) return;
       dispatch({ type: 'DELETE_MODEL_PRESET', payload: selectedPreset.id });
       setSelectedPresetId('');
+      setPresetNameInput('');
+      presetEditorScopeRef.current = '';
+      saveLastModelPresetId('');
       closePresetSheet();
     }
   };
@@ -1397,9 +1426,7 @@ export default function SettingsModal() {
     setThemeSelection(themeMode || DEFAULT_THEME_MODE);
     setRememberKey(rememberApiKey);
     setDebouncedKeyInput(apiKey.trim());
-    setPresetNameInput('');
     closePresetSheet();
-    setSelectedPresetId('');
     if (!synthEditingRef.current) setSynthProvider(getDirectProviderFromValue(synthesizerModel));
     if (!convEditingRef.current) setConvProvider(getDirectProviderFromValue(convergenceModel));
     if (!searchEditingRef.current) setSearchProvider(getDirectProviderFromValue(webSearchModel));
@@ -1818,7 +1845,7 @@ export default function SettingsModal() {
                   label="Model presets help"
                   content={[
                     'Presets save the current debate roster plus the synthesis, convergence, search, and rounds settings below.',
-                    'Loading a preset applies it immediately, and saving writes the current draft back into your preset library.',
+                    'The loaded preset stays selected while you edit. Use New Preset when you want a separate draft.',
                   ]}
                 />
               </span>
@@ -1826,20 +1853,31 @@ export default function SettingsModal() {
             <div className="preset-selector-card">
               <div className="preset-picker-row">
                 <label className="preset-inline-field">
-                  <span className="settings-sub-label">Loaded preset</span>
-                  <select
-                    className="settings-input settings-select preset-selector-input"
-                    value={selectedPresetId}
-                    onChange={handlePresetSelection}
-                    title="Load a saved model configuration. Choosing one applies it immediately."
-                  >
-                    <option value="">Unsaved Draft</option>
-                    {modelPresets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="settings-sub-label">Preset context</span>
+                  <div className="preset-select-control">
+                    <select
+                      className="settings-input settings-select preset-selector-input"
+                      value={selectedPresetId}
+                      onChange={handlePresetSelection}
+                      title="Load a saved model configuration. Choosing one applies it immediately."
+                    >
+                      <option value="">New preset draft</option>
+                      {modelPresets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="settings-btn-secondary preset-new-button"
+                      onClick={startNewPresetDraft}
+                      title="Start a separate preset draft from the current settings."
+                    >
+                      <Plus size={14} />
+                      New Preset
+                    </button>
+                  </div>
                 </label>
                 <div className={`preset-status ${presetStatusClassName}`}>
                   <span className="preset-status-label">{presetStatusLabel}</span>
@@ -1850,14 +1888,14 @@ export default function SettingsModal() {
               <div className="preset-editor-card">
                 <div className="preset-editor-header">
                   <div className="preset-editor-copy">
-                    <span className="settings-sub-label">{selectedPreset ? 'Edit Preset' : 'Create Preset'}</span>
-                    <strong>{selectedPreset ? selectedPreset.name : 'Save the current configuration'}</strong>
+                    <span className="settings-sub-label">{selectedPreset ? 'Edit Loaded Preset' : 'Create New Preset'}</span>
+                    <strong>{selectedPreset ? selectedPreset.name : 'New preset draft'}</strong>
                   </div>
                   <span className="preset-editor-summary">{presetDraftSummary}</span>
                 </div>
 
                 <label className="preset-inline-field">
-                  <span className="settings-sub-label">Preset name</span>
+                  <span className="settings-sub-label">{selectedPreset ? 'Preset name' : 'New preset name'}</span>
                   <input
                     type="text"
                     className="settings-input"
@@ -1879,7 +1917,7 @@ export default function SettingsModal() {
                         disabled={!canSaveSelectedPreset}
                         title="Overwrite the selected preset with the configuration currently shown below."
                       >
-                        Save Changes
+                        Update Preset
                       </button>
                       <button
                         type="button"
@@ -1896,7 +1934,7 @@ export default function SettingsModal() {
                         onClick={openSaveAsPresetSheet}
                         title="Save this draft as a new preset without changing the original."
                       >
-                        Save Copy...
+                        Save as New...
                       </button>
                       <button
                         type="button"
@@ -1916,8 +1954,18 @@ export default function SettingsModal() {
                         disabled={!canCreatePreset}
                         title="Save the current models and supporting settings as a new preset."
                       >
-                        Create Preset
+                        Create New Preset
                       </button>
+                      {activePresetMatch && (
+                        <button
+                          type="button"
+                          className="settings-btn-secondary"
+                          onClick={() => applyPreset(activePresetMatch)}
+                          title={`Load "${activePresetMatch.name}" so changes update that saved preset.`}
+                        >
+                          Load Matching Preset
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="settings-btn-secondary"
@@ -1932,7 +1980,7 @@ export default function SettingsModal() {
               </div>
 
               <p className="settings-hint">
-                Choosing a preset applies it immediately. Tweak the settings below, then save here when you want those changes written back to your preset library.
+                Loaded presets stay selected while you tweak settings. Use New Preset when you want a separate preset instead of updating the loaded one.
               </p>
             </div>
           </div>

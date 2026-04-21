@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-04-21
+
+### Changed
+- Model preset editing now keeps the last explicitly loaded preset selected while settings are tweaked, adds a clearer New Preset draft flow, and separates update, reset, copy, delete, and create actions more explicitly
+
+### Fixed
+- The model preset picker now recovers the prior preset context by saved preset ID, exact settings match, or same debate model roster instead of defaulting to an unsaved draft when the current models still match a saved preset
+
 ## [0.3.39] - 2026-04-21
 
 ### Changed

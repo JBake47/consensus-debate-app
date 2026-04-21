@@ -1011,6 +1011,36 @@
   min-width: 0;
 }
 
+.preset-select-control {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.preset-select-control .preset-selector-input {
+  flex: 1 1 auto;
+}
+
+.preset-new-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .preset-select-control {
+    flex-direction: column;
+  }
+
+  .preset-new-button {
+    width: 100%;
+  }
+}
+
 .preset-status {
   display: flex;
   flex-direction: column;
