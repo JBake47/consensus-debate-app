@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.39] - 2026-04-21
+
+### Changed
+- OpenRouter native web search now uses the `openrouter:web_search` server tool instead of the deprecated web plugin, while retaining file-parser plugins, search option tuning, usage accounting, and a compatibility retry for server-tool schema rejection
+
 ### Fixed
 - Built-in updates now skip dependency reinstall when `package.json` or lockfile changes are only release metadata, avoiding unnecessary `npm ci` runs that can damage a local install if interrupted or blocked
 

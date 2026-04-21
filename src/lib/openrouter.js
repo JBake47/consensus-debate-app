@@ -86,6 +86,13 @@ function extractUsage(obj) {
   );
   const cost = toFiniteNumber(u.cost ?? u.total_cost);
   const reasoningTokens = toFiniteNumber(u.completion_tokens_details?.reasoning_tokens);
+  const serverToolUse = u.server_tool_use ?? u.serverToolUse ?? {};
+  const webSearchRequests = toFiniteNumber(
+    serverToolUse.web_search_requests
+      ?? serverToolUse.webSearchRequests
+      ?? u.web_search_requests
+      ?? u.webSearchRequests
+  );
   const usage = {
     promptTokens,
     completionTokens,
@@ -94,6 +101,7 @@ function extractUsage(obj) {
     reasoningTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    webSearchRequests,
   };
   if (
     usage.promptTokens == null &&
@@ -102,7 +110,8 @@ function extractUsage(obj) {
     usage.cost == null &&
     usage.reasoningTokens == null &&
     usage.cacheReadTokens == null &&
-    usage.cacheWriteTokens == null
+    usage.cacheWriteTokens == null &&
+    usage.webSearchRequests == null
   ) {
     return null;
   }

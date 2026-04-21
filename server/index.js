@@ -50,6 +50,13 @@ const APP_UPDATE_REQUEST_HEADER_VALUE = '1';
 const OPENROUTER_WEB_PLUGIN_ID = process.env.OPENROUTER_WEB_PLUGIN_ID || 'web';
 const OPENROUTER_FILE_PLUGIN_ID = process.env.OPENROUTER_FILE_PLUGIN_ID || 'file-parser';
 const OPENROUTER_PDF_ENGINE = process.env.OPENROUTER_PDF_ENGINE || 'pdf-text';
+const OPENROUTER_WEB_SEARCH_ENGINE = process.env.OPENROUTER_WEB_SEARCH_ENGINE || '';
+const OPENROUTER_WEB_SEARCH_MAX_RESULTS = process.env.OPENROUTER_WEB_SEARCH_MAX_RESULTS || '';
+const OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS = process.env.OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS || '';
+const OPENROUTER_WEB_SEARCH_CONTEXT_SIZE = process.env.OPENROUTER_WEB_SEARCH_CONTEXT_SIZE || '';
+const OPENROUTER_WEB_SEARCH_ALLOWED_DOMAINS = process.env.OPENROUTER_WEB_SEARCH_ALLOWED_DOMAINS || '';
+const OPENROUTER_WEB_SEARCH_EXCLUDED_DOMAINS = process.env.OPENROUTER_WEB_SEARCH_EXCLUDED_DOMAINS || '';
+const OPENROUTER_WEB_SEARCH_USER_LOCATION = process.env.OPENROUTER_WEB_SEARCH_USER_LOCATION || '';
 const ANTHROPIC_WEB_SEARCH_TOOL_TYPE = process.env.ANTHROPIC_WEB_SEARCH_TOOL_TYPE || 'web_search_20250305';
 const ANTHROPIC_WEB_SEARCH_BETA = process.env.ANTHROPIC_WEB_SEARCH_BETA || 'web-search-2025-03-05';
 const OPENAI_WEB_SEARCH_MODE = process.env.OPENAI_WEB_SEARCH_MODE || 'web_search_options';
@@ -852,29 +859,51 @@ function extractReasoningText(details) {
     .join('\n');
 }
 
-async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false, promptCacheOptions = {} }) {
-  const apiKey = clientApiKey || process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing OpenRouter API key');
-  }
+function parseCsvEnv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
-  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
-  const body = buildOpenRouterChatBody({
-    model,
-    messages,
-    stream,
-    nativeWebSearch,
-    promptCache,
-    pluginOptions: {
-      webPluginId: OPENROUTER_WEB_PLUGIN_ID,
-      filePluginId: OPENROUTER_FILE_PLUGIN_ID,
-      pdfEngine: OPENROUTER_PDF_ENGINE,
-    },
-  });
-
-  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openrouter', model, messages, promptCache });
+function parseJsonEnvObject(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
   try {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getOpenRouterWebSearchOptions() {
+  return {
+    engine: OPENROUTER_WEB_SEARCH_ENGINE,
+    maxResults: OPENROUTER_WEB_SEARCH_MAX_RESULTS,
+    maxTotalResults: OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS,
+    searchContextSize: OPENROUTER_WEB_SEARCH_CONTEXT_SIZE,
+    allowedDomains: parseCsvEnv(OPENROUTER_WEB_SEARCH_ALLOWED_DOMAINS),
+    excludedDomains: parseCsvEnv(OPENROUTER_WEB_SEARCH_EXCLUDED_DOMAINS),
+    userLocation: parseJsonEnvObject(OPENROUTER_WEB_SEARCH_USER_LOCATION),
+  };
+}
+
+function shouldRetryOpenRouterWebSearchWithPlugin(status, bodyText) {
+  if (status !== 400 && status !== 422) return false;
+  const lowered = String(bodyText || '').toLowerCase();
+  return (
+    lowered.includes('openrouter:web_search')
+    || lowered.includes('server tool')
+    || lowered.includes('tools')
+    || lowered.includes('tool_choice')
+    || lowered.includes('unsupported')
+    || lowered.includes('unknown field')
+  );
+}
+
+async function fetchOpenRouterChatCompletion({ apiKey, body, signal }) {
+  return fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -885,53 +914,87 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
     body: JSON.stringify(body),
     signal,
   });
+}
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || `OpenRouter error: ${response.status}`);
+async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false, promptCacheOptions = {} }) {
+  const apiKey = clientApiKey || process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing OpenRouter API key');
   }
 
-  if (!stream) {
-    const data = await response.json();
-    return {
-      content: data.choices?.[0]?.message?.content || '',
-      reasoning: data.choices?.[0]?.message?.reasoning || null,
-      usage: data.usage || null,
-      searchMetadata: nativeWebSearch ? extractSearchMetadata('openrouter', data) : null,
-    };
-  }
-
-  let usage = null;
-  let searchMetadata = { citations: [], dateHints: [] };
-  await readSseStream(response, async (_event, data) => {
-    if (data === '[DONE]') return;
-    let parsed;
-    try {
-      parsed = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (nativeWebSearch) {
-      searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('openrouter', parsed));
-    }
-    const delta = parsed.choices?.[0]?.delta;
-    if (delta?.content) {
-      sendSse(res, { type: 'content', delta: delta.content });
-    }
-    if (delta?.reasoning) {
-      sendSse(res, { type: 'reasoning', delta: delta.reasoning });
-    }
-    if (delta?.reasoning_details) {
-      const text = extractReasoningText(delta.reasoning_details);
-      if (text) sendSse(res, { type: 'reasoning', delta: text });
-    }
-    if (parsed.usage) {
-      usage = parsed.usage;
-    }
+  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
+  const webSearchOptions = getOpenRouterWebSearchOptions();
+  const buildBody = (openRouterWebSearchMode = 'server_tool') => buildOpenRouterChatBody({
+    model,
+    messages,
+    stream,
+    nativeWebSearch,
+    openRouterWebSearchMode,
+    webSearchOptions,
+    promptCache,
+    pluginOptions: {
+      webPluginId: OPENROUTER_WEB_PLUGIN_ID,
+      filePluginId: OPENROUTER_FILE_PLUGIN_ID,
+      pdfEngine: OPENROUTER_PDF_ENGINE,
+    },
   });
 
-  sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
-  return null;
+  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openrouter', model, messages, promptCache });
+  try {
+    let response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody(), signal });
+
+    if (!response.ok) {
+      const bodyText = await response.text();
+      if (nativeWebSearch && shouldRetryOpenRouterWebSearchWithPlugin(response.status, bodyText)) {
+        response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('plugin'), signal });
+      }
+      if (!response.ok) {
+        const fallbackBodyText = response.bodyUsed ? bodyText : await response.text();
+        throw new Error(fallbackBodyText || `OpenRouter error: ${response.status}`);
+      }
+    }
+
+    if (!stream) {
+      const data = await response.json();
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        reasoning: data.choices?.[0]?.message?.reasoning || null,
+        usage: data.usage || null,
+        searchMetadata: nativeWebSearch ? extractSearchMetadata('openrouter', data) : null,
+      };
+    }
+
+    let usage = null;
+    let searchMetadata = { citations: [], dateHints: [] };
+    await readSseStream(response, async (_event, data) => {
+      if (data === '[DONE]') return;
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (nativeWebSearch) {
+        searchMetadata = mergeSearchMetadata(searchMetadata, extractSearchMetadata('openrouter', parsed));
+      }
+      const delta = parsed.choices?.[0]?.delta;
+      if (delta?.content) {
+        sendSse(res, { type: 'content', delta: delta.content });
+      }
+      if (delta?.reasoning) {
+        sendSse(res, { type: 'reasoning', delta: delta.reasoning });
+      }
+      if (delta?.reasoning_details) {
+        const text = extractReasoningText(delta.reasoning_details);
+        if (text) sendSse(res, { type: 'reasoning', delta: text });
+      }
+      if (parsed.usage) {
+        usage = parsed.usage;
+      }
+    });
+
+    sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
+    return null;
   } finally {
     warmup.release();
   }

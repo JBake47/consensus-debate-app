@@ -18,7 +18,7 @@ function test(name, fn) {
   }
 }
 
-test('OpenRouter body applies Claude cache control and plugins provider-side', () => {
+test('OpenRouter body applies Claude cache control, server web tool, and file plugin', () => {
   const body = buildOpenRouterChatBody({
     model: 'anthropic/claude-sonnet-4.5',
     messages: [
@@ -32,6 +32,7 @@ test('OpenRouter body applies Claude cache control and plugins provider-side', (
     ],
     stream: true,
     nativeWebSearch: true,
+    webSearchOptions: { engine: 'exa', maxResults: 4, maxTotalResults: 8 },
     promptCache: { enabled: true, claudeTtl: '1h' },
     pluginOptions: { webPluginId: 'web', filePluginId: 'file-parser', pdfEngine: 'pdf-text' },
   });
@@ -41,10 +42,27 @@ test('OpenRouter body applies Claude cache control and plugins provider-side', (
   assert.equal(body.include_reasoning, true);
   assert.equal(body.cache_control, undefined);
   assert.deepEqual(body.messages[0].content[0].cache_control, { type: 'ephemeral', ttl: '1h' });
+  assert.deepEqual(body.tools, [
+    { type: 'openrouter:web_search', parameters: { engine: 'exa', max_results: 4, max_total_results: 8 } },
+  ]);
   assert.deepEqual(body.plugins, [
-    { id: 'web' },
     { id: 'file-parser', pdf: { engine: 'pdf-text' } },
   ]);
+});
+
+test('OpenRouter body can fall back to deprecated web plugin compatibility mode', () => {
+  const body = buildOpenRouterChatBody({
+    model: 'openai/gpt-5.2',
+    messages: [{ role: 'user', content: 'What happened today?' }],
+    stream: false,
+    nativeWebSearch: true,
+    openRouterWebSearchMode: 'plugin',
+    webSearchOptions: { maxResults: 3 },
+    pluginOptions: { webPluginId: 'web' },
+  });
+
+  assert.equal(body.tools, undefined);
+  assert.deepEqual(body.plugins, [{ id: 'web', max_results: 3 }]);
 });
 
 test('Anthropic body separates system content and preserves explicit breakpoints', () => {

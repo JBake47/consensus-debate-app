@@ -1,4 +1,4 @@
-import { buildOpenRouterPlugins } from './openrouterPayload.js';
+import { buildOpenRouterPlugins, buildOpenRouterTools } from './openrouterPayload.js';
 import {
   buildClaudePromptCacheControl,
   buildOpenAIPromptCacheOptions,
@@ -153,6 +153,8 @@ export function buildOpenRouterChatBody({
   messages,
   stream,
   nativeWebSearch = false,
+  openRouterWebSearchMode = 'server_tool',
+  webSearchOptions = {},
   promptCache = {},
   pluginOptions = {},
 } = {}) {
@@ -171,12 +173,21 @@ export function buildOpenRouterChatBody({
   if (cacheControl) {
     body.messages = applyAutoCacheControlToMessages(body.messages, cacheControl);
   }
+  const useLegacyWebSearchPlugin = nativeWebSearch && openRouterWebSearchMode === 'plugin';
+  const tools = buildOpenRouterTools({
+    nativeWebSearch: nativeWebSearch && !useLegacyWebSearchPlugin,
+    webSearchOptions,
+  });
+  if (tools.length > 0) {
+    body.tools = tools;
+  }
   const plugins = buildOpenRouterPlugins({
-    nativeWebSearch,
+    legacyWebSearch: useLegacyWebSearchPlugin,
     messages,
     webPluginId: pluginOptions.webPluginId,
     filePluginId: pluginOptions.filePluginId,
     pdfEngine: pluginOptions.pdfEngine,
+    webSearchOptions,
   });
   if (plugins.length > 0) {
     body.plugins = plugins;

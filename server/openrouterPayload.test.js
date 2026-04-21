@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { buildOpenRouterPlugins, hasOpenRouterFileParts } from './openrouterPayload.js';
+import {
+  buildOpenRouterPlugins,
+  buildOpenRouterTools,
+  buildOpenRouterWebSearchParameters,
+  hasOpenRouterFileParts,
+} from './openrouterPayload.js';
 import {
   buildClaudePromptCacheControl,
   buildOpenAIPromptCacheOptions,
@@ -19,25 +24,92 @@ function test(name, fn) {
   }
 }
 
-test('OpenRouter plugin builder adds web and file parser plugins when needed', () => {
+test('OpenRouter builders separate web search server tools from file parser plugins', () => {
+  const messages = [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Review this file.' },
+        { type: 'file', file: { filename: 'brief.pdf', file_data: 'data:application/pdf;base64,JVBERi0xLjQK' } },
+      ],
+    },
+  ];
+  const tools = buildOpenRouterTools({ nativeWebSearch: true });
   const plugins = buildOpenRouterPlugins({
-    nativeWebSearch: true,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: 'Review this file.' },
-          { type: 'file', file: { filename: 'brief.pdf', file_data: 'data:application/pdf;base64,JVBERi0xLjQK' } },
-        ],
-      },
-    ],
-    webPluginId: 'web',
+    messages,
     filePluginId: 'file-parser',
     pdfEngine: 'mistral-ocr',
   });
+  assert.deepEqual(tools, [{ type: 'openrouter:web_search' }]);
   assert.deepEqual(plugins, [
-    { id: 'web' },
     { id: 'file-parser', pdf: { engine: 'mistral-ocr' } },
+  ]);
+});
+
+test('OpenRouter web search parameters normalize server-tool options', () => {
+  assert.deepEqual(
+    buildOpenRouterWebSearchParameters({
+      engine: 'EXA',
+      maxResults: 50,
+      maxTotalResults: '12',
+      searchContextSize: 'HIGH',
+      allowedDomains: 'https://www.arxiv.org/search, nature.com',
+      excludedDomains: ['reddit.com', 'reddit.com'],
+      userLocation: {
+        type: 'approximate',
+        city: 'New York',
+        country: 'US',
+        ignored: 'field',
+      },
+    }),
+    {
+      engine: 'exa',
+      max_results: 25,
+      max_total_results: 12,
+      search_context_size: 'high',
+      allowed_domains: ['arxiv.org', 'nature.com'],
+      excluded_domains: ['reddit.com'],
+      user_location: {
+        type: 'approximate',
+        city: 'New York',
+        country: 'US',
+      },
+    }
+  );
+});
+
+test('OpenRouter web search parameters avoid engine-incompatible domain filters', () => {
+  assert.deepEqual(
+    buildOpenRouterWebSearchParameters({
+      engine: 'parallel',
+      allowedDomains: ['example.com'],
+      excludedDomains: ['reddit.com'],
+    }),
+    { engine: 'parallel', allowed_domains: ['example.com'] }
+  );
+  assert.deepEqual(
+    buildOpenRouterWebSearchParameters({
+      engine: 'firecrawl',
+      allowedDomains: ['example.com'],
+      excludedDomains: ['reddit.com'],
+    }),
+    { engine: 'firecrawl' }
+  );
+});
+
+test('OpenRouter plugin builder keeps legacy web plugin available for compatibility retry', () => {
+  const plugins = buildOpenRouterPlugins({
+    legacyWebSearch: true,
+    webPluginId: 'web',
+    webSearchOptions: {
+      engine: 'exa',
+      maxResults: 3,
+      allowedDomains: ['example.com'],
+    },
+  });
+
+  assert.deepEqual(plugins, [
+    { id: 'web', engine: 'exa', max_results: 3, include_domains: ['example.com'] },
   ]);
 });
 
