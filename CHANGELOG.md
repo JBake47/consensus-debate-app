@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Built-in updates now skip dependency reinstall when `package.json` or lockfile changes are only release metadata, avoiding unnecessary `npm ci` runs that can damage a local install if interrupted or blocked
+
 ## [0.3.38] - 2026-04-21
 
 ### Added

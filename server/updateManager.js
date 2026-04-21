@@ -24,6 +24,22 @@ const UNMERGED_STATUS_CODES = new Set([
 ]);
 
 const INSTALL_TRIGGER_FILES = new Set(MANIFEST_FILES);
+const PACKAGE_INSTALL_RELEVANT_KEYS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'peerDependenciesMeta',
+  'bundledDependencies',
+  'bundleDependencies',
+  'overrides',
+  'resolutions',
+  'packageManager',
+  'engines',
+  'os',
+  'cpu',
+  'workspaces',
+];
 
 const RESTART_TRIGGER_FILES = new Set([
   'package.json',
@@ -236,6 +252,145 @@ function appendDirtyStatus(message, dirtyEntries, { autoStashEligible = false } 
 
 export function needsDependencyInstall(changedFiles = []) {
   return changedFiles.some((file) => INSTALL_TRIGGER_FILES.has(String(file || '').trim()));
+}
+
+function cloneJsonObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function sortJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = sortJsonValue(value[key]);
+        return acc;
+      }, {});
+  }
+
+  return value;
+}
+
+function stableJsonStringify(value) {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+export function normalizePackageManifestForInstallCheck(manifest = {}) {
+  const source = cloneJsonObject(manifest);
+  return PACKAGE_INSTALL_RELEVANT_KEYS.reduce((acc, key) => {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      acc[key] = source[key];
+    }
+    return acc;
+  }, {});
+}
+
+export function normalizePackageLockForInstallCheck(lockfile = {}) {
+  const normalized = cloneJsonObject(lockfile);
+  delete normalized.name;
+  delete normalized.version;
+
+  if (
+    normalized.packages
+    && typeof normalized.packages === 'object'
+    && normalized.packages['']
+    && typeof normalized.packages[''] === 'object'
+  ) {
+    delete normalized.packages[''].name;
+    delete normalized.packages[''].version;
+  }
+
+  return normalized;
+}
+
+export function manifestChangeNeedsDependencyInstall(file, previousManifest, currentManifest) {
+  const normalizedFile = String(file || '').trim();
+  if (!INSTALL_TRIGGER_FILES.has(normalizedFile)) {
+    return false;
+  }
+
+  if (
+    !previousManifest
+    || typeof previousManifest !== 'object'
+    || !currentManifest
+    || typeof currentManifest !== 'object'
+  ) {
+    return true;
+  }
+
+  const normalize = normalizedFile === 'package.json'
+    ? normalizePackageManifestForInstallCheck
+    : normalizePackageLockForInstallCheck;
+
+  return stableJsonStringify(normalize(previousManifest)) !== stableJsonStringify(normalize(currentManifest));
+}
+
+async function readJsonFileAtRef(cwd, ref, file) {
+  const result = await runGit(['show', `${ref}:${file}`], { cwd, allowFailure: true });
+  if (result.error) {
+    return {
+      ok: false,
+      value: null,
+      detail: result.stderr || result.stdout || result.error?.message || `Unable to read ${file} at ${ref}`,
+    };
+  }
+
+  try {
+    return {
+      ok: true,
+      value: JSON.parse(result.stdout),
+      detail: '',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      value: null,
+      detail: error?.message || `Unable to parse ${file} at ${ref}`,
+    };
+  }
+}
+
+export async function needsDependencyInstallForUpdate({
+  cwd = process.cwd(),
+  changedFiles = [],
+  previousCommit = '',
+  currentCommit = '',
+} = {}) {
+  const changedManifestFiles = changedFiles
+    .map((file) => String(file || '').trim())
+    .filter((file) => INSTALL_TRIGGER_FILES.has(file));
+
+  if (changedManifestFiles.length === 0) {
+    return false;
+  }
+
+  if (!previousCommit || !currentCommit) {
+    return true;
+  }
+
+  for (const file of changedManifestFiles) {
+    const [previousResult, currentResult] = await Promise.all([
+      readJsonFileAtRef(cwd, previousCommit, file),
+      readJsonFileAtRef(cwd, currentCommit, file),
+    ]);
+
+    if (!previousResult.ok || !currentResult.ok) {
+      return true;
+    }
+
+    if (manifestChangeNeedsDependencyInstall(file, previousResult.value, currentResult.value)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function needsAppRestart(changedFiles = []) {
@@ -707,7 +862,12 @@ export async function applyAppUpdate({ cwd = process.cwd() } = {}) {
         .map((file) => file.trim())
         .filter(Boolean);
 
-      const installRan = needsDependencyInstall(changedFiles);
+      const installRan = await needsDependencyInstallForUpdate({
+        cwd,
+        changedFiles,
+        previousCommit: statusBefore.currentCommit,
+        currentCommit: afterCommit,
+      });
       let installMode = null;
       if (installRan) {
         const installPlan = await getDependencyInstallArgs(cwd);
