@@ -18,7 +18,21 @@ import {
   WidthType,
 } from 'docx';
 import { extractSearchMetadata, mergeSearchMetadata } from './searchMetadata.js';
-import { buildOpenRouterPlugins } from './openrouterPayload.js';
+import {
+  buildPromptCacheKey,
+  estimateMessagesTokens,
+  getGeminiPromptCacheMinTokens,
+  mergeAnthropicUsage,
+  normalizeAnthropicUsage,
+} from './promptCache.js';
+import {
+  buildAnthropicChatBody,
+  buildGeminiContents,
+  buildGeminiGenerateContentBody,
+  buildOpenAIChatBody,
+  buildOpenRouterChatBody,
+  splitSystemMessages,
+} from './providerPayload.js';
 import { AppRestartError, scheduleSelfRestart } from './restartManager.js';
 import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateManager.js';
 import { createModelCatalogCache, DEFAULT_MODEL_CATALOG_CACHE_TTL_MS, filterModelCatalog } from './modelCatalog.js';
@@ -45,6 +59,13 @@ const ANTHROPIC_DOC_MODEL = process.env.ANTHROPIC_DOC_MODEL || 'claude-sonnet-4-
 const GEMINI_DOC_MODEL = process.env.GEMINI_DOC_MODEL || 'gemini-2.5-flash';
 const OPENROUTER_DOC_MODEL = process.env.OPENROUTER_DOC_MODEL || 'google/gemini-2.0-flash-001';
 const GEMINI_YOUTUBE_MODEL = process.env.GEMINI_YOUTUBE_MODEL || 'gemini-2.5-flash';
+const PROMPT_CACHE_ENABLED = process.env.PROMPT_CACHE_ENABLED !== 'false';
+const PROMPT_CACHE_TTL = process.env.PROMPT_CACHE_TTL || '';
+const OPENAI_PROMPT_CACHE_RETENTION = process.env.OPENAI_PROMPT_CACHE_RETENTION || '';
+const GEMINI_PROMPT_CACHE_EXPLICIT_ENABLED = process.env.GEMINI_PROMPT_CACHE_EXPLICIT_ENABLED !== 'false';
+const GEMINI_PROMPT_CACHE_TTL_SECONDS = Number(process.env.GEMINI_PROMPT_CACHE_TTL_SECONDS || 300);
+const GEMINI_PROMPT_CACHE_MAX_ENTRIES = Number(process.env.GEMINI_PROMPT_CACHE_MAX_ENTRIES || 80);
+const PROMPT_CACHE_WARMUP_SERIALIZATION = process.env.PROMPT_CACHE_WARMUP_SERIALIZATION !== 'false';
 
 const YOUTUBE_URL_REGEX = /https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?[^\s]+|youtube\.com\/shorts\/[^\s]+|youtu\.be\/[^\s]+)/gi;
 const IMAGE_INTENT_REGEX = /\b(generate|create|make|draw|design|render)\b[\s\S]{0,80}\b(image|picture|photo|illustration|logo|cover art|artwork|icon)\b/i;
@@ -86,6 +107,305 @@ const providerHealth = {
   openai: { attempts: 0, successes: 0, failures: 0, totalMs: 0, lastError: '', updatedAt: 0 },
   gemini: { attempts: 0, successes: 0, failures: 0, totalMs: 0, lastError: '', updatedAt: 0 },
 };
+const promptCacheWarmups = new Map();
+const geminiPromptCaches = new Map();
+
+function toFiniteNumber(value) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeBooleanSetting(value, fallback) {
+  if (typeof value === 'boolean') return value;
+  if (value == null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['false', '0', 'off', 'no'].includes(normalized)) return false;
+  if (['true', '1', 'on', 'yes'].includes(normalized)) return true;
+  return fallback;
+}
+
+function normalizeCacheTtlSeconds(value) {
+  const parsed = toFiniteNumber(value);
+  if (parsed == null) return 300;
+  return Math.max(60, Math.min(3600, Math.round(parsed)));
+}
+
+function normalizeClaudeCacheTtl(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1h' ? '1h' : '';
+}
+
+function normalizeOpenAICacheRetention(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'in_memory' || normalized === 'in-memory') return 'in_memory';
+  if (normalized === '24h') return '24h';
+  return '';
+}
+
+function buildServerPromptCachePolicy(overrides = {}) {
+  const raw = overrides && typeof overrides === 'object' && !Array.isArray(overrides) ? overrides : {};
+  const enabled = PROMPT_CACHE_ENABLED && normalizeBooleanSetting(raw.enabled, true);
+  const requestedClaudeTtl = raw.claudeTtl === 'default' || raw.claudeTtl == null
+    ? PROMPT_CACHE_TTL
+    : raw.claudeTtl;
+  const requestedOpenAIRetention = raw.openaiRetention === 'default' || raw.openaiRetention == null
+    ? OPENAI_PROMPT_CACHE_RETENTION
+    : raw.openaiRetention;
+  return {
+    enabled,
+    claudeTtl: normalizeClaudeCacheTtl(requestedClaudeTtl),
+    openaiRetention: normalizeOpenAICacheRetention(requestedOpenAIRetention),
+    geminiExplicit: enabled && normalizeBooleanSetting(raw.geminiExplicit, GEMINI_PROMPT_CACHE_EXPLICIT_ENABLED),
+    geminiTtlSeconds: normalizeCacheTtlSeconds(raw.geminiTtlSeconds ?? GEMINI_PROMPT_CACHE_TTL_SECONDS),
+    warmupSerialization: enabled && normalizeBooleanSetting(raw.warmupSerialization, PROMPT_CACHE_WARMUP_SERIALIZATION),
+  };
+}
+
+async function acquirePromptCacheWarmupSlot({ provider, model, messages, promptCache }) {
+  if (!promptCache?.enabled || !promptCache?.warmupSerialization) {
+    return { release() {} };
+  }
+  if (estimateMessagesTokens(messages) < 1024) {
+    return { release() {} };
+  }
+
+  const promptKey = buildPromptCacheKey(messages);
+  if (!promptKey) return { release() {} };
+
+  const cacheKey = `${provider}:${model}:${promptKey}`;
+  const now = Date.now();
+  const existing = promptCacheWarmups.get(cacheKey);
+  if (existing && existing.expiresAt > now) {
+    try {
+      await existing.promise;
+    } catch {
+      // Ignore warmup failures; the current request can still proceed.
+    }
+    return { release() {} };
+  }
+
+  let releasePromise = null;
+  const promise = new Promise((resolve) => {
+    releasePromise = resolve;
+  });
+  const entry = {
+    promise,
+    expiresAt: now + 60_000,
+  };
+  promptCacheWarmups.set(cacheKey, entry);
+
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      releasePromise?.();
+      const timeout = setTimeout(() => {
+        if (promptCacheWarmups.get(cacheKey) === entry) {
+          promptCacheWarmups.delete(cacheKey);
+        }
+      }, 30_000);
+      timeout.unref?.();
+    },
+  };
+}
+
+function stripPartCacheControl(part) {
+  if (!part || typeof part !== 'object') return part;
+  const { cache_control: _cacheControl, ...rest } = part;
+  return rest;
+}
+
+function splitReusableMessageContent(content) {
+  const marker = '\n\n---\n**User request:**';
+  if (typeof content === 'string') {
+    const markerIndex = content.indexOf(marker);
+    if (markerIndex <= 0) return null;
+    const cacheable = content.slice(0, markerIndex).trim();
+    const variable = content.slice(markerIndex + marker.length).trimStart();
+    if (!cacheable || !variable) return null;
+    return {
+      cacheableContent: cacheable,
+      variableContent: `**User request:**\n${variable}`,
+    };
+  }
+
+  if (!Array.isArray(content)) return null;
+  const explicitIndex = content.findIndex((part) => (
+    part
+    && typeof part === 'object'
+    && part.cache_control
+    && typeof part.cache_control === 'object'
+  ));
+  if (explicitIndex >= 0 && explicitIndex < content.length - 1) {
+    return {
+      cacheableContent: content.slice(0, explicitIndex + 1).map(stripPartCacheControl),
+      variableContent: content.slice(explicitIndex + 1).map(stripPartCacheControl),
+    };
+  }
+
+  for (let index = 0; index < content.length; index += 1) {
+    const part = content[index];
+    if (!part || typeof part !== 'object' || part.type !== 'text') continue;
+    const text = String(part.text || '');
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex <= 0) continue;
+    const cacheableText = text.slice(0, markerIndex).trim();
+    const variableText = text.slice(markerIndex + marker.length).trimStart();
+    if (!cacheableText || !variableText) return null;
+    return {
+      cacheableContent: [
+        ...content.slice(0, index).map(stripPartCacheControl),
+        { type: 'text', text: cacheableText },
+      ],
+      variableContent: [
+        { type: 'text', text: `**User request:**\n${variableText}` },
+        ...content.slice(index + 1).map(stripPartCacheControl),
+      ],
+    };
+  }
+
+  return null;
+}
+
+function normalizeGeminiModelPath(model) {
+  const raw = String(model || '').trim().replace(/^\/+/, '');
+  if (!raw) return '';
+  return raw.startsWith('models/') ? raw : `models/${raw}`;
+}
+
+function getGeminiCacheKey({ apiKey, modelPath, cacheKey }) {
+  const apiKeyHash = createHash('sha256').update(String(apiKey || '')).digest('hex').slice(0, 12);
+  return `${apiKeyHash}:${modelPath}:${cacheKey}`;
+}
+
+function pruneGeminiPromptCaches(now = Date.now()) {
+  for (const [key, entry] of geminiPromptCaches.entries()) {
+    if (!entry || Number(entry.expiresAt || 0) <= now + 5000) {
+      geminiPromptCaches.delete(key);
+    }
+  }
+
+  const maxEntries = Math.max(10, Math.min(500, Number(GEMINI_PROMPT_CACHE_MAX_ENTRIES) || 80));
+  if (geminiPromptCaches.size <= maxEntries) return;
+  const entries = Array.from(geminiPromptCaches.entries())
+    .sort((left, right) => Number(left[1]?.lastUsedAt || 0) - Number(right[1]?.lastUsedAt || 0));
+  for (const [key] of entries.slice(0, geminiPromptCaches.size - maxEntries)) {
+    geminiPromptCaches.delete(key);
+  }
+}
+
+function buildGeminiPromptCachePlan({ model, messages, promptCache, nativeWebSearch = false }) {
+  if (!promptCache?.enabled || !promptCache?.geminiExplicit || nativeWebSearch) return null;
+  const { system, messages: filtered } = splitSystemMessages(messages);
+  if (!filtered.length) return null;
+
+  const lastIndex = filtered.length - 1;
+  const lastMessage = filtered[lastIndex];
+  const reusable = splitReusableMessageContent(lastMessage?.content);
+  if (!reusable) return null;
+
+  const cacheMessages = [
+    ...filtered.slice(0, lastIndex),
+    { ...lastMessage, content: reusable.cacheableContent },
+  ];
+  if (estimateMessagesTokens(cacheMessages) < getGeminiPromptCacheMinTokens(model)) return null;
+
+  const requestMessages = [
+    { ...lastMessage, content: reusable.variableContent },
+  ];
+  const modelPath = normalizeGeminiModelPath(model);
+  if (!modelPath) return null;
+
+  const cacheCreateBody = {
+    model: modelPath,
+    contents: buildGeminiContents(cacheMessages),
+    ttl: `${promptCache.geminiTtlSeconds}s`,
+  };
+  if (system) {
+    cacheCreateBody.systemInstruction = { parts: [{ text: system }] };
+  }
+
+  const cacheKey = createHash('sha256')
+    .update(JSON.stringify({
+      model: modelPath,
+      system,
+      contents: cacheCreateBody.contents,
+    }))
+    .digest('hex');
+
+  return {
+    cacheKey,
+    modelPath,
+    cacheCreateBody,
+    requestBody: buildGeminiGenerateContentBody({ messages: requestMessages }),
+    cacheMessages,
+  };
+}
+
+async function ensureGeminiCachedContent({ apiKey, plan, signal }) {
+  pruneGeminiPromptCaches();
+  const mapKey = getGeminiCacheKey({
+    apiKey,
+    modelPath: plan.modelPath,
+    cacheKey: plan.cacheKey,
+  });
+  const now = Date.now();
+  const existing = geminiPromptCaches.get(mapKey);
+  if (existing?.name && Number(existing.expiresAt || 0) > now + 5000) {
+    existing.lastUsedAt = now;
+    return existing.name;
+  }
+  if (existing?.promise) {
+    return existing.promise;
+  }
+
+  const promise = (async () => {
+    const encodedApiKey = encodeURIComponent(apiKey);
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/cachedContents?key=${encodedApiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(plan.cacheCreateBody),
+      signal,
+    });
+    if (!response.ok) {
+      const bodyText = await response.text();
+      throw new Error(bodyText || `Gemini cache error: ${response.status}`);
+    }
+    const data = await response.json();
+    const name = String(data.name || '').trim();
+    if (!name) {
+      throw new Error('Gemini cache response did not include a cache name');
+    }
+    const parsedExpireTime = Date.parse(data.expireTime || data.expire_time || data.expirationTime || '');
+    const expiresAt = Number.isFinite(parsedExpireTime)
+      ? parsedExpireTime
+      : Date.now() + (plan.cacheCreateBody.ttl ? Number.parseInt(plan.cacheCreateBody.ttl, 10) * 1000 : 300_000);
+    geminiPromptCaches.set(mapKey, {
+      name,
+      expiresAt,
+      lastUsedAt: Date.now(),
+    });
+    return name;
+  })();
+
+  geminiPromptCaches.set(mapKey, {
+    promise,
+    expiresAt: now + (plan.cacheCreateBody.ttl ? Number.parseInt(plan.cacheCreateBody.ttl, 10) * 1000 : 300_000),
+    lastUsedAt: now,
+  });
+
+  try {
+    return await promise;
+  } catch (error) {
+    if (geminiPromptCaches.get(mapKey)?.promise === promise) {
+      geminiPromptCaches.delete(mapKey);
+    }
+    throw error;
+  }
+}
 
 function normalizeIp(value) {
   if (!value) return '';
@@ -489,87 +809,6 @@ function parseModelTarget(modelId) {
   return { provider: 'openrouter', model: modelId };
 }
 
-function splitSystemMessages(messages) {
-  const systemParts = [];
-  const filtered = [];
-  for (const message of messages || []) {
-    if (message.role === 'system') {
-      if (typeof message.content === 'string') {
-        systemParts.push(message.content);
-      }
-    } else {
-      filtered.push(message);
-    }
-  }
-  return { system: systemParts.join('\n\n'), messages: filtered };
-}
-
-function normalizeParts(content) {
-  if (Array.isArray(content)) return content;
-  if (typeof content === 'string') return [{ type: 'text', text: content }];
-  return [];
-}
-
-function parseDataUrl(url) {
-  if (typeof url !== 'string') return null;
-  const match = url.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) return null;
-  return { mimeType: match[1], data: match[2] };
-}
-
-function buildAnthropicMessages(messages) {
-  return (messages || []).map((message) => {
-    const parts = normalizeParts(message.content).map((part) => {
-      if (part.type === 'text') {
-        return { type: 'text', text: part.text || '' };
-      }
-      if (part.type === 'image_url' && part.image_url?.url) {
-        const parsed = parseDataUrl(part.image_url.url);
-        if (parsed) {
-          return {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: parsed.mimeType,
-              data: parsed.data,
-            },
-          };
-        }
-      }
-      return null;
-    }).filter(Boolean);
-
-    return { role: message.role, content: parts };
-  });
-}
-
-function buildGeminiContents(messages) {
-  return (messages || []).map((message) => {
-    const role = message.role === 'assistant' ? 'model' : 'user';
-    const parts = normalizeParts(message.content).map((part) => {
-      if (part.type === 'text') {
-        return { text: part.text || '' };
-      }
-      if (part.type === 'image_url' && part.image_url?.url) {
-        const parsed = parseDataUrl(part.image_url.url);
-        if (parsed) {
-          return { inline_data: { mime_type: parsed.mimeType, data: parsed.data } };
-        }
-      }
-      if (part.type === 'video_url' && part.video_url?.url) {
-        return {
-          file_data: {
-            mime_type: 'video/*',
-            file_uri: part.video_url.url,
-          },
-        };
-      }
-      return null;
-    }).filter(Boolean);
-    return { role, parts };
-  });
-}
-
 async function readSseStream(response, onEvent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -613,29 +852,28 @@ function extractReasoningText(details) {
     .join('\n');
 }
 
-async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false }) {
+async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false, promptCacheOptions = {} }) {
   const apiKey = clientApiKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('Missing OpenRouter API key');
   }
 
-  const body = {
+  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
+  const body = buildOpenRouterChatBody({
     model,
     messages,
     stream,
-    include_reasoning: true,
-  };
-  const plugins = buildOpenRouterPlugins({
     nativeWebSearch,
-    messages,
-    webPluginId: OPENROUTER_WEB_PLUGIN_ID,
-    filePluginId: OPENROUTER_FILE_PLUGIN_ID,
-    pdfEngine: OPENROUTER_PDF_ENGINE,
+    promptCache,
+    pluginOptions: {
+      webPluginId: OPENROUTER_WEB_PLUGIN_ID,
+      filePluginId: OPENROUTER_FILE_PLUGIN_ID,
+      pdfEngine: OPENROUTER_PDF_ENGINE,
+    },
   });
-  if (plugins.length > 0) {
-    body.plugins = plugins;
-  }
 
+  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openrouter', model, messages, promptCache });
+  try {
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -694,26 +932,27 @@ async function handleOpenRouter({ model, messages, stream, res, signal, clientAp
 
   sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
+  } finally {
+    warmup.release();
+  }
 }
 
-async function handleAnthropic({ model, messages, stream, res, signal, nativeWebSearch = false }) {
+async function handleAnthropic({ model, messages, stream, res, signal, nativeWebSearch = false, promptCacheOptions = {} }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error('Missing Anthropic API key');
   }
 
-  const { system, messages: filtered } = splitSystemMessages(messages);
-  const body = {
+  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
+  const body = buildAnthropicChatBody({
     model,
-    max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS || 64000),
-    messages: buildAnthropicMessages(filtered),
+    messages,
     stream,
-  };
-  if (system) body.system = system;
-  if (nativeWebSearch) {
-    body.tools = [{ type: ANTHROPIC_WEB_SEARCH_TOOL_TYPE, name: 'web_search' }];
-    body.tool_choice = { type: 'auto' };
-  }
+    nativeWebSearch,
+    promptCache,
+    maxTokens: process.env.ANTHROPIC_MAX_TOKENS || 64000,
+    webSearchToolType: ANTHROPIC_WEB_SEARCH_TOOL_TYPE,
+  });
 
   const headers = {
     'Content-Type': 'application/json',
@@ -724,6 +963,8 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     headers['anthropic-beta'] = ANTHROPIC_WEB_SEARCH_BETA;
   }
 
+  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'anthropic', model, messages, promptCache });
+  try {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers,
@@ -741,25 +982,7 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
     const contentBlocks = Array.isArray(data.content) ? data.content : [];
     const content = contentBlocks.filter(b => b.type === 'text').map(b => b.text).join('');
     const reasoning = contentBlocks.filter(b => b.type === 'thinking').map(b => b.text).join('') || null;
-    const usageInput = Number.isFinite(Number(data.usage?.input_tokens))
-      ? Number(data.usage.input_tokens)
-      : null;
-    const usageOutput = Number.isFinite(Number(data.usage?.output_tokens))
-      ? Number(data.usage.output_tokens)
-      : null;
-    const usageTotal = Number.isFinite(Number(data.usage?.total_tokens))
-      ? Number(data.usage.total_tokens)
-      : (
-        usageInput != null && usageOutput != null ? usageInput + usageOutput : null
-      );
-    const usage = data.usage
-      ? {
-        prompt_tokens: usageInput,
-        completion_tokens: usageOutput,
-        total_tokens: usageTotal,
-        cost: data.usage.cost ?? null,
-      }
-      : null;
+    const usage = normalizeAnthropicUsage(data.usage);
     return {
       content,
       reasoning,
@@ -786,20 +1009,7 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
 
     if (event === 'message_start') {
       if (parsed.message?.usage) {
-        const u = parsed.message.usage;
-        const promptTokens = Number.isFinite(Number(u.input_tokens)) ? Number(u.input_tokens) : null;
-        const completionTokens = Number.isFinite(Number(u.output_tokens)) ? Number(u.output_tokens) : null;
-        const totalTokens = Number.isFinite(Number(u.total_tokens))
-          ? Number(u.total_tokens)
-          : (
-            promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null
-          );
-        usage = {
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: totalTokens,
-          cost: u.cost ?? null,
-        };
+        usage = mergeAnthropicUsage(usage, parsed.message.usage);
       }
     }
 
@@ -829,49 +1039,36 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
 
     if (event === 'message_delta') {
       if (parsed.usage) {
-        const u = parsed.usage;
-        const promptTokens = Number.isFinite(Number(u.input_tokens)) ? Number(u.input_tokens) : null;
-        const completionTokens = Number.isFinite(Number(u.output_tokens)) ? Number(u.output_tokens) : null;
-        const totalTokens = Number.isFinite(Number(u.total_tokens))
-          ? Number(u.total_tokens)
-          : (
-            promptTokens != null && completionTokens != null ? promptTokens + completionTokens : null
-          );
-        usage = {
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: totalTokens,
-          cost: u.cost ?? null,
-        };
+        usage = mergeAnthropicUsage(usage, parsed.usage);
       }
     }
   });
 
   sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
+  } finally {
+    warmup.release();
+  }
 }
 
-async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSearch = false }) {
+async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSearch = false, promptCacheOptions = {} }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error('Missing OpenAI API key');
   }
 
-  const body = {
+  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
+  const body = buildOpenAIChatBody({
     model,
     messages,
     stream,
-    stream_options: stream ? { include_usage: true } : undefined,
-  };
-  if (nativeWebSearch) {
-    if (OPENAI_WEB_SEARCH_MODE === 'tools') {
-      body.tools = [{ type: 'web_search' }];
-      body.tool_choice = 'auto';
-    } else {
-      body.web_search_options = {};
-    }
-  }
+    nativeWebSearch,
+    promptCache,
+    webSearchMode: OPENAI_WEB_SEARCH_MODE,
+  });
 
+  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openai', model, messages, promptCache });
+  try {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -928,29 +1125,45 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
 
   sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
+  } finally {
+    warmup.release();
+  }
 }
 
-async function handleGemini({ model, messages, stream, res, signal, nativeWebSearch = false }) {
+async function handleGemini({ model, messages, stream, res, signal, nativeWebSearch = false, promptCacheOptions = {} }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('Missing Gemini API key');
   }
 
-  const { system, messages: filtered } = splitSystemMessages(messages);
-  const contents = buildGeminiContents(filtered);
-  const body = {
-    contents,
-  };
-  if (system) {
-    body.system_instruction = { parts: [{ text: system }] };
-  }
-  if (nativeWebSearch) {
-    body.tools = [{ google_search: {} }];
+  const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
+  let body = buildGeminiGenerateContentBody({ messages, nativeWebSearch });
+  const cachePlan = buildGeminiPromptCachePlan({ model, messages, promptCache, nativeWebSearch });
+  let warmupMessages = messages;
+  if (cachePlan) {
+    try {
+      const cachedContent = await ensureGeminiCachedContent({ apiKey, plan: cachePlan, signal });
+      body = {
+        ...cachePlan.requestBody,
+        cachedContent,
+      };
+      warmupMessages = cachePlan.cacheMessages;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('Gemini prompt cache create failed; falling back to uncached request', {
+        model,
+        message: error?.message || String(error),
+      });
+    }
   }
 
-  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}`;
-  const endpoint = stream ? `${baseUrl}:streamGenerateContent?key=${apiKey}` : `${baseUrl}:generateContent?key=${apiKey}`;
+  const modelPath = normalizeGeminiModelPath(model);
+  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/${modelPath}`;
+  const encodedApiKey = encodeURIComponent(apiKey);
+  const endpoint = stream ? `${baseUrl}:streamGenerateContent?key=${encodedApiKey}` : `${baseUrl}:generateContent?key=${encodedApiKey}`;
 
+  const warmup = await acquirePromptCacheWarmupSlot({ provider: 'gemini', model, messages: warmupMessages, promptCache });
+  try {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -1000,6 +1213,9 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
 
   sendSse(res, { type: 'done', usage, searchMetadata: nativeWebSearch ? searchMetadata : null });
   return null;
+  } finally {
+    warmup.release();
+  }
 }
 
 function getServerProviderStatus(clientProvided = null) {
@@ -2569,7 +2785,7 @@ app.get('/api/artifacts/:artifactId', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { model, messages, stream, clientApiKey, nativeWebSearch } = req.body || {};
+  const { model, messages, stream, clientApiKey, nativeWebSearch, promptCache } = req.body || {};
   const { provider, model: providerModel } = parseModelTarget(model);
   const useNativeWebSearch = nativeWebSearch === true;
   const { signal } = createRequestAbortContext(req, res);
@@ -2592,6 +2808,7 @@ app.post('/api/chat', async (req, res) => {
         signal,
         clientApiKey,
         nativeWebSearch: useNativeWebSearch,
+        promptCacheOptions: promptCache,
       });
     } else if (provider === 'anthropic') {
       result = await handleAnthropic({
@@ -2601,6 +2818,7 @@ app.post('/api/chat', async (req, res) => {
         res,
         signal,
         nativeWebSearch: useNativeWebSearch,
+        promptCacheOptions: promptCache,
       });
     } else if (provider === 'openai') {
       result = await handleOpenAI({
@@ -2610,6 +2828,7 @@ app.post('/api/chat', async (req, res) => {
         res,
         signal,
         nativeWebSearch: useNativeWebSearch,
+        promptCacheOptions: promptCache,
       });
     } else if (provider === 'gemini') {
       result = await handleGemini({
@@ -2619,6 +2838,7 @@ app.post('/api/chat', async (req, res) => {
         res,
         signal,
         nativeWebSearch: useNativeWebSearch,
+        promptCacheOptions: promptCache,
       });
     } else {
       throw new Error(`Unsupported provider: ${provider}`);

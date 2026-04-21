@@ -150,3 +150,47 @@ test('Plaintext attachment builder includes OCR text for image fallbacks', () =>
   assert.equal(content.includes('Attached image OCR text: diagram.png'), true);
   assert.equal(content.includes('Missing API key'), true);
 });
+
+test('Large text fallbacks are placed before the variable user request for implicit caching', () => {
+  const content = buildAttachmentContentForModel('Find the main risk.', [{
+    ...pdfAttachment,
+    category: 'text',
+    dataUrl: '',
+    content: 'Risk register row\n'.repeat(400),
+  }], {
+    modelId: 'openai:gpt-5.2',
+  });
+  assert.equal(typeof content, 'string');
+  assert.equal(content.indexOf('Reusable reference material') < content.indexOf('User request'), true);
+  assert.equal(content.includes('Find the main risk.'), true);
+});
+
+test('OpenRouter Gemini receives explicit cache_control on large reusable text blocks', () => {
+  const content = buildAttachmentContentForModel('List the assumptions.', [{
+    ...pdfAttachment,
+    category: 'text',
+    dataUrl: '',
+    content: 'Assumption catalog row\n'.repeat(400),
+  }], {
+    modelId: 'google/gemini-2.5-pro',
+  });
+  assert.equal(Array.isArray(content), true);
+  assert.equal(content[0].type, 'text');
+  assert.deepEqual(content[0].cache_control, { type: 'ephemeral' });
+  assert.equal(content[1].text.includes('User request'), true);
+});
+
+test('Direct Claude receives explicit cache_control on large reusable text blocks', () => {
+  const content = buildAttachmentContentForModel('List the assumptions.', [{
+    ...pdfAttachment,
+    category: 'text',
+    dataUrl: '',
+    content: 'Assumption catalog row\n'.repeat(400),
+  }], {
+    modelId: 'anthropic:claude-sonnet-4-5',
+  });
+  assert.equal(Array.isArray(content), true);
+  assert.equal(content[0].type, 'text');
+  assert.deepEqual(content[0].cache_control, { type: 'ephemeral' });
+  assert.equal(content[1].text.includes('User request'), true);
+});

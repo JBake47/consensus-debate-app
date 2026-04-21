@@ -45,6 +45,14 @@ const PROVIDER_FIELD_HELP = [
   'Choose where this model ID should be resolved.',
   'OpenRouter uses full catalog IDs. Direct providers add the provider prefix automatically.',
 ];
+const DEFAULT_PROMPT_CACHE_POLICY = {
+  enabled: true,
+  claudeTtl: 'default',
+  openaiRetention: 'default',
+  geminiExplicit: true,
+  geminiTtlSeconds: 300,
+  warmupSerialization: true,
+};
 const MODEL_UPGRADE_POLICY_OPTIONS = [
   {
     value: 'pinned',
@@ -283,11 +291,40 @@ function buildModelUpgradePolicyTooltipText(target) {
   return `${target?.label || 'Model'} upgrade policy. Current: ${currentOption.label}. ${currentOption.description} Options: ${optionSummary}`;
 }
 
+function normalizePromptCachePolicy(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const retention = source.openaiRetention === 'in_memory' ? 'in-memory' : source.openaiRetention;
+  const ttlSeconds = Number(source.geminiTtlSeconds);
+  return {
+    enabled: source.enabled !== false,
+    claudeTtl: source.claudeTtl === '1h' ? '1h' : 'default',
+    openaiRetention: ['in-memory', '24h'].includes(retention) ? retention : 'default',
+    geminiExplicit: source.geminiExplicit !== false,
+    geminiTtlSeconds: Number.isFinite(ttlSeconds)
+      ? Math.max(60, Math.min(3600, Math.round(ttlSeconds)))
+      : DEFAULT_PROMPT_CACHE_POLICY.geminiTtlSeconds,
+    warmupSerialization: source.warmupSerialization !== false,
+  };
+}
+
+function promptCachePoliciesEqual(left, right) {
+  const a = normalizePromptCachePolicy(left);
+  const b = normalizePromptCachePolicy(right);
+  return (
+    a.enabled === b.enabled
+    && a.claudeTtl === b.claudeTtl
+    && a.openaiRetention === b.openaiRetention
+    && a.geminiExplicit === b.geminiExplicit
+    && a.geminiTtlSeconds === b.geminiTtlSeconds
+    && a.warmupSerialization === b.warmupSerialization
+  );
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
     convergenceModel, convergenceOnFinalRound, maxDebateRounds, webSearchModel, strictWebSearch,
-    retryPolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
+    retryPolicy, promptCachePolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     modelUpgradeNotificationsEnabled, modelUpgradeTargets, modelUpgradeSuggestions, dismissedModelUpgradeSuggestionCount,
     streamVirtualizationEnabled, streamVirtualizationKeepLatest,
@@ -327,6 +364,13 @@ export default function SettingsModal() {
   const [virtualizationEnabled, setVirtualizationEnabled] = useState(Boolean(streamVirtualizationEnabled));
   const [virtualizationKeepLatest, setVirtualizationKeepLatest] = useState(Number(streamVirtualizationKeepLatest || 4));
   const [cachePersistence, setCachePersistence] = useState(Boolean(cachePersistenceEnabled));
+  const normalizedInitialPromptCachePolicy = normalizePromptCachePolicy(promptCachePolicy);
+  const [promptCacheEnabled, setPromptCacheEnabled] = useState(Boolean(normalizedInitialPromptCachePolicy.enabled));
+  const [promptCacheClaudeTtl, setPromptCacheClaudeTtl] = useState(normalizedInitialPromptCachePolicy.claudeTtl);
+  const [promptCacheOpenAIRetention, setPromptCacheOpenAIRetention] = useState(normalizedInitialPromptCachePolicy.openaiRetention);
+  const [promptCacheGeminiExplicit, setPromptCacheGeminiExplicit] = useState(Boolean(normalizedInitialPromptCachePolicy.geminiExplicit));
+  const [promptCacheGeminiTtlSeconds, setPromptCacheGeminiTtlSeconds] = useState(Number(normalizedInitialPromptCachePolicy.geminiTtlSeconds));
+  const [promptCacheWarmupSerialization, setPromptCacheWarmupSerialization] = useState(Boolean(normalizedInitialPromptCachePolicy.warmupSerialization));
   const [themeSelection, setThemeSelection] = useState(themeMode || DEFAULT_THEME_MODE);
   const [rememberKey, setRememberKey] = useState(rememberApiKey);
   const [debouncedKeyInput, setDebouncedKeyInput] = useState(apiKey);
@@ -430,6 +474,21 @@ export default function SettingsModal() {
     retryMaxDelayMs,
     circuitFailureThreshold,
     circuitCooldownMs,
+  ]);
+  const draftPromptCachePolicy = useMemo(() => normalizePromptCachePolicy({
+    enabled: promptCacheEnabled,
+    claudeTtl: promptCacheClaudeTtl,
+    openaiRetention: promptCacheOpenAIRetention,
+    geminiExplicit: promptCacheGeminiExplicit,
+    geminiTtlSeconds: Number(promptCacheGeminiTtlSeconds),
+    warmupSerialization: promptCacheWarmupSerialization,
+  }), [
+    promptCacheEnabled,
+    promptCacheClaudeTtl,
+    promptCacheOpenAIRetention,
+    promptCacheGeminiExplicit,
+    promptCacheGeminiTtlSeconds,
+    promptCacheWarmupSerialization,
   ]);
 
   const handleSave = () => {
@@ -721,6 +780,10 @@ export default function SettingsModal() {
     const failureCount = Number(metrics?.failureCount || 0);
     const retryAttempts = Number(metrics?.retryAttempts || 0);
     const retryRecovered = Number(metrics?.retryRecovered || 0);
+    const promptCacheReadTokens = Math.max(0, Number(metrics?.promptCacheReadTokens || 0));
+    const promptCacheWriteTokens = Math.max(0, Number(metrics?.promptCacheWriteTokens || 0));
+    const promptCacheReadRequests = Math.max(0, Number(metrics?.promptCacheReadRequests || 0));
+    const promptCacheWriteRequests = Math.max(0, Number(metrics?.promptCacheWriteRequests || 0));
     const samples = Array.isArray(metrics?.firstAnswerTimes) ? metrics.firstAnswerTimes : [];
     const avgFirstAnswerMs = samples.length > 0
       ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length)
@@ -730,11 +793,16 @@ export default function SettingsModal() {
       : [];
 
     return {
-      hasData: callCount > 0 || failureCount > 0 || retryAttempts > 0,
+      hasData: callCount > 0 || failureCount > 0 || retryAttempts > 0 || promptCacheReadTokens > 0 || promptCacheWriteTokens > 0,
       totalCalls: callCount,
       successRate: callCount > 0 ? Math.round((successCount / callCount) * 100) : null,
       avgFirstAnswer: formatDurationCompact(avgFirstAnswerMs),
       retryRecovery: retryAttempts > 0 ? `${retryRecovered} of ${retryAttempts}` : 'No retries',
+      promptCacheReads: formatTokenQuantity(promptCacheReadTokens),
+      promptCacheWrites: formatTokenQuantity(promptCacheWriteTokens),
+      promptCacheActivity: promptCacheReadRequests > 0 || promptCacheWriteRequests > 0
+        ? `${promptCacheReadRequests} read / ${promptCacheWriteRequests} write`
+        : 'No provider hits',
       topProviderFailure: providerFailures[0] || null,
     };
   }, [metrics]);
@@ -1283,6 +1351,12 @@ export default function SettingsModal() {
     setVirtualizationEnabled(true);
     setVirtualizationKeepLatest(4);
     setCachePersistence(true);
+    setPromptCacheEnabled(DEFAULT_PROMPT_CACHE_POLICY.enabled);
+    setPromptCacheClaudeTtl(DEFAULT_PROMPT_CACHE_POLICY.claudeTtl);
+    setPromptCacheOpenAIRetention(DEFAULT_PROMPT_CACHE_POLICY.openaiRetention);
+    setPromptCacheGeminiExplicit(DEFAULT_PROMPT_CACHE_POLICY.geminiExplicit);
+    setPromptCacheGeminiTtlSeconds(DEFAULT_PROMPT_CACHE_POLICY.geminiTtlSeconds);
+    setPromptCacheWarmupSerialization(DEFAULT_PROMPT_CACHE_POLICY.warmupSerialization);
     setThemeSelection(DEFAULT_THEME_MODE);
   };
 
@@ -1313,6 +1387,13 @@ export default function SettingsModal() {
     setVirtualizationEnabled(Boolean(streamVirtualizationEnabled));
     setVirtualizationKeepLatest(Number(streamVirtualizationKeepLatest || 4));
     setCachePersistence(Boolean(cachePersistenceEnabled));
+    const normalizedPromptCachePolicy = normalizePromptCachePolicy(promptCachePolicy);
+    setPromptCacheEnabled(Boolean(normalizedPromptCachePolicy.enabled));
+    setPromptCacheClaudeTtl(normalizedPromptCachePolicy.claudeTtl);
+    setPromptCacheOpenAIRetention(normalizedPromptCachePolicy.openaiRetention);
+    setPromptCacheGeminiExplicit(Boolean(normalizedPromptCachePolicy.geminiExplicit));
+    setPromptCacheGeminiTtlSeconds(Number(normalizedPromptCachePolicy.geminiTtlSeconds));
+    setPromptCacheWarmupSerialization(Boolean(normalizedPromptCachePolicy.warmupSerialization));
     setThemeSelection(themeMode || DEFAULT_THEME_MODE);
     setRememberKey(rememberApiKey);
     setDebouncedKeyInput(apiKey.trim());
@@ -1348,6 +1429,7 @@ export default function SettingsModal() {
     streamVirtualizationEnabled,
     streamVirtualizationKeepLatest,
     cachePersistenceEnabled,
+    promptCachePolicy,
     themeMode,
     rememberApiKey,
   ]);
@@ -1430,6 +1512,9 @@ export default function SettingsModal() {
     if (Boolean(cachePersistence) !== Boolean(cachePersistenceEnabled)) {
       dispatch({ type: 'SET_CACHE_PERSISTENCE_ENABLED', payload: cachePersistence });
     }
+    if (!promptCachePoliciesEqual(draftPromptCachePolicy, promptCachePolicy)) {
+      dispatch({ type: 'SET_PROMPT_CACHE_POLICY', payload: draftPromptCachePolicy });
+    }
     if (themeSelection !== themeMode) {
       dispatch({ type: 'SET_THEME_MODE', payload: themeSelection });
     }
@@ -1477,6 +1562,8 @@ export default function SettingsModal() {
     streamVirtualizationKeepLatest,
     cachePersistence,
     cachePersistenceEnabled,
+    draftPromptCachePolicy,
+    promptCachePolicy,
     themeSelection,
     themeMode,
     dispatch,
@@ -2522,6 +2609,20 @@ export default function SettingsModal() {
                     <span className="settings-diagnostics-label">Retry recovery</span>
                     <strong className="settings-diagnostics-value">{diagnosticsSummary.retryRecovery}</strong>
                   </div>
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Cache reads</span>
+                    <strong className="settings-diagnostics-value">{diagnosticsSummary.promptCacheReads}</strong>
+                  </div>
+                  <div className="settings-diagnostics-card">
+                    <span className="settings-diagnostics-label">Cache writes</span>
+                    <strong className="settings-diagnostics-value">{diagnosticsSummary.promptCacheWrites}</strong>
+                  </div>
+                </div>
+                <div className="settings-diagnostics-provider">
+                  <span className="settings-diagnostics-provider-label">
+                    Provider cache requests
+                  </span>
+                  <code>{diagnosticsSummary.promptCacheActivity}</code>
                 </div>
                 {diagnosticsSummary.topProviderFailure && (
                   <div className="settings-diagnostics-provider">
@@ -2659,6 +2760,99 @@ export default function SettingsModal() {
             <label className="settings-label">
               <Database size={14} />
               <span className="settings-label-copy">
+                <span>Provider Prompt Cache</span>
+                <InfoTip
+                  label="Provider prompt cache help"
+                  content={[
+                    'Provider prompt caching can reduce repeated input cost on long stable prompts.',
+                    'The server applies provider-specific rules and skips requests that are below provider token thresholds.',
+                  ]}
+                />
+              </span>
+            </label>
+            <label className="settings-checkbox" title="Allow supported providers to use prompt caching for long reusable prompt prefixes.">
+              <input
+                type="checkbox"
+                checked={promptCacheEnabled}
+                onChange={e => setPromptCacheEnabled(e.target.checked)}
+              />
+              <span>Enable provider prompt caching</span>
+            </label>
+            <div className="settings-grid-compact">
+              <label className="settings-inline-field">
+                <span className="settings-inline-label">
+                  <span>Claude TTL</span>
+                  <InfoTip content="Default uses the provider's normal ephemeral cache lifetime. One hour is only sent for supported Claude cache breakpoints." label="Claude TTL help" />
+                </span>
+                <select
+                  className="settings-input settings-select"
+                  value={promptCacheClaudeTtl}
+                  onChange={e => setPromptCacheClaudeTtl(e.target.value)}
+                  disabled={!promptCacheEnabled}
+                  title="Claude prompt cache time-to-live preference."
+                >
+                  <option value="default">Default</option>
+                  <option value="1h">1 hour</option>
+                </select>
+              </label>
+              <label className="settings-inline-field">
+                <span className="settings-inline-label">
+                  <span>OpenAI retention</span>
+                  <InfoTip content="Default leaves retention unset. In-memory is the normal short cache. 24h is sent only for models that support extended prompt caching." label="OpenAI retention help" />
+                </span>
+                <select
+                  className="settings-input settings-select"
+                  value={promptCacheOpenAIRetention}
+                  onChange={e => setPromptCacheOpenAIRetention(e.target.value)}
+                  disabled={!promptCacheEnabled}
+                  title="OpenAI prompt cache retention preference."
+                >
+                  <option value="default">Default</option>
+                  <option value="in-memory">In-memory</option>
+                  <option value="24h">24 hours</option>
+                </select>
+              </label>
+              <label className="settings-inline-field">
+                <span className="settings-inline-label">
+                  <span>Gemini TTL</span>
+                  <InfoTip content="Explicit Gemini cachedContent entries are created only for large reusable attachment blocks." label="Gemini TTL help" />
+                </span>
+                <select
+                  className="settings-input settings-select"
+                  value={String(promptCacheGeminiTtlSeconds)}
+                  onChange={e => setPromptCacheGeminiTtlSeconds(Number(e.target.value))}
+                  disabled={!promptCacheEnabled || !promptCacheGeminiExplicit}
+                  title="Direct Gemini explicit cache time-to-live."
+                >
+                  <option value="300">5 minutes</option>
+                  <option value="3600">1 hour</option>
+                </select>
+              </label>
+            </div>
+            <label className="settings-checkbox" title="Create direct Gemini cachedContent entries for large stable attachment prompts.">
+              <input
+                type="checkbox"
+                checked={promptCacheGeminiExplicit}
+                onChange={e => setPromptCacheGeminiExplicit(e.target.checked)}
+                disabled={!promptCacheEnabled}
+              />
+              <span>Use explicit Gemini cachedContent for large attachments</span>
+            </label>
+            <label className="settings-checkbox" title="Let the first matching long request finish before parallel duplicate requests hit the same provider cache key.">
+              <input
+                type="checkbox"
+                checked={promptCacheWarmupSerialization}
+                onChange={e => setPromptCacheWarmupSerialization(e.target.checked)}
+                disabled={!promptCacheEnabled}
+              />
+              <span>Serialize first long cache write</span>
+            </label>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-label">
+              <Database size={14} />
+              <span className="settings-label-copy">
                 <span>Response Cache</span>
                 <InfoTip
                   label="Response cache help"
@@ -2679,7 +2873,7 @@ export default function SettingsModal() {
             </label>
             <div className="settings-cache-row">
               <span className="settings-hint">
-                Hits: <strong>{cacheHitCount}</strong> · Entries: <strong>{cacheEntryCount}</strong>
+                Hits: <strong>{cacheHitCount}</strong> | Entries: <strong>{cacheEntryCount}</strong>
               </span>
               <button
                 className="settings-btn-secondary"

@@ -76,7 +76,8 @@ import {
   getModelUpgradeTargetKey,
   normalizeModelUpgradePolicy,
 } from '../lib/modelUpgrades.js';
-import { getCatalogModelLookupId } from '../lib/modelStats';
+import { getCatalogModelLookupId, getModelStatSnapshot } from '../lib/modelStats';
+import { getUsageCacheMeta } from '../lib/formatTokens';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload.js';
 import { isMostRecentConversation } from '../lib/sidebarOrdering.js';
 import {
@@ -124,9 +125,52 @@ const VALID_TITLE_SOURCES = new Set([TITLE_SOURCE_SEED, TITLE_SOURCE_AUTO, TITLE
 const MODEL_UPGRADE_POLICIES_STORAGE_KEY = 'model_upgrade_policies';
 const MODEL_UPGRADE_NOTIFICATIONS_ENABLED_STORAGE_KEY = 'model_upgrade_notifications_enabled';
 const DISMISSED_MODEL_UPGRADE_SUGGESTIONS_STORAGE_KEY = 'dismissed_model_upgrade_suggestions';
+const PROMPT_CACHE_POLICY_STORAGE_KEY = 'prompt_cache_policy';
+const MODEL_CATALOG_PRICING_STORAGE_KEY = 'model_catalog_pricing_fallbacks';
+const DEFAULT_PROMPT_CACHE_POLICY = {
+  enabled: true,
+  claudeTtl: 'default',
+  openaiRetention: 'default',
+  geminiExplicit: true,
+  geminiTtlSeconds: 300,
+  warmupSerialization: true,
+};
 
 function normalizeTitleSource(value) {
   return VALID_TITLE_SOURCES.has(value) ? value : TITLE_SOURCE_SEED;
+}
+
+function normalizePromptCachePolicy(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const claudeTtl = source.claudeTtl === '1h' ? '1h' : 'default';
+  const openaiRetention = ['in-memory', 'in_memory', '24h'].includes(source.openaiRetention)
+    ? (source.openaiRetention === 'in_memory' ? 'in-memory' : source.openaiRetention)
+    : 'default';
+  const ttlSecondsRaw = Number(source.geminiTtlSeconds);
+  const geminiTtlSeconds = Number.isFinite(ttlSecondsRaw)
+    ? Math.max(60, Math.min(3600, Math.round(ttlSecondsRaw)))
+    : DEFAULT_PROMPT_CACHE_POLICY.geminiTtlSeconds;
+  return {
+    enabled: source.enabled !== false,
+    claudeTtl,
+    openaiRetention,
+    geminiExplicit: source.geminiExplicit !== false,
+    geminiTtlSeconds,
+    warmupSerialization: source.warmupSerialization !== false,
+  };
+}
+
+function arePromptCachePoliciesEqual(left, right) {
+  const a = normalizePromptCachePolicy(left);
+  const b = normalizePromptCachePolicy(right);
+  return (
+    a.enabled === b.enabled
+    && a.claudeTtl === b.claudeTtl
+    && a.openaiRetention === b.openaiRetention
+    && a.geminiExplicit === b.geminiExplicit
+    && a.geminiTtlSeconds === b.geminiTtlSeconds
+    && a.warmupSerialization === b.warmupSerialization
+  );
 }
 
 function normalizeConversationTransferPins(raw) {
@@ -178,6 +222,10 @@ function createDefaultMetrics() {
     retryAttempts: 0,
     retryRecovered: 0,
     successfulTokenTotal: 0,
+    promptCacheReadTokens: 0,
+    promptCacheWriteTokens: 0,
+    promptCacheReadRequests: 0,
+    promptCacheWriteRequests: 0,
     firstAnswerTimes: [],
     failureByProvider: {},
     modelStats: {},
@@ -195,6 +243,10 @@ function createDefaultModelMetricEntry() {
     retryRecovered: 0,
     cacheHits: 0,
     successfulTokenTotal: 0,
+    promptCacheReadTokens: 0,
+    promptCacheWriteTokens: 0,
+    promptCacheReadRequests: 0,
+    promptCacheWriteRequests: 0,
     qualityVoteCount: 0,
     judgeSignalWeightTotal: 0,
     judgeRelativeWeightTotal: 0,
@@ -233,6 +285,18 @@ function normalizeModelMetricEntry(raw) {
     successfulTokenTotal: Number.isFinite(Number(raw.successfulTokenTotal))
       ? Math.max(0, Math.floor(Number(raw.successfulTokenTotal)))
       : 0,
+    promptCacheReadTokens: Number.isFinite(Number(raw.promptCacheReadTokens))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheReadTokens)))
+      : 0,
+    promptCacheWriteTokens: Number.isFinite(Number(raw.promptCacheWriteTokens))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheWriteTokens)))
+      : 0,
+    promptCacheReadRequests: Number.isFinite(Number(raw.promptCacheReadRequests))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheReadRequests)))
+      : 0,
+    promptCacheWriteRequests: Number.isFinite(Number(raw.promptCacheWriteRequests))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheWriteRequests)))
+      : 0,
     qualityVoteCount: Number.isFinite(Number(raw.qualityVoteCount)) ? Math.max(0, Math.floor(Number(raw.qualityVoteCount))) : 0,
     judgeSignalWeightTotal: Number.isFinite(Number(raw.judgeSignalWeightTotal))
       ? Math.max(0, Number(raw.judgeSignalWeightTotal))
@@ -265,6 +329,8 @@ function normalizeModelStats(raw) {
         || entry.networkCallCount > 0
         || entry.retryAttempts > 0
         || entry.cacheHits > 0
+        || entry.promptCacheReadTokens > 0
+        || entry.promptCacheWriteTokens > 0
         || entry.qualityVoteCount > 0
         || entry.judgeSignalWeightTotal > 0
       ))
@@ -298,6 +364,18 @@ function normalizeMetrics(raw) {
     retryRecovered: Number.isFinite(Number(raw.retryRecovered)) ? Math.max(0, Math.floor(Number(raw.retryRecovered))) : 0,
     successfulTokenTotal: Number.isFinite(Number(raw.successfulTokenTotal))
       ? Math.max(0, Math.floor(Number(raw.successfulTokenTotal)))
+      : 0,
+    promptCacheReadTokens: Number.isFinite(Number(raw.promptCacheReadTokens))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheReadTokens)))
+      : 0,
+    promptCacheWriteTokens: Number.isFinite(Number(raw.promptCacheWriteTokens))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheWriteTokens)))
+      : 0,
+    promptCacheReadRequests: Number.isFinite(Number(raw.promptCacheReadRequests))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheReadRequests)))
+      : 0,
+    promptCacheWriteRequests: Number.isFinite(Number(raw.promptCacheWriteRequests))
+      ? Math.max(0, Math.floor(Number(raw.promptCacheWriteRequests)))
       : 0,
     firstAnswerTimes,
     failureByProvider,
@@ -413,6 +491,30 @@ function buildModelCatalogLookup(models) {
     }
   }
   return catalog;
+}
+
+function buildModelCatalogPricingFallbacks(modelCatalog) {
+  if (!modelCatalog || typeof modelCatalog !== 'object') return {};
+  const pricing = {};
+  for (const [modelId, model] of Object.entries(modelCatalog)) {
+    const stats = getModelStatSnapshot(model);
+    if (stats.inputPrice == null && stats.outputPrice == null) continue;
+    const entry = {
+      inputPerMillion: stats.inputPrice,
+      outputPerMillion: stats.outputPrice,
+      cacheReadPerMillion: stats.cacheRead,
+      cacheWritePerMillion: stats.cacheWrite,
+    };
+    pricing[modelId] = entry;
+    const [provider, ...restParts] = String(modelId).split('/');
+    const rest = restParts.join('/');
+    if (rest) {
+      if (provider === 'google') pricing[`gemini:${rest}`] = entry;
+      if (provider === 'openai') pricing[`openai:${rest}`] = entry;
+      if (provider === 'anthropic') pricing[`anthropic:${rest}`] = entry;
+    }
+  }
+  return pricing;
 }
 
 function hashCacheKeyPayload(value) {
@@ -590,6 +692,9 @@ const storedActiveConversationId = loadActiveConversationId();
 
 const loadedMetrics = normalizeMetrics(loadFromStorage('debate_metrics', createDefaultMetrics()));
 const loadedRetryPolicy = normalizeRetryPolicy(loadFromStorage('retry_policy', DEFAULT_RETRY_POLICY));
+const loadedPromptCachePolicy = normalizePromptCachePolicy(
+  loadFromStorage(PROMPT_CACHE_POLICY_STORAGE_KEY, DEFAULT_PROMPT_CACHE_POLICY)
+);
 const loadedResponseCache = loadPersistedResponseCache();
 const loadedBudgetSoftLimitRaw = Number(loadFromStorage('budget_soft_limit_usd', 1.5));
 const loadedBudgetSoftLimit = Number.isFinite(loadedBudgetSoftLimitRaw)
@@ -622,6 +727,7 @@ const initialState = {
   webSearchModel: loadFromStorage('web_search_model', DEFAULT_WEB_SEARCH_MODEL),
   strictWebSearch: loadFromStorage('strict_web_search', false),
   retryPolicy: loadedRetryPolicy,
+  promptCachePolicy: loadedPromptCachePolicy,
   budgetGuardrailsEnabled: loadFromStorage('budget_guardrails_enabled', false),
   budgetSoftLimitUsd: loadedBudgetSoftLimit,
   budgetAutoApproveBelowUsd: loadedBudgetAutoApprove,
@@ -1019,6 +1125,14 @@ function reducer(state, action) {
       const policy = normalizeRetryPolicy(action.payload);
       saveToStorage('retry_policy', policy);
       return { ...state, retryPolicy: policy };
+    }
+    case 'SET_PROMPT_CACHE_POLICY': {
+      const policy = normalizePromptCachePolicy(action.payload);
+      if (arePromptCachePoliciesEqual(policy, state.promptCachePolicy)) {
+        return state;
+      }
+      saveToStorage(PROMPT_CACHE_POLICY_STORAGE_KEY, policy);
+      return { ...state, promptCachePolicy: policy };
     }
     case 'SET_BUDGET_GUARDRAILS_ENABLED': {
       saveToStorage('budget_guardrails_enabled', action.payload);
@@ -2360,6 +2474,28 @@ export function DebateProvider({ children }) {
     });
   }, [updateMetrics]);
 
+  const recordPromptCacheTelemetry = useCallback((modelId, usage) => {
+    const cacheMeta = getUsageCacheMeta(usage);
+    const promptCacheReadTokens = Number(cacheMeta.readTokens || 0);
+    const promptCacheWriteTokens = Number(cacheMeta.writeTokens || 0);
+    if (promptCacheReadTokens <= 0 && promptCacheWriteTokens <= 0) return;
+
+    updateMetrics((prev) => ({
+      ...prev,
+      promptCacheReadTokens: prev.promptCacheReadTokens + promptCacheReadTokens,
+      promptCacheWriteTokens: prev.promptCacheWriteTokens + promptCacheWriteTokens,
+      promptCacheReadRequests: prev.promptCacheReadRequests + (promptCacheReadTokens > 0 ? 1 : 0),
+      promptCacheWriteRequests: prev.promptCacheWriteRequests + (promptCacheWriteTokens > 0 ? 1 : 0),
+    }));
+    updateModelMetrics(modelId, (prev) => ({
+      ...prev,
+      promptCacheReadTokens: prev.promptCacheReadTokens + promptCacheReadTokens,
+      promptCacheWriteTokens: prev.promptCacheWriteTokens + promptCacheWriteTokens,
+      promptCacheReadRequests: prev.promptCacheReadRequests + (promptCacheReadTokens > 0 ? 1 : 0),
+      promptCacheWriteRequests: prev.promptCacheWriteRequests + (promptCacheWriteTokens > 0 ? 1 : 0),
+    }));
+  }, [updateMetrics, updateModelMetrics]);
+
   const recordEnsembleQualityTelemetry = useCallback((completedStreams, voteAnalysis) => {
     const observations = buildEnsembleQualityObservations({ completedStreams, voteAnalysis });
     for (const [modelId, observation] of Object.entries(observations)) {
@@ -2465,6 +2601,20 @@ export function DebateProvider({ children }) {
       activeController?.abort();
     };
   }, [dispatch, state.apiKey, state.modelCatalogStatus]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const pricing = buildModelCatalogPricingFallbacks(state.modelCatalog);
+    try {
+      if (Object.keys(pricing).length > 0) {
+        window.localStorage.setItem(MODEL_CATALOG_PRICING_STORAGE_KEY, JSON.stringify(pricing));
+      } else {
+        window.localStorage.removeItem(MODEL_CATALOG_PRICING_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage access failures
+    }
+  }, [state.modelCatalog]);
 
   useEffect(() => {
     if (state.modelCatalogStatus !== 'ready') return;
@@ -2728,7 +2878,9 @@ export function DebateProvider({ children }) {
         messages: summaryMessages,
         apiKey,
         signal,
-      }).then(({ content: summary }) => {
+        promptCachePolicy: state.promptCachePolicy,
+      }).then(({ content: summary, usage: summaryUsage }) => {
+        recordPromptCacheTelemetry(summaryModel, summaryUsage);
         dispatch({
           type: 'SET_RUNNING_SUMMARY',
           payload: {
@@ -3350,7 +3502,9 @@ export function DebateProvider({ children }) {
         ],
         apiKey,
         signal,
+        promptCachePolicy: state.promptCachePolicy,
       });
+      recordPromptCacheTelemetry(webSearchModel, searchUsage);
 
       dispatchTurnScoped(turnScope, 'SET_WEB_SEARCH_RESULT', {
         result: { status: 'complete', content: searchContent, model: webSearchModel, error: null, usage: searchUsage, durationMs: searchDurationMs },
@@ -3417,7 +3571,16 @@ export function DebateProvider({ children }) {
           ...prev,
           networkCallCount: prev.networkCallCount + 1,
         }));
-        result = await streamChat({ model, messages, apiKey, signal, onChunk: handleChunk, onReasoning, nativeWebSearch });
+        result = await streamChat({
+          model,
+          messages,
+          apiKey,
+          signal,
+          onChunk: handleChunk,
+          onReasoning,
+          nativeWebSearch,
+          promptCachePolicy: state.promptCachePolicy,
+        });
       } catch (streamErr) {
         lastError = streamErr;
         if (signal?.aborted) throw streamErr;
@@ -3429,7 +3592,14 @@ export function DebateProvider({ children }) {
               ...prev,
               networkCallCount: prev.networkCallCount + 1,
             }));
-            const fallbackResult = await chatCompletion({ model, messages, apiKey, signal, nativeWebSearch });
+            const fallbackResult = await chatCompletion({
+              model,
+              messages,
+              apiKey,
+              signal,
+              nativeWebSearch,
+              promptCachePolicy: state.promptCachePolicy,
+            });
             if (fallbackResult?.content) {
               firstTokenLatencyMs = firstTokenLatencyMs ?? Math.round(Number(fallbackResult.durationMs || 0));
               onChunk?.(fallbackResult.content, fallbackResult.content);
@@ -3446,10 +3616,17 @@ export function DebateProvider({ children }) {
         onRetryProgress?.(null);
         markProviderSuccess(providerId);
         const usedTokens = Number(result?.usage?.totalTokens);
+        const cacheMeta = getUsageCacheMeta(result?.usage);
+        const promptCacheReadTokens = Number(cacheMeta.readTokens || 0);
+        const promptCacheWriteTokens = Number(cacheMeta.writeTokens || 0);
         updateMetrics((prev) => ({
           ...prev,
           successCount: prev.successCount + 1,
           successfulTokenTotal: prev.successfulTokenTotal + (Number.isFinite(usedTokens) ? Math.max(0, Math.floor(usedTokens)) : 0),
+          promptCacheReadTokens: prev.promptCacheReadTokens + promptCacheReadTokens,
+          promptCacheWriteTokens: prev.promptCacheWriteTokens + promptCacheWriteTokens,
+          promptCacheReadRequests: prev.promptCacheReadRequests + (promptCacheReadTokens > 0 ? 1 : 0),
+          promptCacheWriteRequests: prev.promptCacheWriteRequests + (promptCacheWriteTokens > 0 ? 1 : 0),
           retryRecovered: prev.retryRecovered + (attempt > 1 ? 1 : 0),
         }));
         updateModelMetrics(model, (prev) => ({
@@ -3458,6 +3635,10 @@ export function DebateProvider({ children }) {
           successCount: prev.successCount + 1,
           retryRecovered: prev.retryRecovered + (attempt > 1 ? 1 : 0),
           successfulTokenTotal: prev.successfulTokenTotal + (Number.isFinite(usedTokens) ? Math.max(0, Math.floor(usedTokens)) : 0),
+          promptCacheReadTokens: prev.promptCacheReadTokens + promptCacheReadTokens,
+          promptCacheWriteTokens: prev.promptCacheWriteTokens + promptCacheWriteTokens,
+          promptCacheReadRequests: prev.promptCacheReadRequests + (promptCacheReadTokens > 0 ? 1 : 0),
+          promptCacheWriteRequests: prev.promptCacheWriteRequests + (promptCacheWriteTokens > 0 ? 1 : 0),
           firstTokenLatencies: firstTokenLatencyMs != null
             ? appendMetricSample(prev.firstTokenLatencies, firstTokenLatencyMs)
             : trimSample(prev.firstTokenLatencies),
@@ -4097,7 +4278,9 @@ export function DebateProvider({ children }) {
             messages: convergenceMessages,
             apiKey,
             signal: abortController.signal,
+            promptCachePolicy: state.promptCachePolicy,
           });
+          recordPromptCacheTelemetry(convergenceModel, convergenceUsage);
 
           const parsed = parseConvergenceResponse(convergenceResponse);
           parsed.rawResponse = convergenceResponse;
@@ -4330,7 +4513,9 @@ export function DebateProvider({ children }) {
         messages: voteMessages,
         apiKey,
         signal: abortController.signal,
+        promptCachePolicy: state.promptCachePolicy,
       });
+      recordPromptCacheTelemetry(convergenceModel, voteUsage);
 
       voteAnalysis = parseEnsembleVoteResponse(voteContent);
       recordEnsembleQualityTelemetry(completedStreams, voteAnalysis);
@@ -5624,7 +5809,8 @@ export function DebateProvider({ children }) {
         });
         try {
           const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-          const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+          const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal, promptCachePolicy: state.promptCachePolicy });
+          recordPromptCacheTelemetry(convergenceModel, cUsage);
           const parsed = parseConvergenceResponse(cResponse);
           parsed.rawResponse = cResponse;
           parsed.usage = cUsage || null;
@@ -5726,7 +5912,8 @@ export function DebateProvider({ children }) {
             });
             try {
               const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-              const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+              const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal, promptCachePolicy: state.promptCachePolicy });
+              recordPromptCacheTelemetry(convergenceModel, cUsage);
               const parsed = parseConvergenceResponse(cResponse);
               parsed.rawResponse = cResponse;
               parsed.usage = cUsage || null;
@@ -6173,7 +6360,8 @@ export function DebateProvider({ children }) {
       });
       try {
         const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: totalRounds });
-        const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+        const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal, promptCachePolicy: state.promptCachePolicy });
+        recordPromptCacheTelemetry(convergenceModel, cUsage);
         const parsed = parseConvergenceResponse(cResponse);
         parsed.rawResponse = cResponse;
         parsed.usage = cUsage || null;
@@ -6275,7 +6463,8 @@ export function DebateProvider({ children }) {
           });
           try {
             const cMsgs = buildConvergenceMessages({ userPrompt, latestRoundStreams: lastCompletedStreams, roundNumber: roundNum });
-            const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal });
+            const { content: cResponse, usage: cUsage } = await chatCompletion({ model: convergenceModel, messages: cMsgs, apiKey, signal: abortController.signal, promptCachePolicy: state.promptCachePolicy });
+            recordPromptCacheTelemetry(convergenceModel, cUsage);
             const parsed = parseConvergenceResponse(cResponse);
             parsed.rawResponse = cResponse;
             parsed.usage = cUsage || null;
@@ -6653,6 +6842,7 @@ export function DebateProvider({ children }) {
     webSearchModel: state.webSearchModel,
     strictWebSearch: state.strictWebSearch,
     retryPolicy: state.retryPolicy,
+    promptCachePolicy: state.promptCachePolicy,
     budgetGuardrailsEnabled: state.budgetGuardrailsEnabled,
     budgetSoftLimitUsd: state.budgetSoftLimitUsd,
     budgetAutoApproveBelowUsd: state.budgetAutoApproveBelowUsd,
@@ -6691,6 +6881,7 @@ export function DebateProvider({ children }) {
     state.webSearchModel,
     state.strictWebSearch,
     state.retryPolicy,
+    state.promptCachePolicy,
     state.budgetGuardrailsEnabled,
     state.budgetSoftLimitUsd,
     state.budgetAutoApproveBelowUsd,

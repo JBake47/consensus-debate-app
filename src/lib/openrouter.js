@@ -41,8 +41,38 @@ function extractUsage(obj) {
     const parsed = typeof value === 'number' ? value : Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
+  const promptDetails = u.prompt_tokens_details
+    ?? u.promptTokensDetails
+    ?? u.input_tokens_details
+    ?? u.inputTokensDetails
+    ?? {};
+  const cacheReadTokens = toFiniteNumber(
+    u.cache_read_input_tokens
+      ?? u.cacheReadInputTokens
+      ?? u.cache_read_tokens
+      ?? u.cacheReadTokens
+      ?? u.cached_tokens
+      ?? u.cachedTokens
+      ?? u.cached_content_token_count
+      ?? u.cachedContentTokenCount
+      ?? promptDetails.cached_tokens
+      ?? promptDetails.cachedTokens
+  );
+  const cacheWriteTokens = toFiniteNumber(
+    u.cache_creation_input_tokens
+      ?? u.cacheCreationInputTokens
+      ?? u.cache_write_tokens
+      ?? u.cacheWriteTokens
+      ?? promptDetails.cache_write_tokens
+      ?? promptDetails.cacheWriteTokens
+  );
+  const baseInputTokens = toFiniteNumber(u.input_tokens ?? u.inputTokens);
   const promptTokens = toFiniteNumber(
-    u.prompt_tokens ?? u.promptTokens ?? u.input_tokens ?? u.promptTokenCount
+    u.prompt_tokens ?? u.promptTokens ?? u.promptTokenCount
+  ) ?? (
+    baseInputTokens != null
+      ? baseInputTokens + (cacheReadTokens || 0) + (cacheWriteTokens || 0)
+      : toFiniteNumber(u.promptTokenCount)
   );
   const completionTokens = toFiniteNumber(
     u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? u.candidatesTokenCount ?? u.outputTokenCount
@@ -62,13 +92,17 @@ function extractUsage(obj) {
     totalTokens,
     cost,
     reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
   };
   if (
     usage.promptTokens == null &&
     usage.completionTokens == null &&
     usage.totalTokens == null &&
     usage.cost == null &&
-    usage.reasoningTokens == null
+    usage.reasoningTokens == null &&
+    usage.cacheReadTokens == null &&
+    usage.cacheWriteTokens == null
   ) {
     return null;
   }
@@ -106,7 +140,7 @@ function updateReasoningAccumulated(accumulated, incoming) {
  * Calls onChunk with each text delta as it arrives.
  * Returns { content, reasoning, usage, durationMs }.
  */
-export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false }) {
+export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false, promptCachePolicy = null }) {
   const startTime = performance.now();
   const stallTimeoutMs = getStreamStallTimeoutMs();
   const renderThrottleMs = getStreamRenderThrottleMs();
@@ -135,6 +169,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
             stream: true,
             clientApiKey: apiKey || undefined,
             nativeWebSearch: nativeWebSearch || undefined,
+            promptCache: promptCachePolicy || undefined,
           }),
           signal: requestAbortController.signal,
         }),
@@ -357,7 +392,7 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
  * Used for convergence checks and other quick evaluations.
  * Returns { content, usage, durationMs }.
  */
-export async function chatCompletion({ model, messages, apiKey, signal, nativeWebSearch = false }) {
+export async function chatCompletion({ model, messages, apiKey, signal, nativeWebSearch = false, promptCachePolicy = null }) {
   const startTime = performance.now();
 
   const response = await fetch(API_PROXY_URL, {
@@ -371,6 +406,7 @@ export async function chatCompletion({ model, messages, apiKey, signal, nativeWe
       stream: false,
       clientApiKey: apiKey || undefined,
       nativeWebSearch: nativeWebSearch || undefined,
+      promptCache: promptCachePolicy || undefined,
     }),
     signal,
   });

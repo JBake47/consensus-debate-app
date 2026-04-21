@@ -14,9 +14,11 @@ import {
   aggregateCostMetas,
   computeRoundCostMeta,
   formatCostWithQuality,
+  formatPromptCacheUsage,
   formatTokenCount,
   formatDuration,
   getCostQualityDescription,
+  getPromptCacheUsageDescription,
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './SynthesisView.css';
@@ -119,6 +121,7 @@ function DebateInternals({ rounds, debateMetadata }) {
                   {round.streams.map((stream, si) => {
                     const streamCostMeta = getUsageCostMeta(stream.usage, stream.model);
                     const streamCostLabel = formatCostWithQuality(streamCostMeta);
+                    const streamCacheLabel = formatPromptCacheUsage(stream.usage);
                     return (
                       <div key={si} className="internals-stream-row">
                         <span className={`internals-stream-status ${getStreamDisplayState(stream).tone}`}>
@@ -135,6 +138,14 @@ function DebateInternals({ rounds, debateMetadata }) {
                         )}
                         {stream.usage?.totalTokens != null && (
                           <span className="internals-stream-tokens">{formatTokenCount(stream.usage.totalTokens)} tokens</span>
+                        )}
+                        {streamCacheLabel && (
+                          <span
+                            className="internals-stream-tokens"
+                            title={getPromptCacheUsageDescription(stream.usage)}
+                          >
+                            {streamCacheLabel}
+                          </span>
                         )}
                         {stream.durationMs != null && (
                           <span className="internals-stream-duration">{formatDuration(stream.durationMs)}</span>
@@ -185,6 +196,8 @@ function SynthesisView({
   const previewPointerRef = useRef(null);
   const synthesisCostMeta = getUsageCostMeta(synthesis.usage, synthesis.model || model || '');
   const synthesisCostLabel = formatCostWithQuality(synthesisCostMeta);
+  const synthesisCacheLabel = formatPromptCacheUsage(synthesis.usage);
+  const synthesisCacheTitle = getPromptCacheUsageDescription(synthesis.usage);
   const synthesisCitations = extractCitations(content);
   const hasContentPreview = Boolean(content) && (status === 'streaming' || status === 'complete');
   const canExpandViewer = !viewerOpen && Boolean(content) && (status === 'streaming' || status === 'complete');
@@ -291,6 +304,7 @@ function SynthesisView({
               {synthesis.usage?.totalTokens != null && <>{formatTokenCount(synthesis.usage.totalTokens)} tokens</>}
               {synthesis.usage?.totalTokens != null && synthesis.durationMs != null && ' | '}
               {synthesis.durationMs != null && formatDuration(synthesis.durationMs)}
+              {synthesisCacheLabel && <> | <span title={synthesisCacheTitle}>{synthesisCacheLabel}</span></>}
             </div>
           )}
           {status === 'complete' && synthesis.completedAt && (

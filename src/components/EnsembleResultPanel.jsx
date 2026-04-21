@@ -5,7 +5,9 @@ import { getModelDisplayName } from '../lib/openrouter';
 import {
   formatDuration,
   formatCostWithQuality,
+  formatPromptCacheUsage,
   getCostQualityDescription,
+  getPromptCacheUsageDescription,
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './EnsembleResultPanel.css';
@@ -68,6 +70,7 @@ export default function EnsembleResultPanel({ ensembleResult }) {
   const hasDetails = hasAgreement || hasDisagreement || hasWeights;
   const costMeta = getUsageCostMeta(usage, ensembleResult?.model || '');
   const costLabel = formatCostWithQuality(costMeta);
+  const promptCacheLabel = formatPromptCacheUsage(usage);
 
   return (
     <div className="ensemble-panel">
@@ -183,6 +186,14 @@ export default function EnsembleResultPanel({ ensembleResult }) {
           )}
           {durationMs != null && (
             <span className="ensemble-footer-stat">{formatDuration(durationMs)}</span>
+          )}
+          {promptCacheLabel && (
+            <span
+              className="ensemble-footer-stat"
+              title={getPromptCacheUsageDescription(usage)}
+            >
+              {promptCacheLabel}
+            </span>
           )}
         </div>
       )}

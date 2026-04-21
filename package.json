@@ -1,7 +1,7 @@
 {
   "name": "consensus",
   "private": true,
-  "version": "0.3.37",
+  "version": "0.3.38",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/retryPolicy.test.js && node src/lib/synthesisState.test.js && node src/lib/modelRanking.test.js && node src/lib/modelUpgrades.test.js && node src/lib/retryState.test.js && node src/lib/webSearch.test.js && node src/lib/contextManager.test.js && node src/lib/conversationBranching.test.js && node src/lib/conversationIndex.test.js && node src/lib/sidebarOrdering.test.js && node src/lib/searchConversations.test.js && node src/lib/conversationPersistence.test.js && node src/lib/conversationRecovery.test.js && node src/lib/conversationStoreSnapshot.test.js && node src/lib/attachmentRouting.test.js && node src/lib/attachmentPreview.test.js && node src/lib/fileProcessor.test.js && node src/lib/multimodalOrchestrator.test.js && node src/lib/keyboardShortcuts.test.js && node src/lib/appUpdate.test.js && node src/lib/titleGenerator.test.js && node src/lib/transferPacket.test.js && node server/searchMetadata.test.js && node server/openrouterPayload.test.js && node server/modelCatalog.test.js && node server/multimodalApi.test.js && node server/restartManager.test.js && node server/updateManager.test.js"
+    "test": "node src/lib/retryPolicy.test.js && node src/lib/synthesisState.test.js && node src/lib/modelRanking.test.js && node src/lib/modelUpgrades.test.js && node src/lib/retryState.test.js && node src/lib/webSearch.test.js && node src/lib/contextManager.test.js && node src/lib/conversationBranching.test.js && node src/lib/conversationIndex.test.js && node src/lib/sidebarOrdering.test.js && node src/lib/searchConversations.test.js && node src/lib/conversationPersistence.test.js && node src/lib/conversationRecovery.test.js && node src/lib/conversationStoreSnapshot.test.js && node src/lib/attachmentRouting.test.js && node src/lib/attachmentPreview.test.js && node src/lib/fileProcessor.test.js && node src/lib/multimodalOrchestrator.test.js && node src/lib/keyboardShortcuts.test.js && node src/lib/appUpdate.test.js && node src/lib/titleGenerator.test.js && node src/lib/transferPacket.test.js && node src/lib/formatTokens.test.js && node server/searchMetadata.test.js && node server/openrouterPayload.test.js && node server/providerPayload.test.js && node server/modelCatalog.test.js && node server/multimodalApi.test.js && node server/restartManager.test.js && node server/updateManager.test.js"
   },
   "dependencies": {
     "docx": "^9.6.0",

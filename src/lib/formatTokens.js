@@ -13,6 +13,7 @@ const COST_QUALITY = {
 
 const TOKENS_PER_MILLION = 1_000_000;
 const LOCAL_STORAGE_PRICING_KEY = 'model_pricing_fallbacks';
+const LOCAL_STORAGE_CATALOG_PRICING_KEY = 'model_catalog_pricing_fallbacks';
 
 let pricingCacheKey = null;
 let pricingCache = {};
@@ -69,12 +70,31 @@ function parsePricingEntry(entry) {
     ?? entry.output
     ?? entry.completion
   );
+  const cacheReadPerMillion = toFiniteNumber(
+    entry.cacheReadPerMillion
+    ?? entry.cacheReadPer1M
+    ?? entry.inputCacheReadPerMillion
+    ?? entry.input_cache_read
+    ?? entry.cache_read
+  );
+  const cacheWritePerMillion = toFiniteNumber(
+    entry.cacheWritePerMillion
+    ?? entry.cacheWritePer1M
+    ?? entry.inputCacheWritePerMillion
+    ?? entry.input_cache_write
+    ?? entry.cache_write
+  );
 
   const input = inputPerMillion != null ? inputPerMillion : outputPerMillion;
   const output = outputPerMillion != null ? outputPerMillion : inputPerMillion;
 
   if (input == null || output == null || input < 0 || output < 0) return null;
-  return { inputPerMillion: input, outputPerMillion: output };
+  return {
+    inputPerMillion: input,
+    outputPerMillion: output,
+    cacheReadPerMillion: cacheReadPerMillion != null && cacheReadPerMillion >= 0 ? cacheReadPerMillion : null,
+    cacheWritePerMillion: cacheWritePerMillion != null && cacheWritePerMillion >= 0 ? cacheWritePerMillion : null,
+  };
 }
 
 function parsePricingMap(raw) {
@@ -106,15 +126,26 @@ function getLocalPricingRaw() {
   }
 }
 
+function getCatalogPricingRaw() {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage?.getItem(LOCAL_STORAGE_CATALOG_PRICING_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
 function getPricingFallbacks() {
   const envRaw = import.meta.env?.VITE_MODEL_PRICING_FALLBACKS || '';
+  const catalogRaw = getCatalogPricingRaw();
   const localRaw = getLocalPricingRaw();
-  const cacheKey = `${envRaw}:::${localRaw}`;
+  const cacheKey = `${envRaw}:::${catalogRaw}:::${localRaw}`;
   if (cacheKey === pricingCacheKey) return pricingCache;
 
   pricingCacheKey = cacheKey;
   pricingCache = {
     ...parsePricingMap(envRaw),
+    ...parsePricingMap(catalogRaw),
     ...parsePricingMap(localRaw),
   };
   return pricingCache;
@@ -155,6 +186,8 @@ function hasUsageSignals(usage) {
     || toFiniteNumber(usage.promptTokens) != null
     || toFiniteNumber(usage.completionTokens) != null
     || toFiniteNumber(usage.totalTokens) != null
+    || toFiniteNumber(usage.cacheReadTokens) != null
+    || toFiniteNumber(usage.cacheWriteTokens) != null
   );
 }
 
@@ -189,6 +222,44 @@ function deriveTokenBreakdown(usage) {
   return { promptTokens, completionTokens, totalTokens };
 }
 
+export function getUsageCacheMeta(usage) {
+  if (!usage || typeof usage !== 'object') {
+    return { readTokens: null, writeTokens: null, totalTokens: 0, hasActivity: false };
+  }
+  const readTokens = toFiniteNumber(usage.cacheReadTokens);
+  const writeTokens = toFiniteNumber(usage.cacheWriteTokens);
+  const totalTokens = (readTokens || 0) + (writeTokens || 0);
+  return {
+    readTokens,
+    writeTokens,
+    totalTokens,
+    hasActivity: totalTokens > 0,
+  };
+}
+
+export function formatPromptCacheUsage(usage) {
+  const cache = getUsageCacheMeta(usage);
+  if (!cache.hasActivity) return null;
+  const parts = [];
+  if (cache.readTokens > 0) parts.push(`${formatTokenCount(cache.readTokens)} read`);
+  if (cache.writeTokens > 0) parts.push(`${formatTokenCount(cache.writeTokens)} write`);
+  return parts.length > 0 ? `cache ${parts.join(' / ')}` : null;
+}
+
+export function getPromptCacheUsageDescription(usage) {
+  const cache = getUsageCacheMeta(usage);
+  if (!cache.hasActivity) return '';
+  const parts = ['Provider prompt cache usage.'];
+  if (cache.readTokens > 0) {
+    parts.push(`${formatTokenCount(cache.readTokens)} input tokens were read from the provider prompt cache.`);
+  }
+  if (cache.writeTokens > 0) {
+    parts.push(`${formatTokenCount(cache.writeTokens)} input tokens were written into the provider prompt cache.`);
+  }
+  parts.push('This is separate from the local response cache.');
+  return parts.join(' ');
+}
+
 /**
  * Returns a normalized cost object for a usage payload:
  * { cost, quality } where quality is exact|estimated|partial|unknown|none
@@ -221,7 +292,19 @@ export function getUsageCostMeta(usage, model = '') {
     return { cost: 0, quality: COST_QUALITY.UNKNOWN };
   }
 
-  const promptCost = hasPrompt ? (promptTokens * pricing.inputPerMillion) / TOKENS_PER_MILLION : 0;
+  const cache = getUsageCacheMeta(usage);
+  const cacheReadTokens = cache.readTokens || 0;
+  const cacheWriteTokens = cache.writeTokens || 0;
+  const uncachedPromptTokens = hasPrompt
+    ? Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens)
+    : 0;
+  const promptCost = hasPrompt
+    ? (
+      (uncachedPromptTokens * pricing.inputPerMillion) +
+      (cacheReadTokens * (pricing.cacheReadPerMillion ?? pricing.inputPerMillion)) +
+      (cacheWriteTokens * (pricing.cacheWritePerMillion ?? pricing.inputPerMillion))
+    ) / TOKENS_PER_MILLION
+    : 0;
   const completionCost = hasCompletion ? (completionTokens * pricing.outputPerMillion) / TOKENS_PER_MILLION : 0;
   const estimated = promptCost + completionCost;
 

@@ -13,6 +13,7 @@ export const ATTACHMENT_ACCEPTED_TYPES = [
   'JSON',
   'Code files',
 ];
+const PROMPT_CACHE_TEXT_MIN_CHARS = 4096;
 
 function truncateContent(content, maxChars) {
   const text = String(content || '');
@@ -69,6 +70,48 @@ function buildFallbackAttachmentBlock(attachment) {
     return `\n\n---\n**${label}: ${attachment?.name || 'attachment'}**\n(Unable to extract text content from this file.)`;
   }
   return `\n\n---\n**${label}: ${attachment?.name || 'attachment'}**\n\`\`\`\n${truncateContent(content, 50000)}\n\`\`\``;
+}
+
+function getCacheModelId(modelId) {
+  const raw = String(modelId || '').trim().toLowerCase();
+  if (raw.startsWith('openrouter/')) return raw.slice('openrouter/'.length);
+  if (raw.includes(':')) return raw.slice(raw.indexOf(':') + 1);
+  return raw;
+}
+
+function isClaudeModel(modelId) {
+  const id = getCacheModelId(modelId);
+  return id.startsWith('anthropic/') || id.startsWith('claude-') || id.includes('/claude-');
+}
+
+function isOpenRouterGeminiModel(modelId) {
+  if (!usesOpenRouterTransport(modelId)) return false;
+  const id = getCacheModelId(modelId);
+  return id.startsWith('google/gemini') || id.startsWith('gemini') || id.includes('/gemini');
+}
+
+function supportsExplicitPromptCacheControl(modelId) {
+  return isClaudeModel(modelId) || isOpenRouterGeminiModel(modelId);
+}
+
+function buildCacheControl() {
+  return { type: 'ephemeral' };
+}
+
+function shouldOptimizeAttachmentPrefix(fallbackText) {
+  if (!fallbackText || fallbackText.length < PROMPT_CACHE_TEXT_MIN_CHARS) return false;
+  return true;
+}
+
+function buildVariableAttachmentTail({ text, videoUrls, excludedNotes }) {
+  const parts = [`**User request:**\n${String(text || '')}`];
+  if (videoUrls.length > 0) {
+    parts.push(`**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`);
+  }
+  if (excludedNotes.length > 0) {
+    parts.push(`**Attachments not sent to this model:**\n${excludedNotes.join('\n')}`);
+  }
+  return parts.join('\n\n---\n');
 }
 
 export function getAttachmentTransportForModel(attachment, modelId, modelCatalog = {}, capabilityRegistry = null) {
@@ -300,8 +343,10 @@ export function buildAttachmentContentForModel(text, attachments, options = {}) 
     }
   }
 
-  if (fallbackBlocks.length > 0) {
-    bodyText += fallbackBlocks.join('');
+  const fallbackText = fallbackBlocks.join('');
+  const optimizeAttachmentPrefix = shouldOptimizeAttachmentPrefix(fallbackText);
+  if (fallbackBlocks.length > 0 && !optimizeAttachmentPrefix) {
+    bodyText += fallbackText;
   }
 
   if (videoUrls.length > 0) {
@@ -313,14 +358,29 @@ export function buildAttachmentContentForModel(text, attachments, options = {}) 
           video_url: { url },
         });
       }
-      bodyText += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
-    } else {
+    }
+    if (!optimizeAttachmentPrefix) {
       bodyText += `\n\n---\n**Referenced videos:**\n${videoUrls.map((url) => `- ${url}`).join('\n')}`;
     }
   }
 
-  if (excludedNotes.length > 0) {
+  if (excludedNotes.length > 0 && !optimizeAttachmentPrefix) {
     bodyText += `\n\n---\n**Attachments not sent to this model:**\n${excludedNotes.join('\n')}`;
+  }
+
+  if (optimizeAttachmentPrefix) {
+    const cacheableText = `**Reusable reference material:**${fallbackText}`;
+    const variableText = buildVariableAttachmentTail({ text, videoUrls, excludedNotes });
+    if (supportsExplicitPromptCacheControl(modelId)) {
+      const cacheablePart = { type: 'text', text: cacheableText };
+      cacheablePart.cache_control = buildCacheControl();
+      return [
+        cacheablePart,
+        { type: 'text', text: variableText },
+        ...nativeParts,
+      ];
+    }
+    bodyText = `${cacheableText}\n\n---\n${variableText}`;
   }
 
   if (nativeParts.length === 0) {

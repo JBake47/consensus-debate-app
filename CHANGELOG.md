@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.38] - 2026-04-21
+
+### Added
+- Provider-aware prompt caching for supported OpenAI, Anthropic, Gemini, and OpenRouter requests, including cache usage metrics, pricing-aware cost estimates, Settings controls, and server environment tuning
+- Direct Gemini `cachedContent` lifecycle support for large reusable attachment prompts, with TTL reuse, concurrent create deduping, cache pruning, and fallback to uncached requests when cache creation fails
+
+### Changed
+- Large attachment prompts now place stable reusable document text before the variable user request and add provider cache breakpoints where supported
+- Production builds now split React, icon, and virtualized-list vendor chunks so the main entry bundle stays below Vite's large-chunk warning threshold
+
 ### Fixed
 - Creating a new chat while another chat is still running no longer reselects or interrupts the live chat during snapshot sync or startup hydration, and active chat selection now stays scoped to the current tab
+- Provider prompt cache hints now use provider-specific request shapes and avoid sending extended OpenAI retention to unsupported model families
 
 ## [0.3.37] - 2026-04-13
 

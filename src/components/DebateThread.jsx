@@ -14,7 +14,9 @@ import {
   formatTokenCount,
   formatDuration,
   formatCostWithQuality,
+  formatPromptCacheUsage,
   getCostQualityDescription,
+  getPromptCacheUsageDescription,
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import './DebateThread.css';
@@ -76,6 +78,8 @@ function ThreadMessage({
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
+  const promptCacheLabel = formatPromptCacheUsage(usage);
+  const promptCacheTitle = getPromptCacheUsageDescription(usage);
   const retryScopeTitle = getRetryScopeDescription({
     scope: 'stream',
     mode: turnMode,
@@ -162,6 +166,7 @@ function ThreadMessage({
               )}
               {usage?.totalTokens != null && <>{formatTokenCount(usage.totalTokens)} tok</>}
               {durationMs != null && <> | {formatDuration(durationMs)}</>}
+              {promptCacheLabel && <> | <span title={promptCacheTitle}>{promptCacheLabel}</span></>}
             </span>
           )}
           {searchEvidence && (

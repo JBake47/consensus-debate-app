@@ -13,7 +13,9 @@ import {
   formatTokenCount,
   formatDuration,
   formatCostWithQuality,
+  formatPromptCacheUsage,
   getCostQualityDescription,
+  getPromptCacheUsageDescription,
   getUsageCostMeta,
 } from '../lib/formatTokens';
 import InfoTip from './InfoTip';
@@ -100,6 +102,8 @@ function ModelCard({
   const routeClass = routeInfo?.routed ? 'routed' : 'blocked';
   const costMeta = getUsageCostMeta(usage, model);
   const costLabel = formatCostWithQuality(costMeta);
+  const promptCacheLabel = formatPromptCacheUsage(usage);
+  const promptCacheTitle = getPromptCacheUsageDescription(usage);
   const hasContentPreview = Boolean(content) && status !== 'pending';
   const hasReasoningPreview = Boolean(reasoning);
   const canExpandViewer = !viewerOpen && Boolean(content) && status !== 'pending';
@@ -231,6 +235,7 @@ function ModelCard({
               {usage?.totalTokens != null && <>{formatTokenCount(usage.totalTokens)} tokens</>}
               {usage?.totalTokens != null && durationMs != null && ' | '}
               {durationMs != null && formatDuration(durationMs)}
+              {promptCacheLabel && <> | <span title={promptCacheTitle}>{promptCacheLabel}</span></>}
             </span>
           )}
           {searchEvidence && (
