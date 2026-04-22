@@ -14,6 +14,31 @@ const DEFAULT_STANDARD_CACHE_TTL_MS = 2 * 60 * 1000;
 const DEFAULT_SEARCH_CACHE_TTL_MS = 30 * 1000;
 const URL_FIELD_REGEX = /\b(url|uri|href|link)\b/i;
 const DATE_FIELD_REGEX = /\b(date|time|timestamp|published|updated|retrieved|posted)\b/i;
+export const SEARCH_MODE_NATIVE_FIRST = 'native_first';
+export const SEARCH_MODE_LEGACY_ALWAYS = 'legacy_always';
+export const SEARCH_MODE_LEGACY_ON_DEMAND = 'legacy_on_demand';
+export const DEFAULT_SEARCH_MODE = SEARCH_MODE_NATIVE_FIRST;
+export const FALLBACK_CONTEXT_PROMPT_ONLY = 'prompt_only';
+export const FALLBACK_CONTEXT_ATTACHMENTS = 'prompt_attachments';
+export const FALLBACK_CONTEXT_CLAIMS_HISTORY = 'prompt_claims_history';
+export const DEFAULT_FALLBACK_CONTEXT_DEPTH = FALLBACK_CONTEXT_CLAIMS_HISTORY;
+export const DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS = {
+  engine: '',
+  maxResults: '',
+  maxTotalResults: '',
+  searchContextSize: '',
+  allowedDomains: '',
+  excludedDomains: '',
+  userLocation: {
+    city: '',
+    region: '',
+    country: '',
+    timezone: '',
+  },
+};
+const OPENROUTER_WEB_SEARCH_ENGINES = new Set(['', 'auto', 'native', 'exa', 'firecrawl', 'parallel']);
+const OPENROUTER_SEARCH_CONTEXT_SIZES = new Set(['', 'low', 'medium', 'high']);
+const LEGACY_FALLBACK_MAX_SECTION_CHARS = 12000;
 
 function collectRegexMatches(text, regexes) {
   const source = String(text || '');
@@ -27,6 +52,240 @@ function collectRegexMatches(text, regexes) {
     }
   }
   return Array.from(values);
+}
+
+function truncateText(text, maxChars = LEGACY_FALLBACK_MAX_SECTION_CHARS) {
+  const safeText = String(text || '').trim();
+  if (!safeText || safeText.length <= maxChars) return safeText;
+  return `${safeText.slice(0, maxChars)}\n... (truncated)`;
+}
+
+function normalizeString(value) {
+  return String(value || '').trim();
+}
+
+function normalizeCsvText(value) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+  return Array.from(new Set(values.map(normalizeString).filter(Boolean))).join(', ');
+}
+
+function normalizePositiveIntegerSetting(value, max = Infinity) {
+  const raw = normalizeString(value);
+  if (!raw) return '';
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return '';
+  return String(Math.min(max, Math.floor(parsed)));
+}
+
+export function normalizeSearchMode(value) {
+  const mode = String(value || '').trim();
+  if (
+    mode === SEARCH_MODE_NATIVE_FIRST
+    || mode === SEARCH_MODE_LEGACY_ALWAYS
+    || mode === SEARCH_MODE_LEGACY_ON_DEMAND
+  ) {
+    return mode;
+  }
+  return DEFAULT_SEARCH_MODE;
+}
+
+export function normalizeFallbackContextDepth(value) {
+  const depth = String(value || '').trim();
+  if (
+    depth === FALLBACK_CONTEXT_PROMPT_ONLY
+    || depth === FALLBACK_CONTEXT_ATTACHMENTS
+    || depth === FALLBACK_CONTEXT_CLAIMS_HISTORY
+  ) {
+    return depth;
+  }
+  return DEFAULT_FALLBACK_CONTEXT_DEPTH;
+}
+
+export function normalizeOpenRouterWebSearchOptions(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const engine = normalizeString(source.engine).toLowerCase();
+  const searchContextSize = normalizeString(source.searchContextSize ?? source.search_context_size).toLowerCase();
+  const userLocation = source.userLocation ?? source.user_location ?? {};
+  const safeUserLocation = userLocation && typeof userLocation === 'object' && !Array.isArray(userLocation)
+    ? userLocation
+    : {};
+  return {
+    engine: OPENROUTER_WEB_SEARCH_ENGINES.has(engine) ? engine : '',
+    maxResults: normalizePositiveIntegerSetting(source.maxResults ?? source.max_results, 25),
+    maxTotalResults: normalizePositiveIntegerSetting(source.maxTotalResults ?? source.max_total_results),
+    searchContextSize: OPENROUTER_SEARCH_CONTEXT_SIZES.has(searchContextSize) ? searchContextSize : '',
+    allowedDomains: normalizeCsvText(source.allowedDomains ?? source.allowed_domains),
+    excludedDomains: normalizeCsvText(source.excludedDomains ?? source.excluded_domains),
+    userLocation: {
+      city: normalizeString(safeUserLocation.city),
+      region: normalizeString(safeUserLocation.region),
+      country: normalizeString(safeUserLocation.country).toUpperCase(),
+      timezone: normalizeString(safeUserLocation.timezone),
+    },
+  };
+}
+
+export function hasOpenRouterWebSearchOptions(raw = {}) {
+  const options = normalizeOpenRouterWebSearchOptions(raw);
+  return Boolean(
+    options.engine
+    || options.maxResults
+    || options.maxTotalResults
+    || options.searchContextSize
+    || options.allowedDomains
+    || options.excludedDomains
+    || options.userLocation.city
+    || options.userLocation.region
+    || options.userLocation.country
+    || options.userLocation.timezone
+  );
+}
+
+function formatSearchOptionLines(rawOptions = {}) {
+  const options = normalizeOpenRouterWebSearchOptions(rawOptions);
+  const locationParts = [
+    options.userLocation.city,
+    options.userLocation.region,
+    options.userLocation.country,
+    options.userLocation.timezone,
+  ].filter(Boolean);
+  return [
+    `- Engine: ${options.engine || 'provider default'}`,
+    `- Context size: ${options.searchContextSize || 'provider default'}`,
+    `- Max results per search: ${options.maxResults || 'provider default'}`,
+    `- Max total results: ${options.maxTotalResults || 'provider default'}`,
+    `- Allowed domains: ${options.allowedDomains || 'none'}`,
+    `- Excluded domains: ${options.excludedDomains || 'none'}`,
+    `- User location: ${locationParts.length > 0 ? locationParts.join(', ') : 'none'}`,
+  ].join('\n');
+}
+
+function formatConversationMessages(messages = []) {
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  if (safeMessages.length === 0) return '';
+  return safeMessages
+    .slice(-6)
+    .map((message, index) => {
+      const role = String(message?.role || 'context').toUpperCase();
+      return `### ${role} ${index + 1}\n${truncateText(message?.content, 2500)}`;
+    })
+    .join('\n\n');
+}
+
+function formatModelAnswerBlocks(results = []) {
+  const safeResults = Array.isArray(results) ? results : [];
+  if (safeResults.length === 0) return '';
+  return safeResults
+    .filter((result) => result?.content || result?.error || result?.searchEvidence)
+    .map((result) => {
+      const model = result.model || result.effectiveModel || 'unknown model';
+      const evidence = result.searchEvidence;
+      const evidenceLines = evidence
+        ? [
+          `Search evidence verified: ${evidence.verified ? 'yes' : 'no'}`,
+          evidence.primaryIssue ? `Primary evidence issue: ${evidence.primaryIssue}` : '',
+          Array.isArray(evidence.issues) && evidence.issues.length > 0 ? `Evidence issues: ${evidence.issues.join('; ')}` : '',
+          Array.isArray(evidence.sources) && evidence.sources.length > 0 ? `Detected sources: ${evidence.sources.join(', ')}` : '',
+        ].filter(Boolean).join('\n')
+        : '';
+      const content = result.content
+        ? truncateText(result.content, 3500)
+        : `No completed answer. Error: ${result.error || 'unknown'}`;
+      return `### ${model}\n${evidenceLines ? `${evidenceLines}\n\n` : ''}${content}`;
+    })
+    .join('\n\n---\n\n');
+}
+
+export function buildLegacyResearchFallbackMessages({
+  userPrompt,
+  focused = false,
+  turnMode = 'debate',
+  fallbackContextDepth = DEFAULT_FALLBACK_CONTEXT_DEPTH,
+  searchMode = DEFAULT_SEARCH_MODE,
+  fallbackReason = '',
+  attachmentText = '',
+  videoUrls = [],
+  conversationHistory = [],
+  modelResults = [],
+  convergenceCheck = null,
+  searchOptions = {},
+} = {}) {
+  const depth = normalizeFallbackContextDepth(fallbackContextDepth);
+  const includeAttachments = depth === FALLBACK_CONTEXT_ATTACHMENTS || depth === FALLBACK_CONTEXT_CLAIMS_HISTORY;
+  const includeClaimsAndHistory = depth === FALLBACK_CONTEXT_CLAIMS_HISTORY;
+  const cleanVideoUrls = Array.isArray(videoUrls)
+    ? videoUrls.map((url) => normalizeString(url)).filter(Boolean)
+    : [];
+  const conversationBlock = includeClaimsAndHistory ? formatConversationMessages(conversationHistory) : '';
+  const answersBlock = includeClaimsAndHistory ? formatModelAnswerBlocks(modelResults) : '';
+  const convergenceBlock = includeClaimsAndHistory && convergenceCheck
+    ? truncateText(JSON.stringify(convergenceCheck, null, 2), 2000)
+    : '';
+  const sections = [
+    '# Legacy Research Fallback Packet',
+    '## Original User Prompt',
+    truncateText(userPrompt, 8000) || '(empty prompt)',
+    '## Run Context',
+    [
+      `- Turn mode: ${turnMode || 'debate'}`,
+      `- Focused mode: ${focused ? 'on' : 'off'}`,
+      `- Search mode: ${normalizeSearchMode(searchMode)}`,
+      `- Native search failure/recovery reason: ${normalizeString(fallbackReason) || 'Legacy research fallback requested.'}`,
+      `- Fallback context depth: ${depth}`,
+    ].join('\n'),
+    '## Native Tool Search Options',
+    formatSearchOptionLines(searchOptions),
+  ];
+
+  if (includeAttachments) {
+    sections.push(
+      '## Attachment Text',
+      truncateText(attachmentText, 14000) || '(no attachment text included)'
+    );
+    sections.push(
+      '## Referenced Video URLs',
+      cleanVideoUrls.length > 0 ? cleanVideoUrls.map((url) => `- ${url}`).join('\n') : '(none)'
+    );
+  }
+
+  if (includeClaimsAndHistory) {
+    sections.push(
+      '## Conversation Summary / Recent Context',
+      conversationBlock || '(no prior conversation context included)'
+    );
+    sections.push(
+      '## Initial Model Answers And Evidence Issues',
+      answersBlock || '(no prior model answers yet)'
+    );
+    if (convergenceBlock) {
+      sections.push('## Convergence / Disagreement Signal', convergenceBlock);
+    }
+  }
+
+  sections.push(
+    '## Required Output Shape',
+    [
+      'Return a concise research brief with these sections:',
+      '1. Sourced Findings: bullets with the claim, source title/domain, full source URL, and publication or updated date/timestamp.',
+      '2. Date-Sensitive Notes: call out currentness, stale evidence, conflicting dates, or unavailable timestamps.',
+      '3. Unresolved Gaps: facts you could not verify, sources that were inaccessible, or claims that remain uncertain.',
+      '4. Search Notes: summarize search strategy, domains used or avoided, and whether the evidence is strong enough for downstream debate answers.',
+      'Do not invent sources, dates, or URLs. If evidence is unavailable, say so explicitly.',
+    ].join('\n')
+  );
+
+  return [
+    {
+      role: 'system',
+      content: 'You are a research fallback provider. Use web-search capabilities available to your model to verify the packet. Prioritize primary sources, current publication dates, full source URLs, and explicit uncertainty over speculation.',
+    },
+    {
+      role: 'user',
+      content: sections.join('\n\n'),
+    },
+  ];
 }
 
 export function normalizeUrl(rawUrl) {

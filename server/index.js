@@ -877,8 +877,28 @@ function parseJsonEnvObject(value) {
   }
 }
 
-function getOpenRouterWebSearchOptions() {
+function normalizeOpenRouterWebSearchRequestOptions(rawOptions) {
+  if (!rawOptions || typeof rawOptions !== 'object' || Array.isArray(rawOptions)) return null;
+  const source = rawOptions;
+  const userLocation = source.userLocation ?? source.user_location;
   return {
+    ...(Object.prototype.hasOwnProperty.call(source, 'engine') ? { engine: source.engine } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'maxResults') ? { maxResults: source.maxResults } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'max_results') ? { maxResults: source.max_results } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'maxTotalResults') ? { maxTotalResults: source.maxTotalResults } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'max_total_results') ? { maxTotalResults: source.max_total_results } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'searchContextSize') ? { searchContextSize: source.searchContextSize } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'search_context_size') ? { searchContextSize: source.search_context_size } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'allowedDomains') ? { allowedDomains: source.allowedDomains } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'allowed_domains') ? { allowedDomains: source.allowed_domains } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'excludedDomains') ? { excludedDomains: source.excludedDomains } : {}),
+    ...(Object.prototype.hasOwnProperty.call(source, 'excluded_domains') ? { excludedDomains: source.excluded_domains } : {}),
+    ...(userLocation && typeof userLocation === 'object' && !Array.isArray(userLocation) ? { userLocation } : {}),
+  };
+}
+
+function getOpenRouterWebSearchOptions(overrides = null) {
+  const defaults = {
     engine: OPENROUTER_WEB_SEARCH_ENGINE,
     maxResults: OPENROUTER_WEB_SEARCH_MAX_RESULTS,
     maxTotalResults: OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS,
@@ -887,6 +907,8 @@ function getOpenRouterWebSearchOptions() {
     excludedDomains: parseCsvEnv(OPENROUTER_WEB_SEARCH_EXCLUDED_DOMAINS),
     userLocation: parseJsonEnvObject(OPENROUTER_WEB_SEARCH_USER_LOCATION),
   };
+  const normalizedOverrides = normalizeOpenRouterWebSearchRequestOptions(overrides);
+  return normalizedOverrides ? { ...defaults, ...normalizedOverrides } : defaults;
 }
 
 function shouldRetryOpenRouterWebSearchWithPlugin(status, bodyText) {
@@ -916,14 +938,24 @@ async function fetchOpenRouterChatCompletion({ apiKey, body, signal }) {
   });
 }
 
-async function handleOpenRouter({ model, messages, stream, res, signal, clientApiKey, nativeWebSearch = false, promptCacheOptions = {} }) {
+async function handleOpenRouter({
+  model,
+  messages,
+  stream,
+  res,
+  signal,
+  clientApiKey,
+  nativeWebSearch = false,
+  openRouterWebSearchOptions = null,
+  promptCacheOptions = {},
+}) {
   const apiKey = clientApiKey || process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error('Missing OpenRouter API key');
   }
 
   const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
-  const webSearchOptions = getOpenRouterWebSearchOptions();
+  const webSearchOptions = getOpenRouterWebSearchOptions(openRouterWebSearchOptions);
   const buildBody = (openRouterWebSearchMode = 'server_tool') => buildOpenRouterChatBody({
     model,
     messages,
@@ -2848,7 +2880,15 @@ app.get('/api/artifacts/:artifactId', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { model, messages, stream, clientApiKey, nativeWebSearch, promptCache } = req.body || {};
+  const {
+    model,
+    messages,
+    stream,
+    clientApiKey,
+    nativeWebSearch,
+    openRouterWebSearchOptions,
+    promptCache,
+  } = req.body || {};
   const { provider, model: providerModel } = parseModelTarget(model);
   const useNativeWebSearch = nativeWebSearch === true;
   const { signal } = createRequestAbortContext(req, res);
@@ -2871,6 +2911,7 @@ app.post('/api/chat', async (req, res) => {
         signal,
         clientApiKey,
         nativeWebSearch: useNativeWebSearch,
+        openRouterWebSearchOptions,
         promptCacheOptions: promptCache,
       });
     } else if (provider === 'anthropic') {

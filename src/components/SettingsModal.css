@@ -164,6 +164,11 @@
   color: var(--text-tertiary);
 }
 
+.settings-subsection {
+  gap: var(--space-xs);
+  padding-top: var(--space-xs);
+}
+
 .settings-input {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);

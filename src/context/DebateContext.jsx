@@ -49,8 +49,16 @@ import {
 import { buildResetSynthesisState } from '../lib/synthesisState';
 import {
   buildSearchEvidence,
+  buildLegacyResearchFallbackMessages,
   canUseNativeWebSearch,
+  DEFAULT_FALLBACK_CONTEXT_DEPTH,
+  DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS,
+  DEFAULT_SEARCH_MODE,
+  normalizeFallbackContextDepth,
+  normalizeOpenRouterWebSearchOptions,
+  normalizeSearchMode,
   getSearchResponseCachePolicy,
+  SEARCH_MODE_LEGACY_ALWAYS,
   shouldFallbackForMissingSearchEvidence,
 } from '../lib/webSearch';
 import { persistConversationsSnapshot } from '../lib/conversationPersistence';
@@ -108,6 +116,9 @@ const CONVERSATIONS_STORAGE_KEY = 'debate_conversations';
 const ACTIVE_CONVERSATION_STORAGE_KEY = 'active_conversation_id';
 const RESPONSE_CACHE_STORAGE_KEY = 'response_cache_store_v2';
 const WEB_SEARCH_ENABLED_STORAGE_KEY = 'web_search_enabled';
+const WEB_SEARCH_MODE_STORAGE_KEY = 'web_search_mode';
+const WEB_SEARCH_FALLBACK_CONTEXT_DEPTH_STORAGE_KEY = 'web_search_fallback_context_depth';
+const OPENROUTER_WEB_SEARCH_OPTIONS_STORAGE_KEY = 'openrouter_web_search_options';
 const LEGACY_RESPONSE_CACHE_STORAGE_KEYS = ['response_cache_store_v1'];
 const TITLE_SOURCE_SEED = 'seed';
 const TITLE_SOURCE_AUTO = 'auto';
@@ -725,6 +736,13 @@ const initialState = {
   convergenceOnFinalRound: loadFromStorage('convergence_on_final_round', DEFAULT_CONVERGENCE_ON_FINAL_ROUND) !== false,
   maxDebateRounds: loadFromStorage('max_debate_rounds', DEFAULT_MAX_DEBATE_ROUNDS),
   webSearchModel: loadFromStorage('web_search_model', DEFAULT_WEB_SEARCH_MODEL),
+  webSearchMode: normalizeSearchMode(loadFromStorage(WEB_SEARCH_MODE_STORAGE_KEY, DEFAULT_SEARCH_MODE)),
+  fallbackContextDepth: normalizeFallbackContextDepth(
+    loadFromStorage(WEB_SEARCH_FALLBACK_CONTEXT_DEPTH_STORAGE_KEY, DEFAULT_FALLBACK_CONTEXT_DEPTH)
+  ),
+  openRouterWebSearchOptions: normalizeOpenRouterWebSearchOptions(
+    loadFromStorage(OPENROUTER_WEB_SEARCH_OPTIONS_STORAGE_KEY, DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS)
+  ),
   strictWebSearch: loadFromStorage('strict_web_search', false),
   retryPolicy: loadedRetryPolicy,
   promptCachePolicy: loadedPromptCachePolicy,
@@ -1116,6 +1134,21 @@ function reducer(state, action) {
     case 'SET_WEB_SEARCH_MODEL': {
       saveToStorage('web_search_model', action.payload);
       return { ...state, webSearchModel: action.payload };
+    }
+    case 'SET_WEB_SEARCH_MODE': {
+      const mode = normalizeSearchMode(action.payload);
+      saveToStorage(WEB_SEARCH_MODE_STORAGE_KEY, mode);
+      return { ...state, webSearchMode: mode };
+    }
+    case 'SET_FALLBACK_CONTEXT_DEPTH': {
+      const depth = normalizeFallbackContextDepth(action.payload);
+      saveToStorage(WEB_SEARCH_FALLBACK_CONTEXT_DEPTH_STORAGE_KEY, depth);
+      return { ...state, fallbackContextDepth: depth };
+    }
+    case 'SET_OPENROUTER_WEB_SEARCH_OPTIONS': {
+      const options = normalizeOpenRouterWebSearchOptions(action.payload);
+      saveToStorage(OPENROUTER_WEB_SEARCH_OPTIONS_STORAGE_KEY, options);
+      return { ...state, openRouterWebSearchOptions: options };
     }
     case 'SET_STRICT_WEB_SEARCH': {
       saveToStorage('strict_web_search', action.payload);
@@ -3058,8 +3091,13 @@ export function DebateProvider({ children }) {
     });
   };
 
-  const buildResponseCacheKey = ({ model, messages, nativeWebSearch = false }) => {
-    const payload = JSON.stringify({ model, nativeWebSearch: Boolean(nativeWebSearch), messages });
+  const buildResponseCacheKey = ({ model, messages, nativeWebSearch = false, openRouterWebSearchOptions = null }) => {
+    const payload = JSON.stringify({
+      model,
+      nativeWebSearch: Boolean(nativeWebSearch),
+      openRouterWebSearchOptions: nativeWebSearch ? normalizeOpenRouterWebSearchOptions(openRouterWebSearchOptions) : null,
+      messages,
+    });
     const hashed = hashCacheKeyPayload(payload);
     return `${String(model || 'model')}::${payload.length}::${hashed}`;
   };
@@ -3219,32 +3257,51 @@ export function DebateProvider({ children }) {
   const supportsNativeWebSearchForModel = useCallback((model) => (
     canUseNativeWebSearch({
       model,
-      providerStatus: state.providerStatus,
+      providerStatus: {
+        ...state.providerStatus,
+        openrouter: Boolean(state.providerStatus.openrouter || String(state.apiKey || '').trim()),
+      },
       capabilityRegistry: state.capabilityRegistry,
       modelCatalog: state.modelCatalog,
     })
-  ), [state.providerStatus, state.capabilityRegistry, state.modelCatalog]);
+  ), [state.providerStatus, state.apiKey, state.capabilityRegistry, state.modelCatalog]);
 
   const buildNativeWebSearchStrategy = useCallback(({
     models,
     webSearchEnabled,
     fallbackSearchModel,
+    searchMode = DEFAULT_SEARCH_MODE,
     forceLegacy = false,
   }) => {
     const selectedModels = Array.isArray(models) ? models.filter(Boolean) : [];
+    const normalizedSearchMode = forceLegacy
+      ? SEARCH_MODE_LEGACY_ALWAYS
+      : normalizeSearchMode(searchMode);
     if (!webSearchEnabled || selectedModels.length === 0) {
       return {
         nativeWebSearch: false,
         needsLegacyPreflight: false,
+        searchMode: normalizedSearchMode,
         fallbackReason: null,
       };
     }
 
-    if (forceLegacy && fallbackSearchModel) {
+    if (normalizedSearchMode === SEARCH_MODE_LEGACY_ALWAYS && fallbackSearchModel) {
       return {
         nativeWebSearch: false,
         needsLegacyPreflight: true,
-        fallbackReason: 'Native web search bypassed; using legacy web-search context.',
+        searchMode: normalizedSearchMode,
+        fallbackReason: forceLegacy
+          ? 'Legacy research fallback was explicitly requested; no native tool call attempted.'
+          : 'Search mode is set to always use the legacy research fallback; no native tool call attempted.',
+      };
+    }
+    if (normalizedSearchMode === SEARCH_MODE_LEGACY_ALWAYS) {
+      return {
+        nativeWebSearch: false,
+        needsLegacyPreflight: false,
+        searchMode: normalizedSearchMode,
+        fallbackReason: null,
       };
     }
 
@@ -3253,8 +3310,9 @@ export function DebateProvider({ children }) {
       return {
         nativeWebSearch: false,
         needsLegacyPreflight: Boolean(fallbackSearchModel),
+        searchMode: normalizedSearchMode,
         fallbackReason: fallbackSearchModel
-          ? 'Selected models do not support native web search; using legacy web-search context.'
+          ? 'Selected models do not support native web search; no native tool call is available.'
           : null,
       };
     }
@@ -3263,15 +3321,8 @@ export function DebateProvider({ children }) {
       return {
         nativeWebSearch: true,
         needsLegacyPreflight: false,
+        searchMode: normalizedSearchMode,
         fallbackReason: null,
-      };
-    }
-
-    if (fallbackSearchModel) {
-      return {
-        nativeWebSearch: false,
-        needsLegacyPreflight: true,
-        fallbackReason: 'Some selected models do not support native web search; using legacy web-search context.',
       };
     }
 
@@ -3279,6 +3330,7 @@ export function DebateProvider({ children }) {
     return {
       nativeWebSearch: (model) => eligibleSet.has(model),
       needsLegacyPreflight: false,
+      searchMode: normalizedSearchMode,
       fallbackReason: null,
     };
   }, [supportsNativeWebSearchForModel]);
@@ -3355,6 +3407,60 @@ export function DebateProvider({ children }) {
     return errors.some(isNativeSearchRelatedError);
   };
 
+  const getNativeSearchFailureReason = ({
+    nativeErrors = false,
+    missingEvidence = false,
+    results = [],
+  } = {}) => {
+    const safeResults = Array.isArray(results) ? results : [];
+    const reasons = [];
+
+    if (nativeErrors) {
+      const errors = Array.from(new Set(
+        safeResults
+          .map((result) => String(result?.error || '').trim())
+          .filter(Boolean)
+      )).slice(0, 3);
+      reasons.push(
+        errors.length > 0
+          ? `Provider/tool error: ${errors.join(' | ')}`
+          : 'Provider/tool error: native web-search/tool call failed.'
+      );
+    }
+
+    if (missingEvidence) {
+      const evidenceResults = safeResults.filter((result) => result?.searchEvidence);
+      const issues = Array.from(new Set(
+        evidenceResults
+          .flatMap((result) => [
+            result.searchEvidence?.primaryIssue,
+            ...(Array.isArray(result.searchEvidence?.issues) ? result.searchEvidence.issues : []),
+          ])
+          .map((issue) => String(issue || '').trim())
+          .filter(Boolean)
+      )).slice(0, 5);
+      const noToolCall = evidenceResults.some((result) => (
+        result.searchEvidence?.verificationMode === 'none'
+        || result.searchEvidence?.searchUsed === false
+      ));
+      const missingUrls = evidenceResults.some((result) => Number(result.searchEvidence?.urlCount || 0) === 0);
+      const staleDates = evidenceResults.some((result) => Number.isFinite(Number(result.searchEvidence?.staleDays)) && Number(result.searchEvidence.staleDays) > 0);
+      const evidenceReasonParts = [
+        noToolCall ? 'no tool call or search metadata detected' : '',
+        missingUrls ? 'missing source URLs' : '',
+        staleDates ? 'stale dates' : '',
+        issues.length > 0 ? issues.join('; ') : '',
+      ].filter(Boolean);
+      reasons.push(
+        evidenceReasonParts.length > 0
+          ? `Missing or weak native search evidence: ${evidenceReasonParts.join('; ')}.`
+          : 'Missing or weak native search evidence.'
+      );
+    }
+
+    return reasons.join(' ') || 'Native search did not produce enough sourced evidence.';
+  };
+
   const MAX_LATER_ROUND_SEARCH_REFRESHES = 1;
   const FACTUAL_DISAGREEMENT_HINT_REGEX = /\b(\d{4}|\d+(?:\.\d+)?%|\$|usd|eur|gbp|million|billion|trillion|percent|date|year|month|day|published|updated|timestamp|population|revenue|gdp|inflation|rate|price|cases|deaths|law|statute|court|study|trial|report|source|citation)\b/i;
 
@@ -3428,6 +3534,19 @@ export function DebateProvider({ children }) {
     };
   };
 
+  const getLaterRoundFallbackReason = (refreshDecision = {}) => {
+    if (refreshDecision.evidenceQualityLow && refreshDecision.factualDisagreement) {
+      return 'Later debate round had weak source evidence and unresolved factual disagreement.';
+    }
+    if (refreshDecision.evidenceQualityLow) {
+      return 'Later debate round had weak or missing source evidence.';
+    }
+    if (refreshDecision.factualDisagreement) {
+      return 'Later debate round had unresolved factual disagreement.';
+    }
+    return 'Later debate round needed evidence recovery.';
+  };
+
   const didUseLaterRoundSearchRefresh = (rounds) => {
     if (!Array.isArray(rounds) || rounds.length === 0) return false;
     return rounds.some((round) => (
@@ -3480,6 +3599,15 @@ export function DebateProvider({ children }) {
     userPrompt,
     attachments,
     videoUrls = [],
+    focused = false,
+    turnMode = 'debate',
+    conversationHistory = [],
+    fallbackReason = '',
+    modelResults = [],
+    convergenceCheck = null,
+    searchMode = DEFAULT_SEARCH_MODE,
+    fallbackContextDepth = DEFAULT_FALLBACK_CONTEXT_DEPTH,
+    searchOptions = DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS,
     webSearchModel,
     apiKey,
     signal,
@@ -3490,16 +3618,24 @@ export function DebateProvider({ children }) {
     });
 
     try {
-      const searchPrompt = buildAttachmentTextContent(userPrompt, attachments, { videoUrls });
+      const attachmentText = buildAttachmentTextContent('', attachments, {});
+      const messages = buildLegacyResearchFallbackMessages({
+        userPrompt,
+        focused,
+        turnMode,
+        fallbackContextDepth,
+        searchMode,
+        fallbackReason,
+        attachmentText,
+        videoUrls,
+        conversationHistory,
+        modelResults,
+        convergenceCheck,
+        searchOptions,
+      });
       const { content: searchContent, usage: searchUsage, durationMs: searchDurationMs } = await chatCompletion({
         model: webSearchModel,
-        messages: [
-          {
-            role: 'system',
-            content: 'Search the web for current, accurate information relevant to the user query. Include source URLs and publication dates/timestamps for key facts in your summary.',
-          },
-          { role: 'user', content: searchPrompt },
-        ],
+        messages,
         apiKey,
         signal,
         promptCachePolicy: state.promptCachePolicy,
@@ -3528,6 +3664,7 @@ export function DebateProvider({ children }) {
     onReasoning,
     onRetryProgress,
     nativeWebSearch = false,
+    openRouterWebSearchOptions = DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS,
     forceRefresh = false,
     cacheable = true,
     cachePolicy = null,
@@ -3538,7 +3675,12 @@ export function DebateProvider({ children }) {
     const cacheTtlMs = Number.isFinite(Number(cachePolicy?.ttlMs))
       ? Math.max(0, Math.floor(Number(cachePolicy.ttlMs)))
       : RESPONSE_CACHE_TTL_MS;
-    const cacheKey = cacheAllowed ? buildResponseCacheKey({ model, messages, nativeWebSearch }) : '';
+    const cacheKey = cacheAllowed ? buildResponseCacheKey({
+      model,
+      messages,
+      nativeWebSearch,
+      openRouterWebSearchOptions,
+    }) : '';
     if (cacheAllowed && !forceRefresh) {
       const cached = getCachedResponse(cacheKey);
       if (cached) {
@@ -3579,6 +3721,7 @@ export function DebateProvider({ children }) {
           onChunk: handleChunk,
           onReasoning,
           nativeWebSearch,
+          openRouterWebSearchOptions,
           promptCachePolicy: state.promptCachePolicy,
         });
       } catch (streamErr) {
@@ -3598,6 +3741,7 @@ export function DebateProvider({ children }) {
               apiKey,
               signal,
               nativeWebSearch,
+              openRouterWebSearchOptions,
               promptCachePolicy: state.promptCachePolicy,
             });
             if (fallbackResult?.content) {
@@ -3706,6 +3850,7 @@ export function DebateProvider({ children }) {
     apiKey,
     signal,
     nativeWebSearch = false,
+    openRouterWebSearchOptions = DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS,
     searchVerification = null,
     forceRefresh = false,
     onModelSuccess = null,
@@ -3759,6 +3904,7 @@ export function DebateProvider({ children }) {
             apiKey,
             signal,
             nativeWebSearch: useNativeSearchForModel,
+            openRouterWebSearchOptions,
             forceRefresh,
             cachePolicy,
             onRetryProgress: (retryProgress) => {
@@ -3910,6 +4056,9 @@ export function DebateProvider({ children }) {
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
     const webSearchModel = state.webSearchModel;
+    const webSearchMode = state.webSearchMode;
+    const fallbackContextDepth = state.fallbackContextDepth;
+    const openRouterWebSearchOptions = state.openRouterWebSearchOptions;
     const strictWebSearch = state.strictWebSearch;
     const apiKey = state.apiKey;
     const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
@@ -3971,6 +4120,7 @@ export function DebateProvider({ children }) {
       models,
       webSearchEnabled: nativeWebSearchEnabled,
       fallbackSearchModel: webSearchModel,
+      searchMode: webSearchMode,
       forceLegacy: forceLegacyWebSearch,
     });
 
@@ -3991,6 +4141,13 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
+        focused,
+        turnMode: 'debate',
+        conversationHistory: contextMessages,
+        fallbackReason: nativeSearchStrategy.fallbackReason || 'Native tool search unavailable before the initial debate round.',
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -4119,6 +4276,7 @@ export function DebateProvider({ children }) {
         nativeWebSearch: roundNum === 1 && nativeWebSearchEnabled && !webSearchContext
           ? nativeSearchStrategy.nativeWebSearch
           : false,
+        openRouterWebSearchOptions,
         searchVerification: roundSearchVerification,
         forceRefresh,
         onModelSuccess: handleRoundModelSuccess,
@@ -4138,9 +4296,11 @@ export function DebateProvider({ children }) {
         : false;
 
       if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
-        const fallbackReason = fallbackForNativeErrors
-          ? 'Native web-search/tool call failed.'
-          : 'Native response lacked verifiable source evidence.';
+        const fallbackReason = getNativeSearchFailureReason({
+          nativeErrors: fallbackForNativeErrors,
+          missingEvidence: fallbackForMissingEvidence,
+          results,
+        });
         webSearchContext = await runLegacyWebSearch({
           convId,
           turnId,
@@ -4148,6 +4308,14 @@ export function DebateProvider({ children }) {
           userPrompt,
           attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
+          focused,
+          turnMode: 'debate',
+          conversationHistory,
+          fallbackReason,
+          modelResults: results,
+          searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+          fallbackContextDepth,
+          searchOptions: openRouterWebSearchOptions,
           webSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -4349,6 +4517,15 @@ export function DebateProvider({ children }) {
           userPrompt,
           attachments,
           videoUrls: routeInfo?.youtubeUrls || [],
+          focused,
+          turnMode: 'debate',
+          conversationHistory,
+          fallbackReason: getLaterRoundFallbackReason(refreshDecision),
+          modelResults: results,
+          convergenceCheck: roundConvergence,
+          searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+          fallbackContextDepth,
+          searchOptions: openRouterWebSearchOptions,
           webSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -4488,7 +4665,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.convergenceOnFinalRound, state.maxDebateRounds, state.webSearchModel, state.webSearchMode, state.fallbackContextDepth, state.openRouterWebSearchOptions, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   /**
    * Run ensemble vote analysis (Phase 2) and streaming synthesis (Phase 3).
@@ -4625,6 +4802,9 @@ export function DebateProvider({ children }) {
       : state.selectedModels;
     const synthModel = state.synthesizerModel;
     const webSearchModel = state.webSearchModel;
+    const webSearchMode = state.webSearchMode;
+    const fallbackContextDepth = state.fallbackContextDepth;
+    const openRouterWebSearchOptions = state.openRouterWebSearchOptions;
     const strictWebSearch = state.strictWebSearch;
     const apiKey = state.apiKey;
     const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
@@ -4683,6 +4863,7 @@ export function DebateProvider({ children }) {
       models,
       webSearchEnabled: nativeWebSearchEnabled,
       fallbackSearchModel: webSearchModel,
+      searchMode: webSearchMode,
       forceLegacy: forceLegacyWebSearch,
     });
 
@@ -4703,6 +4884,13 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
+        focused,
+        turnMode: 'parallel',
+        conversationHistory: contextMessages,
+        fallbackReason: nativeSearchStrategy.fallbackReason || 'Native tool search unavailable before parallel responses.',
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -4748,6 +4936,7 @@ export function DebateProvider({ children }) {
       nativeWebSearch: nativeWebSearchEnabled && !webSearchContext
         ? nativeSearchStrategy.nativeWebSearch
         : false,
+      openRouterWebSearchOptions,
       searchVerification: nativeWebSearchEnabled
         ? {
           enabled: true,
@@ -4782,9 +4971,11 @@ export function DebateProvider({ children }) {
       : false;
 
     if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
-      const fallbackReason = fallbackForNativeErrors
-        ? 'Native web-search/tool call failed.'
-        : 'Native response lacked verifiable source evidence.';
+      const fallbackReason = getNativeSearchFailureReason({
+        nativeErrors: fallbackForNativeErrors,
+        missingEvidence: fallbackForMissingEvidence,
+        results,
+      });
       webSearchContext = await runLegacyWebSearch({
         convId,
         turnId,
@@ -4792,6 +4983,14 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
+        focused,
+        turnMode: 'parallel',
+        conversationHistory,
+        fallbackReason,
+        modelResults: results,
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -4888,7 +5087,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.webSearchModel, state.webSearchMode, state.fallbackContextDepth, state.openRouterWebSearchOptions, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const startDirect = useCallback(async (userPrompt, {
     webSearch = false,
@@ -4908,6 +5107,9 @@ export function DebateProvider({ children }) {
     const synthModel = state.synthesizerModel;
     const convergenceModel = state.convergenceModel;
     const webSearchModel = state.webSearchModel;
+    const webSearchMode = state.webSearchMode;
+    const fallbackContextDepth = state.fallbackContextDepth;
+    const openRouterWebSearchOptions = state.openRouterWebSearchOptions;
     const strictWebSearch = state.strictWebSearch;
     const apiKey = state.apiKey;
     const focused = typeof focusedOverride === 'boolean' ? focusedOverride : state.focusedMode;
@@ -4972,6 +5174,7 @@ export function DebateProvider({ children }) {
       models,
       webSearchEnabled: nativeWebSearchEnabled,
       fallbackSearchModel: webSearchModel,
+      searchMode: webSearchMode,
       forceLegacy: forceLegacyWebSearch,
     });
 
@@ -4992,6 +5195,13 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
+        focused,
+        turnMode: 'direct',
+        conversationHistory: contextMessages,
+        fallbackReason: nativeSearchStrategy.fallbackReason || 'Native tool search unavailable before direct analysis.',
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -5037,6 +5247,7 @@ export function DebateProvider({ children }) {
       nativeWebSearch: nativeWebSearchEnabled && !webSearchContext
         ? nativeSearchStrategy.nativeWebSearch
         : false,
+      openRouterWebSearchOptions,
       searchVerification: nativeWebSearchEnabled
         ? {
           enabled: true,
@@ -5071,9 +5282,11 @@ export function DebateProvider({ children }) {
       : false;
 
     if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
-      const fallbackReason = fallbackForNativeErrors
-        ? 'Native web-search/tool call failed.'
-        : 'Native response lacked verifiable source evidence.';
+      const fallbackReason = getNativeSearchFailureReason({
+        nativeErrors: fallbackForNativeErrors,
+        missingEvidence: fallbackForMissingEvidence,
+        results,
+      });
       webSearchContext = await runLegacyWebSearch({
         convId,
         turnId,
@@ -5081,6 +5294,14 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: routeInfo?.youtubeUrls || [],
+        focused,
+        turnMode: 'direct',
+        conversationHistory,
+        fallbackReason,
+        modelResults: results,
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -5176,7 +5397,7 @@ export function DebateProvider({ children }) {
     }
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: false });
-  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
+  }, [state.apiKey, state.selectedModels, state.synthesizerModel, state.convergenceModel, state.webSearchModel, state.webSearchMode, state.fallbackContextDepth, state.openRouterWebSearchOptions, state.strictWebSearch, state.activeConversationId, state.conversations, state.focusedMode, state.modelCatalog, state.capabilityRegistry, buildNativeWebSearchStrategy, prepareConversationHistory, recordFirstAnswerMetric, requestAutoConversationTitle, setAbortController]);
 
   const cancelDebate = useCallback((conversationId = null) => {
     const normalizedConversationId = (
@@ -5557,6 +5778,9 @@ export function DebateProvider({ children }) {
     const convergenceModel = state.convergenceModel;
     const maxRounds = state.maxDebateRounds;
     const strictWebSearch = state.strictWebSearch;
+    const webSearchMode = state.webSearchMode;
+    const fallbackContextDepth = state.fallbackContextDepth;
+    const openRouterWebSearchOptions = state.openRouterWebSearchOptions;
     const turnFocused = typeof lastTurn.focusedMode === 'boolean'
       ? lastTurn.focusedMode
       : state.focusedMode;
@@ -5592,6 +5816,7 @@ export function DebateProvider({ children }) {
       models,
       webSearchEnabled: Boolean(lastTurn.webSearchEnabled),
       fallbackSearchModel,
+      searchMode: webSearchMode,
       forceLegacy: roundIndex === 0 && forceLegacyWebSearch,
     });
     const canUseLaterRoundSearchFallback = Boolean(fallbackSearchModel);
@@ -5610,6 +5835,13 @@ export function DebateProvider({ children }) {
         userPrompt,
         attachments,
         videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+        focused: turnFocused,
+        turnMode: lastTurn.mode || 'debate',
+        conversationHistory,
+        fallbackReason: nativeSearchStrategy.fallbackReason || 'Native tool search unavailable before retrying this round.',
+        searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+        fallbackContextDepth,
+        searchOptions: openRouterWebSearchOptions,
         webSearchModel: fallbackSearchModel,
         apiKey,
         signal: abortController.signal,
@@ -5666,6 +5898,7 @@ export function DebateProvider({ children }) {
         apiKey,
         signal: abortController.signal,
         nativeWebSearch: roundIndex === 0 && useNativeWebSearch,
+        openRouterWebSearchOptions,
         searchVerification: roundIndex === 0 && Boolean(lastTurn.webSearchEnabled)
           ? {
             enabled: true,
@@ -5695,9 +5928,11 @@ export function DebateProvider({ children }) {
         : false;
 
       if (shouldConsiderSearchFallback && (fallbackForNativeErrors || fallbackForMissingEvidence)) {
-        const fallbackReason = fallbackForNativeErrors
-          ? 'Native web-search/tool call failed.'
-          : 'Native response lacked verifiable source evidence.';
+        const fallbackReason = getNativeSearchFailureReason({
+          nativeErrors: fallbackForNativeErrors,
+          missingEvidence: fallbackForMissingEvidence,
+          results,
+        });
         webSearchCtx = await runLegacyWebSearch({
           convId,
           turnId,
@@ -5705,6 +5940,14 @@ export function DebateProvider({ children }) {
           userPrompt,
           attachments,
           videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+          focused: turnFocused,
+          turnMode: lastTurn.mode || 'debate',
+          conversationHistory,
+          fallbackReason,
+          modelResults: results,
+          searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+          fallbackContextDepth,
+          searchOptions: openRouterWebSearchOptions,
           webSearchModel: fallbackSearchModel,
           apiKey,
           signal: abortController.signal,
@@ -5958,6 +6201,15 @@ export function DebateProvider({ children }) {
               userPrompt,
               attachments,
               videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+              focused: turnFocused,
+              turnMode: lastTurn.mode || 'debate',
+              conversationHistory,
+              fallbackReason: getLaterRoundFallbackReason(refreshDecision),
+              modelResults: results,
+              convergenceCheck: roundConvergence,
+              searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+              fallbackContextDepth,
+              searchOptions: openRouterWebSearchOptions,
               webSearchModel: fallbackSearchModel,
               apiKey,
               signal: abortController.signal,
@@ -6126,6 +6378,7 @@ export function DebateProvider({ children }) {
             apiKey,
             signal: abortController.signal,
             nativeWebSearch: useNativeSearchForModel,
+            openRouterWebSearchOptions,
             forceRefresh,
             cachePolicy,
             onRetryProgress: (retryProgress) => {
@@ -6509,6 +6762,15 @@ export function DebateProvider({ children }) {
             userPrompt,
             attachments,
             videoUrls: lastTurn.routeInfo?.youtubeUrls || [],
+            focused: turnFocused,
+            turnMode: lastTurn.mode || 'debate',
+            conversationHistory,
+            fallbackReason: getLaterRoundFallbackReason(refreshDecision),
+            modelResults: results,
+            convergenceCheck: roundConvergence,
+            searchMode: nativeSearchStrategy.searchMode || webSearchMode,
+            fallbackContextDepth,
+            searchOptions: openRouterWebSearchOptions,
             webSearchModel: fallbackSearchModel,
             apiKey,
             signal: abortController.signal,
@@ -6634,6 +6896,9 @@ export function DebateProvider({ children }) {
     state.maxDebateRounds,
     state.focusedMode,
     state.webSearchModel,
+    state.webSearchMode,
+    state.fallbackContextDepth,
+    state.openRouterWebSearchOptions,
     state.strictWebSearch,
     state.modelCatalog,
     state.capabilityRegistry,
@@ -6840,6 +7105,9 @@ export function DebateProvider({ children }) {
     convergenceOnFinalRound: state.convergenceOnFinalRound,
     maxDebateRounds: state.maxDebateRounds,
     webSearchModel: state.webSearchModel,
+    webSearchMode: state.webSearchMode,
+    fallbackContextDepth: state.fallbackContextDepth,
+    openRouterWebSearchOptions: state.openRouterWebSearchOptions,
     strictWebSearch: state.strictWebSearch,
     retryPolicy: state.retryPolicy,
     promptCachePolicy: state.promptCachePolicy,
@@ -6879,6 +7147,9 @@ export function DebateProvider({ children }) {
     state.convergenceOnFinalRound,
     state.maxDebateRounds,
     state.webSearchModel,
+    state.webSearchMode,
+    state.fallbackContextDepth,
+    state.openRouterWebSearchOptions,
     state.strictWebSearch,
     state.retryPolicy,
     state.promptCachePolicy,

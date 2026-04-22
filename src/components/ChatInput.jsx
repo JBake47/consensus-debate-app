@@ -869,11 +869,11 @@ export default function ChatInput() {
                   disabled={!conversationStoreReady || debateInProgress}
                   aria-pressed={webSearchEnabled}
                   aria-label={webSearchEnabled
-                    ? 'Search is on for this turn. The configured web-search model will gather live sources before answering.'
-                    : 'Turn on live web search for this turn. Configure the search model and strict verification in Settings.'}
+                    ? 'Search is on for this turn. Native web-search tools are available, with legacy evidence recovery if needed.'
+                    : 'Turn on live web search for this turn. Configure native search, fallback, and strict verification in Settings.'}
                   title={webSearchEnabled
-                    ? 'Search is on for this turn. The configured web-search model will gather live sources before answering.'
-                    : 'Turn on live web search for this turn. Configure the search model and strict verification in Settings > Models.'}
+                    ? 'Search is on for this turn. Native web-search tools are available, with legacy evidence recovery if needed.'
+                    : 'Turn on live web search for this turn. Configure native search, fallback, and strict verification in Settings > Models.'}
                 >
                   <Globe size={15} />
                   <span>Search</span>
@@ -882,12 +882,13 @@ export default function ChatInput() {
                   content={webSearchEnabled
                     ? [
                       'Search is on for this turn.',
-                      'The configured web-search model will gather live sources before the answer is generated.',
-                      'Use Settings > Models to change the search model or strict verification rules.',
+                      'Native web-search tools are offered first when the selected model supports them.',
+                      'The fallback model is used for legacy research or evidence recovery when needed.',
+                      'Use Settings > Models to tune native search, fallback context, or strict verification.',
                     ]
                     : [
                       'Turn on live web search when you want current evidence instead of model memory alone.',
-                      'Configure the search model and strict verification rules in Settings > Models.',
+                      'Configure native search, fallback context, and strict verification in Settings > Models.',
                     ]}
                   label="Search help"
                 />

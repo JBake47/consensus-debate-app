@@ -1,3 +1,8 @@
+import {
+  hasOpenRouterWebSearchOptions,
+  normalizeOpenRouterWebSearchOptions,
+} from './webSearch.js';
+
 const API_PROXY_URL = '/api/chat';
 const MODELS_PROXY_URL = '/api/models';
 const MODELS_SEARCH_URL = '/api/models/search';
@@ -149,8 +154,21 @@ function updateReasoningAccumulated(accumulated, incoming) {
  * Calls onChunk with each text delta as it arrives.
  * Returns { content, reasoning, usage, durationMs }.
  */
-export async function streamChat({ model, messages, apiKey, onChunk, onReasoning, signal, nativeWebSearch = false, promptCachePolicy = null }) {
+export async function streamChat({
+  model,
+  messages,
+  apiKey,
+  onChunk,
+  onReasoning,
+  signal,
+  nativeWebSearch = false,
+  openRouterWebSearchOptions = null,
+  promptCachePolicy = null,
+}) {
   const startTime = performance.now();
+  const normalizedOpenRouterSearchOptions = hasOpenRouterWebSearchOptions(openRouterWebSearchOptions)
+    ? normalizeOpenRouterWebSearchOptions(openRouterWebSearchOptions)
+    : null;
   const stallTimeoutMs = getStreamStallTimeoutMs();
   const renderThrottleMs = getStreamRenderThrottleMs();
   let flushTimerCleanup = null;
@@ -178,6 +196,9 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
             stream: true,
             clientApiKey: apiKey || undefined,
             nativeWebSearch: nativeWebSearch || undefined,
+            openRouterWebSearchOptions: nativeWebSearch && normalizedOpenRouterSearchOptions
+              ? normalizedOpenRouterSearchOptions
+              : undefined,
             promptCache: promptCachePolicy || undefined,
           }),
           signal: requestAbortController.signal,
@@ -401,8 +422,19 @@ export async function streamChat({ model, messages, apiKey, onChunk, onReasoning
  * Used for convergence checks and other quick evaluations.
  * Returns { content, usage, durationMs }.
  */
-export async function chatCompletion({ model, messages, apiKey, signal, nativeWebSearch = false, promptCachePolicy = null }) {
+export async function chatCompletion({
+  model,
+  messages,
+  apiKey,
+  signal,
+  nativeWebSearch = false,
+  openRouterWebSearchOptions = null,
+  promptCachePolicy = null,
+}) {
   const startTime = performance.now();
+  const normalizedOpenRouterSearchOptions = hasOpenRouterWebSearchOptions(openRouterWebSearchOptions)
+    ? normalizeOpenRouterWebSearchOptions(openRouterWebSearchOptions)
+    : null;
 
   const response = await fetch(API_PROXY_URL, {
     method: 'POST',
@@ -415,6 +447,9 @@ export async function chatCompletion({ model, messages, apiKey, signal, nativeWe
       stream: false,
       clientApiKey: apiKey || undefined,
       nativeWebSearch: nativeWebSearch || undefined,
+      openRouterWebSearchOptions: nativeWebSearch && normalizedOpenRouterSearchOptions
+        ? normalizedOpenRouterSearchOptions
+        : undefined,
       promptCache: promptCachePolicy || undefined,
     }),
     signal,

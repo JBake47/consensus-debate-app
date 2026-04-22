@@ -30,6 +30,20 @@ import {
 import { DEFAULT_THEME_MODE } from '../lib/theme';
 import { buildModelWorkloadProfile } from '../lib/modelWorkload';
 import {
+  DEFAULT_FALLBACK_CONTEXT_DEPTH,
+  DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS,
+  DEFAULT_SEARCH_MODE,
+  FALLBACK_CONTEXT_ATTACHMENTS,
+  FALLBACK_CONTEXT_CLAIMS_HISTORY,
+  FALLBACK_CONTEXT_PROMPT_ONLY,
+  normalizeFallbackContextDepth,
+  normalizeOpenRouterWebSearchOptions,
+  normalizeSearchMode,
+  SEARCH_MODE_LEGACY_ALWAYS,
+  SEARCH_MODE_LEGACY_ON_DEMAND,
+  SEARCH_MODE_NATIVE_FIRST,
+} from '../lib/webSearch';
+import {
   buildUniquePresetName,
   parseModelPresetImportText,
   presetMatchesDraft,
@@ -80,6 +94,30 @@ const MODEL_UPGRADE_POLICY_OPTIONS = [
     compactLabel: 'Auto',
     description: 'Switch future turns to a newer safe same-track version automatically.',
   },
+];
+const SEARCH_MODE_OPTIONS = [
+  { value: SEARCH_MODE_NATIVE_FIRST, label: 'Native tools first' },
+  { value: SEARCH_MODE_LEGACY_ALWAYS, label: 'Always legacy fallback' },
+  { value: SEARCH_MODE_LEGACY_ON_DEMAND, label: 'Legacy only when needed' },
+];
+const FALLBACK_CONTEXT_OPTIONS = [
+  { value: FALLBACK_CONTEXT_PROMPT_ONLY, label: 'Prompt only' },
+  { value: FALLBACK_CONTEXT_ATTACHMENTS, label: 'Prompt + attachments' },
+  { value: FALLBACK_CONTEXT_CLAIMS_HISTORY, label: 'Prompt + claims + debate history' },
+];
+const OPENROUTER_SEARCH_ENGINE_OPTIONS = [
+  { value: '', label: 'Provider default' },
+  { value: 'auto', label: 'Auto' },
+  { value: 'native', label: 'Native' },
+  { value: 'exa', label: 'Exa' },
+  { value: 'firecrawl', label: 'Firecrawl' },
+  { value: 'parallel', label: 'Parallel' },
+];
+const OPENROUTER_SEARCH_CONTEXT_OPTIONS = [
+  { value: '', label: 'Provider default' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
 ];
 
 function formatDurationCompact(ms) {
@@ -329,10 +367,17 @@ function promptCachePoliciesEqual(left, right) {
   );
 }
 
+function openRouterSearchOptionsEqual(left, right) {
+  const a = normalizeOpenRouterWebSearchOptions(left || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS);
+  const b = normalizeOpenRouterWebSearchOptions(right || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS);
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export default function SettingsModal() {
   const {
     apiKey, selectedModels, synthesizerModel,
-    convergenceModel, convergenceOnFinalRound, maxDebateRounds, webSearchModel, strictWebSearch,
+    convergenceModel, convergenceOnFinalRound, maxDebateRounds, webSearchModel,
+    webSearchMode, fallbackContextDepth, openRouterWebSearchOptions, strictWebSearch,
     retryPolicy, promptCachePolicy, budgetGuardrailsEnabled, budgetSoftLimitUsd, budgetAutoApproveBelowUsd,
     smartRankingMode, smartRankingPreferFlagship, smartRankingPreferNew, smartRankingAllowPreview,
     modelUpgradeNotificationsEnabled, modelUpgradeTargets, modelUpgradeSuggestions, dismissedModelUpgradeSuggestionCount,
@@ -356,6 +401,11 @@ export default function SettingsModal() {
   const [convOnFinalRound, setConvOnFinalRound] = useState(Boolean(convergenceOnFinalRound));
   const [maxRounds, setMaxRounds] = useState(maxDebateRounds);
   const [searchModel, setSearchModel] = useState(webSearchModel);
+  const [searchMode, setSearchMode] = useState(normalizeSearchMode(webSearchMode));
+  const [fallbackDepth, setFallbackDepth] = useState(normalizeFallbackContextDepth(fallbackContextDepth));
+  const [nativeSearchOptions, setNativeSearchOptions] = useState(
+    normalizeOpenRouterWebSearchOptions(openRouterWebSearchOptions || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS)
+  );
   const [strictSearch, setStrictSearch] = useState(strictWebSearch);
   const [retryMaxAttempts, setRetryMaxAttempts] = useState(retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts);
   const [retryBaseDelayMs, setRetryBaseDelayMs] = useState(retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs);
@@ -474,6 +524,30 @@ export default function SettingsModal() {
   const normalizedSynthValue = normalizeModelForProvider(synthProvider, synth) || synth.trim();
   const normalizedConvergenceValue = normalizeModelForProvider(convProvider, convModel) || convModel.trim();
   const normalizedSearchValue = normalizeModelForProvider(searchProvider, searchModel) || searchModel.trim();
+  const draftSearchMode = normalizeSearchMode(searchMode);
+  const draftFallbackDepth = normalizeFallbackContextDepth(fallbackDepth);
+  const draftNativeSearchOptions = useMemo(
+    () => normalizeOpenRouterWebSearchOptions(nativeSearchOptions),
+    [nativeSearchOptions]
+  );
+  const updateNativeSearchOption = (field, value) => {
+    setNativeSearchOptions((prev) => normalizeOpenRouterWebSearchOptions({
+      ...(prev || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS),
+      [field]: value,
+    }));
+  };
+  const updateNativeSearchLocation = (field, value) => {
+    setNativeSearchOptions((prev) => {
+      const normalized = normalizeOpenRouterWebSearchOptions(prev || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS);
+      return normalizeOpenRouterWebSearchOptions({
+        ...normalized,
+        userLocation: {
+          ...normalized.userLocation,
+          [field]: value,
+        },
+      });
+    });
+  };
   const draftRetryPolicy = useMemo(() => ({
     maxAttempts: Number(retryMaxAttempts),
     baseDelayMs: Number(retryBaseDelayMs),
@@ -1451,6 +1525,9 @@ export default function SettingsModal() {
     setConvOnFinalRound(DEFAULT_CONVERGENCE_ON_FINAL_ROUND);
     setMaxRounds(DEFAULT_MAX_DEBATE_ROUNDS);
     setSearchModel(DEFAULT_WEB_SEARCH_MODEL);
+    setSearchMode(DEFAULT_SEARCH_MODE);
+    setFallbackDepth(DEFAULT_FALLBACK_CONTEXT_DEPTH);
+    setNativeSearchOptions(DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS);
     setStrictSearch(false);
     setRetryMaxAttempts(DEFAULT_RETRY_POLICY.maxAttempts);
     setRetryBaseDelayMs(DEFAULT_RETRY_POLICY.baseDelayMs);
@@ -1487,6 +1564,9 @@ export default function SettingsModal() {
     setConvOnFinalRound(Boolean(convergenceOnFinalRound));
     setMaxRounds(maxDebateRounds);
     if (!searchEditingRef.current) setSearchModel(webSearchModel);
+    setSearchMode(normalizeSearchMode(webSearchMode));
+    setFallbackDepth(normalizeFallbackContextDepth(fallbackContextDepth));
+    setNativeSearchOptions(normalizeOpenRouterWebSearchOptions(openRouterWebSearchOptions || DEFAULT_OPENROUTER_WEB_SEARCH_OPTIONS));
     setStrictSearch(strictWebSearch);
     setRetryMaxAttempts(retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts);
     setRetryBaseDelayMs(retryPolicy?.baseDelayMs ?? DEFAULT_RETRY_POLICY.baseDelayMs);
@@ -1531,6 +1611,9 @@ export default function SettingsModal() {
     convergenceOnFinalRound,
     maxDebateRounds,
     webSearchModel,
+    webSearchMode,
+    fallbackContextDepth,
+    openRouterWebSearchOptions,
     strictWebSearch,
     retryPolicy,
     budgetGuardrailsEnabled,
@@ -1587,6 +1670,15 @@ export default function SettingsModal() {
     }
     if (!searchEditingRef.current && normalizedSearchValue !== webSearchModel) {
       dispatch({ type: 'SET_WEB_SEARCH_MODEL', payload: normalizedSearchValue });
+    }
+    if (draftSearchMode !== normalizeSearchMode(webSearchMode)) {
+      dispatch({ type: 'SET_WEB_SEARCH_MODE', payload: draftSearchMode });
+    }
+    if (draftFallbackDepth !== normalizeFallbackContextDepth(fallbackContextDepth)) {
+      dispatch({ type: 'SET_FALLBACK_CONTEXT_DEPTH', payload: draftFallbackDepth });
+    }
+    if (!openRouterSearchOptionsEqual(draftNativeSearchOptions, openRouterWebSearchOptions)) {
+      dispatch({ type: 'SET_OPENROUTER_WEB_SEARCH_OPTIONS', payload: draftNativeSearchOptions });
     }
     if (Boolean(strictSearch) !== Boolean(strictWebSearch)) {
       dispatch({ type: 'SET_STRICT_WEB_SEARCH', payload: strictSearch });
@@ -1651,6 +1743,12 @@ export default function SettingsModal() {
     maxDebateRounds,
     normalizedSearchValue,
     webSearchModel,
+    draftSearchMode,
+    webSearchMode,
+    draftFallbackDepth,
+    fallbackContextDepth,
+    draftNativeSearchOptions,
+    openRouterWebSearchOptions,
     strictSearch,
     strictWebSearch,
     draftRetryPolicy,
@@ -2556,17 +2654,160 @@ export default function SettingsModal() {
             <label className="settings-label">
               <Globe size={14} />
               <span className="settings-label-copy">
-                <span>Web Search Model</span>
+                <span>Search</span>
                 <InfoTip
                   label="Web search model help"
                   content={[
-                    'This model is only used when the composer Search toggle is on.',
-                    'Pick a model that can browse, cite sources, and report dates clearly.',
+                    'Native OpenRouter tools are the primary search path when the composer Search toggle is on.',
+                    'The fallback model is reserved for evidence recovery and legacy research packets.',
                   ]}
                 />
               </span>
             </label>
-            <div className="model-add-row">
+            <label className="settings-inline-field">
+              <span className="settings-inline-label">
+                <span>Search Mode</span>
+                <InfoTip
+                  label="Search mode help"
+                  content={[
+                    'Native tools first uses provider-native search where supported.',
+                    'Always legacy fallback sends the structured research packet to the fallback model.',
+                    'Legacy only when needed waits for native failures, missing evidence, or unsupported models.',
+                  ]}
+                />
+              </span>
+              <select
+                className="settings-input settings-select"
+                value={draftSearchMode}
+                onChange={e => setSearchMode(e.target.value)}
+              >
+                {SEARCH_MODE_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <div className="settings-section settings-subsection">
+              <span className="settings-sub-label">Native Tool Settings</span>
+              <div className="settings-grid-compact">
+                <label className="settings-inline-field">
+                  <span>OpenRouter engine</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={draftNativeSearchOptions.engine}
+                    onChange={e => updateNativeSearchOption('engine', e.target.value)}
+                  >
+                    {OPENROUTER_SEARCH_ENGINE_OPTIONS.map(option => (
+                      <option key={option.value || 'default'} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="settings-inline-field">
+                  <span>Context size</span>
+                  <select
+                    className="settings-input settings-select"
+                    value={draftNativeSearchOptions.searchContextSize}
+                    onChange={e => updateNativeSearchOption('searchContextSize', e.target.value)}
+                  >
+                    {OPENROUTER_SEARCH_CONTEXT_OPTIONS.map(option => (
+                      <option key={option.value || 'default'} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="settings-inline-field">
+                  <span>Max results</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={25}
+                    className="settings-input"
+                    value={draftNativeSearchOptions.maxResults}
+                    onChange={e => updateNativeSearchOption('maxResults', e.target.value)}
+                    placeholder="Default"
+                  />
+                </label>
+                <label className="settings-inline-field">
+                  <span>Result limit</span>
+                  <input
+                    type="number"
+                    min={1}
+                    className="settings-input"
+                    value={draftNativeSearchOptions.maxTotalResults}
+                    onChange={e => updateNativeSearchOption('maxTotalResults', e.target.value)}
+                    placeholder="Default"
+                  />
+                </label>
+              </div>
+              <div className="settings-grid-compact">
+                <label className="settings-inline-field">
+                  <span>Domains</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.allowedDomains}
+                    onChange={e => updateNativeSearchOption('allowedDomains', e.target.value)}
+                    placeholder="example.com, docs.example.com"
+                  />
+                </label>
+                <label className="settings-inline-field">
+                  <span>Excluded domains</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.excludedDomains}
+                    onChange={e => updateNativeSearchOption('excludedDomains', e.target.value)}
+                    placeholder="lowquality.example"
+                  />
+                </label>
+              </div>
+              <div className="settings-grid-compact">
+                <label className="settings-inline-field">
+                  <span>City</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.userLocation.city}
+                    onChange={e => updateNativeSearchLocation('city', e.target.value)}
+                    placeholder="City"
+                  />
+                </label>
+                <label className="settings-inline-field">
+                  <span>Region</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.userLocation.region}
+                    onChange={e => updateNativeSearchLocation('region', e.target.value)}
+                    placeholder="State or region"
+                  />
+                </label>
+                <label className="settings-inline-field">
+                  <span>Country</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.userLocation.country}
+                    onChange={e => updateNativeSearchLocation('country', e.target.value)}
+                    placeholder="US"
+                    maxLength={2}
+                  />
+                </label>
+                <label className="settings-inline-field">
+                  <span>Timezone</span>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={draftNativeSearchOptions.userLocation.timezone}
+                    onChange={e => updateNativeSearchLocation('timezone', e.target.value)}
+                    placeholder="America/New_York"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="settings-section settings-subsection">
+              <span className="settings-sub-label">Fallback Provider: Web Search Model</span>
+              <div className="model-add-row">
               <select
                 className="settings-input settings-select"
                 value={searchProvider}
@@ -2596,11 +2837,17 @@ export default function SettingsModal() {
                 }}
                 title={getModelStatsTitle(normalizedSearchValue)}
                 list={getProviderModelOptions(searchProvider).length > 0 ? `provider-models-search-${searchProvider}` : undefined}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                data-form-type="other"
+                data-lpignore="true"
               />
               <button
                 className="model-browse-btn"
                 onClick={() => setPickerOpen('search')}
-                title="Browse and choose the model used for Search-enabled turns."
+                title="Browse and choose the legacy fallback research model."
               >
                 Browse
               </button>
@@ -2616,9 +2863,30 @@ export default function SettingsModal() {
                 ))}
               </datalist>
             )}
-            <p className="settings-hint">
-              A model with web search capabilities (e.g. Perplexity Sonar via OpenRouter). Used when the Search toggle is active.
-            </p>
+            </div>
+
+            <label className="settings-inline-field">
+              <span className="settings-inline-label">
+                <span>Fallback Context Depth</span>
+                <InfoTip
+                  label="Fallback context depth help"
+                  content={[
+                    'Prompt only sends just the original user prompt.',
+                    'Prompt + attachments includes extracted attachment text and video URLs.',
+                    'Prompt + claims + debate history also includes recent context and unresolved model claims.',
+                  ]}
+                />
+              </span>
+              <select
+                className="settings-input settings-select"
+                value={draftFallbackDepth}
+                onChange={e => setFallbackDepth(e.target.value)}
+              >
+                {FALLBACK_CONTEXT_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
             <label
               className="settings-checkbox"
               title="When enabled, search-assisted answers must include verifiable sources and dates or the app blocks them."
@@ -2634,14 +2902,11 @@ export default function SettingsModal() {
                   label="Strict search help"
                   content={[
                     'Use this when you would rather get a blocked result than accept a weakly sourced search answer.',
-                    'If the search model does not provide URLs and date evidence, the app retries with legacy search context before failing.',
+                    'If native search does not provide URLs and date evidence, the app can recover through the legacy research packet.',
                   ]}
                 />
               </span>
             </label>
-            <p className="settings-hint">
-              Requires source URLs and date evidence on Search-enabled first-round responses. If missing, the app auto-retries with legacy search context.
-            </p>
           </div>
 
             </>

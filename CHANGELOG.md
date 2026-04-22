@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.42] - 2026-04-21
+
+### Added
+- Search settings now expose native OpenRouter web-search options, search mode selection, fallback provider selection, and fallback context depth controls.
+
+### Changed
+- Legacy web search now runs as a structured research fallback packet for evidence recovery instead of the main search path.
+
+### Fixed
+- OpenRouter native web search now remains eligible when using a user-entered OpenRouter API key, and the composer Search help text reflects the native-first fallback behavior.
+
 ## [0.3.41] - 2026-04-21
 
 ### Added
