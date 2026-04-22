@@ -198,21 +198,12 @@ export function getAttachmentTransportForModel(attachment, modelId, modelCatalog
         reason: 'This PDF appears scanned/image-only, but OCR page images are unavailable. Reattach the original file or upload page images.',
       };
     }
-    if (usesOpenRouterTransport(modelId) && nativePdfSource) {
-      return {
-        mode: 'native_file',
-        label: 'Native PDF',
-        reason: 'PDF sent as a native OpenRouter file attachment.',
-        source: nativePdfSource,
-        transportProvider,
-      };
-    }
     if (attachment.content) {
       return {
         mode: 'text_fallback',
         label: 'Extracted text',
         reason: nativePdfSource
-          ? 'This transport cannot send PDFs natively, so extracted text will be used.'
+          ? 'Extracted PDF text will be sent instead of the PDF binary to avoid provider parser failures.'
           : 'The PDF binary is unavailable, so extracted text will be used.',
       };
     }

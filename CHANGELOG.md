@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-04-22
+
+### Changed
+- PDF attachments now always use extracted/OCR text instead of OpenRouter native PDF file parsing, eliminating provider parser failures for scanned and parser-sensitive PDFs.
+
+### Fixed
+- OpenRouter requests now strip any PDF file parts at the server boundary as a final safety net, so stale cached messages or old retry payloads cannot send PDFs to the provider parser.
+
 ## [0.3.44] - 2026-04-22
 
 ### Fixed

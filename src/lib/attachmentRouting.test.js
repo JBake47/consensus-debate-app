@@ -60,15 +60,13 @@ function test(name, fn) {
   }
 }
 
-test('OpenRouter-routed PDFs become native file parts', () => {
+test('OpenRouter-routed PDFs use extracted text instead of native file parsing', () => {
   const content = buildAttachmentContentForModel('Review the attached brief.', [pdfAttachment], {
     modelId: 'anthropic/claude-3.7-sonnet',
   });
-  assert.equal(Array.isArray(content), true);
-  assert.equal(content[0].type, 'text');
-  assert.equal(content[1].type, 'file');
-  assert.equal(content[1].file.filename, 'brief.pdf');
-  assert.equal(content[1].file.file_data, pdfAttachment.dataUrl);
+  assert.equal(typeof content, 'string');
+  assert.equal(content.includes('Attached PDF fallback text: brief.pdf'), true);
+  assert.equal(content.includes('Example PDF text'), true);
 });
 
 test('Direct-provider PDFs fall back to extracted text', () => {
@@ -198,11 +196,19 @@ test('Routing overview reports OCR fallback for images with extracted text', () 
 
 test('Routing overview reports mixed native and fallback handling', () => {
   const routing = buildAttachmentRoutingOverview({
-    attachments: [pdfAttachment],
-    models: ['anthropic/claude-3.7-sonnet', 'openai:gpt-4.1-mini'],
+    attachments: [{
+      ...imageAttachment,
+      content: 'Diagram label text',
+    }],
+    models: ['anthropic/claude-3.7-sonnet', 'meta-llama/llama-3.3-70b-instruct'],
+    modelCatalog: {
+      'meta-llama/llama-3.3-70b-instruct': {
+        modalities: ['text'],
+      },
+    },
   })[0];
   assert.deepEqual(routing.nativeModels, ['anthropic/claude-3.7-sonnet']);
-  assert.deepEqual(routing.fallbackModels, ['openai:gpt-4.1-mini']);
+  assert.deepEqual(routing.fallbackModels, ['meta-llama/llama-3.3-70b-instruct']);
   assert.equal(routing.primaryLabel, 'Mixed routing');
 });
 

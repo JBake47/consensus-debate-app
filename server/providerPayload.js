@@ -32,6 +32,30 @@ export function parseDataUrl(url) {
   return { mimeType: match[1], data: match[2] };
 }
 
+function isOpenRouterPdfFilePart(part) {
+  if (part?.type !== 'file' || !part.file || typeof part.file !== 'object') return false;
+  const fileData = String(part.file.file_data || part.file.data || '').trim().toLowerCase();
+  const filename = String(part.file.filename || part.file.name || '').trim().toLowerCase();
+  return fileData.startsWith('data:application/pdf;base64,') || filename.endsWith('.pdf');
+}
+
+export function stripOpenRouterPdfFileParts(messages) {
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    if (!Array.isArray(message?.content)) return message;
+    const strippedContent = message.content.filter((part) => !isOpenRouterPdfFilePart(part));
+    if (strippedContent.length === message.content.length) return message;
+    return {
+      ...message,
+      content: strippedContent.length > 0
+        ? strippedContent
+        : [{
+          type: 'text',
+          text: 'A PDF attachment was omitted because native PDF parsing is disabled. Reattach the PDF so the app can extract/OCR text before sending.',
+        }],
+    };
+  });
+}
+
 function findTextPartIndex(content) {
   if (!Array.isArray(content)) return -1;
   for (let index = content.length - 1; index >= 0; index -= 1) {
@@ -158,15 +182,16 @@ export function buildOpenRouterChatBody({
   promptCache = {},
   pluginOptions = {},
 } = {}) {
+  const safeMessages = stripOpenRouterPdfFileParts(messages);
   const body = {
     model,
-    messages,
+    messages: safeMessages,
     stream,
     include_reasoning: true,
   };
   const cacheControl = buildClaudePromptCacheControl({
     model,
-    messages,
+    messages: safeMessages,
     enabled: promptCache.enabled,
     ttl: promptCache.claudeTtl,
   });
@@ -183,7 +208,7 @@ export function buildOpenRouterChatBody({
   }
   const plugins = buildOpenRouterPlugins({
     legacyWebSearch: useLegacyWebSearchPlugin,
-    messages,
+    messages: body.messages,
     webPluginId: pluginOptions.webPluginId,
     filePluginId: pluginOptions.filePluginId,
     pdfEngine: pluginOptions.pdfEngine,

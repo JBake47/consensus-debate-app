@@ -4,6 +4,7 @@ import {
   buildGeminiGenerateContentBody,
   buildOpenAIChatBody,
   buildOpenRouterChatBody,
+  stripOpenRouterPdfFileParts,
 } from './providerPayload.js';
 
 function test(name, fn) {
@@ -18,7 +19,7 @@ function test(name, fn) {
   }
 }
 
-test('OpenRouter body applies Claude cache control, server web tool, and file plugin', () => {
+test('OpenRouter body applies Claude cache control and strips PDF file parser parts', () => {
   const body = buildOpenRouterChatBody({
     model: 'anthropic/claude-sonnet-4.5',
     messages: [
@@ -45,9 +46,21 @@ test('OpenRouter body applies Claude cache control, server web tool, and file pl
   assert.deepEqual(body.tools, [
     { type: 'openrouter:web_search', parameters: { engine: 'exa', max_results: 4, max_total_results: 8 } },
   ]);
-  assert.deepEqual(body.plugins, [
-    { id: 'file-parser', pdf: { engine: 'pdf-text' } },
-  ]);
+  assert.equal(body.messages[0].content.some((part) => part?.type === 'file'), false);
+  assert.equal(body.plugins, undefined);
+});
+
+test('OpenRouter PDF scrubber replaces file-only messages with an explanatory text part', () => {
+  const messages = stripOpenRouterPdfFileParts([{
+    role: 'user',
+    content: [
+      { type: 'file', file: { filename: 'scan.pdf', file_data: 'data:application/pdf;base64,JVBERi0xLjQK' } },
+    ],
+  }]);
+
+  assert.equal(messages[0].content.length, 1);
+  assert.equal(messages[0].content[0].type, 'text');
+  assert.match(messages[0].content[0].text, /native PDF parsing is disabled/);
 });
 
 test('OpenRouter body can fall back to deprecated web plugin compatibility mode', () => {
