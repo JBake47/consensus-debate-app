@@ -15,7 +15,7 @@ function test(name, fn) {
     });
 }
 
-await test('safe PDF fallback avoids text extraction on the main thread', async () => {
+await test('safe PDF fallback marks PDFs unsafe for native parser replay', async () => {
   const pdfBytes = new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n');
   const file = {
     name: 'brief.pdf',
@@ -31,6 +31,11 @@ await test('safe PDF fallback avoids text extraction on the main thread', async 
   assert.equal(typeof attachment.dataUrl, 'string');
   assert.equal(attachment.dataUrl.startsWith('data:application/pdf;base64,'), true);
   assert.equal(attachment.inlineWarning.includes('skipped'), true);
+  assert.equal(attachment.pdfRequiresOcr, true);
+  assert.equal(attachment.pdfOcrStatus, 'unavailable');
+  assert.equal(Array.isArray(attachment.pdfOcrPages), true);
+  assert.equal(attachment.previewMeta.hasTextLayer, false);
+  assert.equal(attachment.previewMeta.needsOcr, true);
 });
 
 await test('hasUsefulPdfText ignores page headers and whitespace', async () => {

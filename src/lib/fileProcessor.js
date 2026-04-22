@@ -59,12 +59,21 @@ export async function processFile(file, options = {}) {
           content: '',
           preview: 'binary',
           inlineWarning: canInline
-            ? 'PDF text extraction was skipped to keep the app responsive after worker processing failed. Open the PDF in Details or Pages mode to inspect it.'
+            ? 'PDF text extraction was skipped after worker processing failed. Reattach the PDF to retry OCR before sending it to models.'
             : 'PDF text extraction was skipped after worker processing failed, and the file is too large to store inline for preview.',
+          pdfRequiresOcr: true,
+          pdfOcrStatus: 'unavailable',
+          pdfOcrPages: [],
           previewMeta: {
             pageCount: 0,
             lineCount: 0,
             charCount: 0,
+            hasTextLayer: false,
+            needsOcr: true,
+            ocrCandidatePageCount: 0,
+            ocrCandidatePageLimit: PDF_OCR_MAX_PAGES,
+            ocrCandidatePagesTruncated: false,
+            ocrPageRenderFailed: true,
           },
         };
       }

@@ -89,6 +89,24 @@ test('Scanned PDFs do not use native OpenRouter file parsing before OCR', () => 
   assert.equal(content.includes('OCR text is not available'), true);
 });
 
+test('Legacy empty PDFs are never sent to OpenRouter native file parsing', () => {
+  const content = buildAttachmentContentForModel('Review the attached PDF.', [{
+    name: 'old-scan.pdf',
+    size: 4096,
+    type: 'application/pdf',
+    category: 'pdf',
+    dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+    content: '',
+    processingStatus: 'ready',
+  }], {
+    modelId: 'anthropic/claude-3.7-sonnet',
+  });
+  assert.equal(Array.isArray(content), false);
+  assert.equal(content.includes('Attachments not sent to this model'), true);
+  assert.equal(content.includes('old-scan.pdf'), true);
+  assert.equal(content.includes('Reattach the original file'), true);
+});
+
 test('OCR-completed scanned PDFs route as text fallback for OpenRouter models', () => {
   const content = buildAttachmentContentForModel('Review the scanned PDF.', [{
     ...scannedPdfAttachment,

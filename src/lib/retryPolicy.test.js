@@ -69,6 +69,11 @@ runTest('shouldAffectCircuitBreaker ignores invalid attachment parse errors', ()
   );
 });
 
+runTest('shouldAffectCircuitBreaker ignores status-less provider PDF parse errors', () => {
+  const err = new Error('{"error":{"message":"Failed to parse Mom, Dad & Sister.pdf","code":400}}');
+  assert.equal(shouldAffectCircuitBreaker(err, () => false), false);
+});
+
 runTest('getRetryDelayMs applies jitter and bounds', () => {
   const minJitter = () => 0;
   const maxJitter = () => 1;

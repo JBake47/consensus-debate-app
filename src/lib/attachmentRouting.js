@@ -64,6 +64,8 @@ export function isPdfOcrRequired(attachment) {
   if (String(attachment?.category || '').toLowerCase() !== 'pdf') return false;
   const status = String(attachment?.pdfOcrStatus || '').toLowerCase();
   const meta = attachment?.previewMeta || {};
+  const content = String(attachment?.content || '').trim();
+  if (!content && meta.hasTextLayer !== true) return true;
   return Boolean(
     attachment?.pdfRequiresOcr
       || status === 'pending'

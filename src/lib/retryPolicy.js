@@ -79,8 +79,11 @@ export function isNonRetryableError(err) {
     message.includes('unauthorized') ||
     message.includes('insufficient credits') ||
     message.includes('invalid model') ||
+    message.includes('failed to parse') ||
     message.includes('unsupported provider') ||
     message.includes('bad request') ||
+    message.includes('"code":400') ||
+    message.includes('code":400') ||
     message.includes('malformed')
   );
 }

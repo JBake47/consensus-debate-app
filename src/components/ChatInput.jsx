@@ -208,10 +208,9 @@ export default function ChatInput() {
         const file = entry?.file || entry;
         const uploadId = entry?.uploadId || null;
         try {
-          const fileCategory = getFileCategory(file);
           return {
             ...(await processFile(file, {
-              safePdfFallback: fileCategory === 'pdf',
+              safePdfFallback: false,
             })),
             uploadId,
           };

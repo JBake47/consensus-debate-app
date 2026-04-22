@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.44] - 2026-04-22
+
+### Fixed
+- PDF retry and fallback paths now treat legacy or worker-fallback PDFs without extracted text as unsafe for OpenRouter native file parsing, preventing scanned PDFs from replaying the `Failed to parse ...pdf` provider error.
+- Main-thread attachment fallback now still attempts bounded PDF processing/OCR preparation instead of skipping PDFs into a native-parser path.
+- Status-less provider `Failed to parse ...pdf` errors are now classified as non-retryable so they cannot open provider circuits.
+
 ## [0.3.43] - 2026-04-22
 
 ### Added
