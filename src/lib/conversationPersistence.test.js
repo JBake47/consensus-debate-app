@@ -97,6 +97,29 @@ runTest('prepareConversationsForPersistence trims bulky attachment and reasoning
   assert.equal(prepared[0].runningSummary.length, 120000);
 });
 
+runTest('prepareConversationsForPersistence drops PDF OCR page snapshots', () => {
+  const fixture = createConversationFixture();
+  fixture[0].turns[0].attachments.push({
+    name: 'scan.pdf',
+    size: 2048,
+    type: 'application/pdf',
+    category: 'pdf',
+    dataUrl: 'data:application/pdf;base64,abc123',
+    content: '',
+    inlineWarning: 'OCR pending.',
+    pdfRequiresOcr: true,
+    pdfOcrPages: [{
+      pageNumber: 1,
+      dataUrl: `data:image/jpeg;base64,${'a'.repeat(50000)}`,
+    }],
+  });
+
+  const prepared = prepareConversationsForPersistence(fixture, 'balanced');
+  const pdfAttachment = prepared[0].turns[0].attachments[2];
+  assert.equal(pdfAttachment.pdfOcrPages, undefined);
+  assert.match(pdfAttachment.inlineWarning, /snapshots were trimmed/i);
+});
+
 runTest('persistConversationsSnapshot falls back to a smaller strategy when storage is tight', () => {
   const fixture = createConversationFixture();
   const balancedBytes = JSON.stringify(prepareConversationsForPersistence(fixture, 'balanced')).length;

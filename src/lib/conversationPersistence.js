@@ -156,6 +156,16 @@ function compactAttachmentForPersistence(attachment, strategy) {
   const isImage = category === 'image';
   const dataUrl = typeof attachment.dataUrl === 'string' ? attachment.dataUrl : '';
 
+  if (Array.isArray(nextAttachment.pdfOcrPages)) {
+    delete nextAttachment.pdfOcrPages;
+    if (category === 'pdf' && !String(nextAttachment.content || '').trim()) {
+      nextAttachment.inlineWarning = mergeWarning(
+        attachment.inlineWarning,
+        'OCR page snapshots were trimmed from saved chat history. Reattach the original PDF to OCR it again.',
+      );
+    }
+  }
+
   if (isImage) {
     nextAttachment.content = '';
     if (!dataUrl || dataUrl.length > strategy.imageDataUrlLimit) {

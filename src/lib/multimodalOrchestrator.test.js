@@ -67,6 +67,19 @@ await runTest('shouldCallOrchestrator detects multimodal intents', async () => {
       },
     },
   }), true);
+  assert.equal(shouldCallOrchestrator('Please read this scanned PDF.', {
+    attachments: [{
+      name: 'scan.pdf',
+      category: 'pdf',
+      content: '',
+      pdfRequiresOcr: true,
+      pdfOcrStatus: 'pending',
+      pdfOcrPages: [{
+        pageNumber: 1,
+        dataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD',
+      }],
+    }],
+  }), true);
 });
 
 await runTest('normalizeGeneratedAttachment keeps signed url metadata', async () => {
@@ -130,7 +143,14 @@ await runTest('orchestrateMultimodalTurn consumes async job result', async () =>
           }],
           youtubeUrls: ['https://youtu.be/demo'],
           routingDecisions: [{ type: 'youtube' }],
-          attachmentAugmentations: [{ index: 0, content: 'Status: OK' }],
+          attachmentAugmentations: [{
+            index: 0,
+            content: 'Status: OK',
+            pdfOcrStatus: 'completed',
+            inlineWarning: 'OCR complete.',
+            previewMeta: { ocrCompleted: true },
+            dropPdfOcrPages: true,
+          }],
           rejectedAttachments: [{ name: 'bad.exe', reason: 'blocked' }],
           capabilityRegistry: { routingVersion: '2026-03-05' },
         },
@@ -140,7 +160,13 @@ await runTest('orchestrateMultimodalTurn consumes async job result', async () =>
   }, async () => {
     const result = await orchestrateMultimodalTurn({
       prompt: 'Generate a pdf from these notes',
-      attachments: [{ name: 'notes.md', category: 'text', content: '# Notes', size: 7 }],
+      attachments: [{
+        name: 'notes.md',
+        category: 'text',
+        content: '# Notes',
+        size: 7,
+        pdfOcrPages: [{ dataUrl: 'data:image/jpeg;base64,unused' }],
+      }],
       selectedModels: ['openai:gpt-4.1-mini'],
       synthesizerModel: 'openai:gpt-4.1-mini',
       providerStatus: { openai: true },
@@ -148,6 +174,10 @@ await runTest('orchestrateMultimodalTurn consumes async job result', async () =>
     assert.equal(result.prompt.includes('Generated artifacts attached'), true);
     assert.equal(result.attachments.length, 2);
     assert.equal(result.attachments[0].content, 'Status: OK');
+    assert.equal(result.attachments[0].pdfOcrStatus, 'completed');
+    assert.equal(result.attachments[0].inlineWarning, 'OCR complete.');
+    assert.equal(result.attachments[0].previewMeta.ocrCompleted, true);
+    assert.equal(result.attachments[0].pdfOcrPages, undefined);
     assert.equal(result.attachments[1].downloadUrl, '/api/artifacts/a?token=t');
     assert.deepEqual(result.modelOverrides, ['gemini:gemini-2.5-flash']);
     assert.deepEqual(result.routeInfo.youtubeUrls, ['https://youtu.be/demo']);

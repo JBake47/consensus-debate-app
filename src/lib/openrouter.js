@@ -384,7 +384,11 @@ export async function streamChat({
             searchMetadata = parsed.searchMetadata || null;
           }
           if (parsed.type === 'error') {
-            streamError = parsed.message || 'Stream error';
+            streamError = {
+              message: parsed.message || 'Stream error',
+              status: Number.isFinite(Number(parsed.status)) ? Number(parsed.status) : 500,
+              code: parsed.code || 'stream_error',
+            };
             await reader.cancel();
             break;
           }
@@ -398,7 +402,7 @@ export async function streamChat({
     flushPendingUpdates();
 
     if (streamError) {
-      throw new OpenRouterError(streamError, 500, 'stream_error');
+      throw new OpenRouterError(streamError.message, streamError.status, streamError.code);
     }
 
     const durationMs = Math.round(performance.now() - startTime);

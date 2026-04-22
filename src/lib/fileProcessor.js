@@ -4,6 +4,20 @@ export { BINARY_EXTENSIONS, IMAGE_TYPES, TEXT_EXTENSIONS, getFileCategory } from
 export const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 export const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
 export const DEFAULT_MAX_ATTACHMENTS = 16;
+export const PDF_OCR_MAX_PAGES = 8;
+const PDF_OCR_MAX_DIMENSION = 1800;
+const PDF_OCR_MAX_PIXELS = 2_600_000;
+const PDF_OCR_RENDER_SCALE = 2;
+const PDF_OCR_IMAGE_TYPE = 'image/jpeg';
+const PDF_OCR_IMAGE_QUALITY = 0.84;
+
+export function hasUsefulPdfText(content) {
+  const text = String(content || '')
+    .replace(/--- Page \d+ ---/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 0;
+}
 
 /**
  * Process a file and return a structured attachment object.
@@ -55,13 +69,35 @@ export async function processFile(file, options = {}) {
         };
       }
       const pdf = await readPdf(file);
+      const hasText = hasUsefulPdfText(pdf.content);
+      const needsOcr = !pdf.parseFailed && !hasText && pdf.pageCount > 0;
+      const ocrPages = Array.isArray(pdf.ocrCandidatePages) ? pdf.ocrCandidatePages : [];
+      const inlineWarning = needsOcr
+        ? (
+          ocrPages.length > 0
+            ? `This PDF appears to be scanned or image-only. Prepared ${ocrPages.length} page image${ocrPages.length === 1 ? '' : 's'} for OCR before sending.`
+            : 'This PDF appears to be scanned or image-only, but page images could not be prepared for OCR.'
+        )
+        : (pdf.parseFailed ? 'PDF text extraction failed; the file may be encrypted or malformed.' : base.inlineWarning);
       return {
         ...base,
         content: pdf.content,
-        preview: 'text',
+        preview: hasText ? 'text' : 'binary',
+        inlineWarning,
+        pdfRequiresOcr: needsOcr,
+        pdfOcrStatus: needsOcr
+          ? (ocrPages.length > 0 ? 'pending' : 'unavailable')
+          : (hasText ? 'not_needed' : 'unavailable'),
+        pdfOcrPages: ocrPages,
         previewMeta: {
           ...buildTextPreviewMeta(pdf.content),
           pageCount: pdf.pageCount,
+          hasTextLayer: hasText,
+          needsOcr,
+          ocrCandidatePageCount: ocrPages.length,
+          ocrCandidatePageLimit: PDF_OCR_MAX_PAGES,
+          ocrCandidatePagesTruncated: Boolean(pdf.ocrCandidatePagesTruncated),
+          ocrPageRenderFailed: Boolean(pdf.ocrPageRenderFailed),
         },
       };
     }
@@ -160,8 +196,10 @@ async function readImageMeta(file, dataUrl) {
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
-  for (let index = 0; index < bytes.length; index += 1) {
-    binary += String.fromCharCode(bytes[index]);
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
   }
   if (typeof btoa === 'function') {
     return btoa(binary);
@@ -228,16 +266,124 @@ async function readPdf(file) {
         pages.push(`--- Page ${i} ---\n${text}`);
       }
     }
+    const hasText = pages.length > 0;
+    const ocrResult = hasText
+      ? { pages: [], truncated: false, failed: false }
+      : await renderPdfOcrCandidatePages(pdf);
     return {
-      content: pages.join('\n\n') || '(No text content extracted from PDF)',
+      content: pages.join('\n\n'),
       pageCount: pdf.numPages || 0,
+      hasTextLayer: hasText,
+      ocrCandidatePages: ocrResult.pages,
+      ocrCandidatePagesTruncated: ocrResult.truncated,
+      ocrPageRenderFailed: ocrResult.failed,
+      parseFailed: false,
     };
   } catch {
     return {
-      content: '(Failed to parse PDF -- the file may be scanned or encrypted)',
+      content: '',
       pageCount: 0,
+      hasTextLayer: false,
+      ocrCandidatePages: [],
+      ocrCandidatePagesTruncated: false,
+      ocrPageRenderFailed: false,
+      parseFailed: true,
     };
   }
+}
+
+function createRenderCanvas(width, height) {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d');
+    return context ? { canvas, context } : null;
+  }
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    return context ? { canvas, context } : null;
+  }
+  return null;
+}
+
+async function canvasToDataUrl(canvas) {
+  if (typeof canvas?.toDataURL === 'function') {
+    return canvas.toDataURL(PDF_OCR_IMAGE_TYPE, PDF_OCR_IMAGE_QUALITY);
+  }
+  if (typeof canvas?.convertToBlob === 'function') {
+    const blob = await canvas.convertToBlob({
+      type: PDF_OCR_IMAGE_TYPE,
+      quality: PDF_OCR_IMAGE_QUALITY,
+    });
+    const buffer = await blob.arrayBuffer();
+    return `data:${PDF_OCR_IMAGE_TYPE};base64,${arrayBufferToBase64(buffer)}`;
+  }
+  return '';
+}
+
+function getPdfOcrScale(viewport) {
+  const width = Math.max(1, Number(viewport?.width || 1));
+  const height = Math.max(1, Number(viewport?.height || 1));
+  const maxDimensionScale = PDF_OCR_MAX_DIMENSION / Math.max(width, height);
+  const maxPixelScale = Math.sqrt(PDF_OCR_MAX_PIXELS / (width * height));
+  return Math.max(0.3, Math.min(PDF_OCR_RENDER_SCALE, maxDimensionScale, maxPixelScale));
+}
+
+async function renderPdfPageForOcr(page, pageNumber) {
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = getPdfOcrScale(baseViewport);
+  const viewport = page.getViewport({ scale });
+  const width = Math.max(1, Math.floor(viewport.width));
+  const height = Math.max(1, Math.floor(viewport.height));
+  const renderCanvas = createRenderCanvas(width, height);
+  if (!renderCanvas) return null;
+
+  await page.render({
+    canvasContext: renderCanvas.context,
+    viewport,
+  }).promise;
+
+  const dataUrl = await canvasToDataUrl(renderCanvas.canvas);
+  if (!dataUrl) return null;
+  return {
+    pageNumber,
+    dataUrl,
+    width,
+    height,
+  };
+}
+
+async function renderPdfOcrCandidatePages(pdf) {
+  const pageCount = Number(pdf?.numPages || 0);
+  const maxPages = Math.min(PDF_OCR_MAX_PAGES, Math.max(0, pageCount));
+  if (maxPages === 0) {
+    return { pages: [], truncated: false, failed: false };
+  }
+
+  const pages = [];
+  let failed = false;
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const rendered = await renderPdfPageForOcr(page, pageNumber);
+      page.cleanup?.();
+      if (rendered) {
+        pages.push(rendered);
+      } else {
+        failed = true;
+      }
+    } catch {
+      failed = true;
+    }
+  }
+
+  return {
+    pages,
+    truncated: pageCount > maxPages,
+    failed,
+  };
 }
 
 /**

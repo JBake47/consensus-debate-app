@@ -54,10 +54,30 @@ function getNativePdfSource(attachment) {
   return null;
 }
 
+export function getPdfOcrCandidatePages(attachment) {
+  return Array.isArray(attachment?.pdfOcrPages)
+    ? attachment.pdfOcrPages.filter((page) => String(page?.dataUrl || '').startsWith('data:image/'))
+    : [];
+}
+
+export function isPdfOcrRequired(attachment) {
+  if (String(attachment?.category || '').toLowerCase() !== 'pdf') return false;
+  const status = String(attachment?.pdfOcrStatus || '').toLowerCase();
+  const meta = attachment?.previewMeta || {};
+  return Boolean(
+    attachment?.pdfRequiresOcr
+      || status === 'pending'
+      || status === 'completed'
+      || meta.needsOcr
+      || meta.hasTextLayer === false
+  );
+}
+
 function buildFallbackAttachmentBlock(attachment) {
   const category = String(attachment?.category || 'file').toLowerCase();
+  const pdfNeedsOcr = category === 'pdf' && isPdfOcrRequired(attachment);
   const label = category === 'pdf'
-    ? 'Attached PDF fallback text'
+    ? (pdfNeedsOcr ? 'Attached PDF OCR text' : 'Attached PDF fallback text')
     : category === 'word'
       ? 'Attached Word fallback text'
       : category === 'excel'
@@ -67,7 +87,10 @@ function buildFallbackAttachmentBlock(attachment) {
         : 'Attached file text';
   const content = String(attachment?.content || '').trim();
   if (!content) {
-    return `\n\n---\n**${label}: ${attachment?.name || 'attachment'}**\n(Unable to extract text content from this file.)`;
+    const reason = pdfNeedsOcr
+      ? 'OCR text is not available for this scanned/image-only PDF.'
+      : 'Unable to extract text content from this file.';
+    return `\n\n---\n**${label}: ${attachment?.name || 'attachment'}**\n(${reason})`;
   }
   return `\n\n---\n**${label}: ${attachment?.name || 'attachment'}**\n\`\`\`\n${truncateContent(content, 50000)}\n\`\`\``;
 }
@@ -151,6 +174,28 @@ export function getAttachmentTransportForModel(attachment, modelId, modelCatalog
 
   if (category === 'pdf') {
     const nativePdfSource = getNativePdfSource(attachment);
+    const pdfNeedsOcr = isPdfOcrRequired(attachment);
+    if (pdfNeedsOcr) {
+      if (attachment.content) {
+        return {
+          mode: 'text_fallback',
+          label: 'OCR text',
+          reason: 'OCR text from this scanned/image-only PDF will be sent instead of the PDF binary.',
+        };
+      }
+      if (getPdfOcrCandidatePages(attachment).length > 0) {
+        return {
+          mode: 'text_fallback',
+          label: 'OCR pending',
+          reason: 'This scanned/image-only PDF will be OCR processed before sending.',
+        };
+      }
+      return {
+        mode: 'excluded',
+        label: 'Needs OCR',
+        reason: 'This PDF appears scanned/image-only, but OCR page images are unavailable. Reattach the original file or upload page images.',
+      };
+    }
     if (usesOpenRouterTransport(modelId) && nativePdfSource) {
       return {
         mode: 'native_file',
@@ -272,12 +317,15 @@ export function buildAttachmentRoutingOverview({
     let primaryLabel = 'Routing unavailable';
     let primaryTone = 'neutral';
     const category = String(attachment?.category || '').toLowerCase();
-    const usesImageFallback = category === 'image' && fallbackModels.length > 0;
+    const usesOcrFallback = fallbackModels.length > 0 && (
+      category === 'image'
+      || (category === 'pdf' && isPdfOcrRequired(attachment))
+    );
     if (nativeModels.length > 0 && fallbackModels.length === 0 && excludedModels.length === 0) {
       primaryLabel = routeModes.has('native_file') ? 'Native file' : 'Native image';
       primaryTone = 'native';
     } else if (fallbackModels.length > 0 && nativeModels.length === 0 && excludedModels.length === 0) {
-      primaryLabel = usesImageFallback ? 'OCR fallback' : 'Text fallback';
+      primaryLabel = usesOcrFallback ? 'OCR fallback' : 'Text fallback';
       primaryTone = 'fallback';
     } else if (excludedModels.length === selectedModels.length && selectedModels.length > 0) {
       primaryLabel = 'Not sent';

@@ -105,6 +105,9 @@ await withServer({}, async ({ baseUrl }) => {
     assert.equal(typeof data.capabilityRegistry.routingVersion, 'string');
     assert.equal(typeof data.capabilityRegistry.providers?.openrouter?.capabilities?.webSearchNative, 'boolean');
     assert.equal(typeof data.limits.maxAttachments, 'number');
+    assert.equal(data.limits.pdfOcrMaxPages, 8);
+    assert.equal(data.limits.pdfOcrPageMaxBytes, 3 * 1024 * 1024);
+    assert.equal(data.limits.pdfOcrTotalMaxBytes, 14 * 1024 * 1024);
   });
 
   await runTest('POST /api/files/extract-text extracts Word and Excel text server-side', async () => {
@@ -189,6 +192,21 @@ await withServer({}, async ({ baseUrl }) => {
     const body = Buffer.from(await artifactResponse.arrayBuffer());
     assert.equal(body.length > 0, true);
     assert.equal(artifactResponse.headers.get('content-type')?.includes('application/pdf'), true);
+  });
+});
+
+await withServer({
+  PDF_OCR_MAX_PAGES: '999',
+  PDF_OCR_PAGE_MAX_BYTES: 'not-a-number',
+  PDF_OCR_TOTAL_MAX_BYTES: '1',
+}, async ({ baseUrl }) => {
+  await runTest('PDF OCR limits fall back and clamp unsafe environment values', async () => {
+    const response = await fetch(`${baseUrl}/api/capabilities`);
+    assert.equal(response.ok, true);
+    const data = await response.json();
+    assert.equal(data.limits.pdfOcrMaxPages, 16);
+    assert.equal(data.limits.pdfOcrPageMaxBytes, 3 * 1024 * 1024);
+    assert.equal(data.limits.pdfOcrTotalMaxBytes, 128 * 1024);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   normalizeRetryPolicy,
   isNonRetryableError,
   isTransientRetryableError,
+  shouldAffectCircuitBreaker,
   getRetryDelayMs,
 } from './retryPolicy.js';
 
@@ -54,6 +55,17 @@ runTest('isTransientRetryableError detects 429 and timeout unless aborted', () =
   assert.equal(
     isTransientRetryableError({ status: 503 }, () => true),
     false,
+  );
+});
+
+runTest('shouldAffectCircuitBreaker ignores invalid attachment parse errors', () => {
+  assert.equal(
+    shouldAffectCircuitBreaker({ status: 400, message: 'Failed to parse scanned.pdf' }, () => false),
+    false,
+  );
+  assert.equal(
+    shouldAffectCircuitBreaker({ status: 503, message: 'temporarily unavailable' }, () => false),
+    true,
   );
 });
 

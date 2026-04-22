@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.43] - 2026-04-22
+
+### Added
+- Scanned/image-only PDF uploads now render capped page snapshots for OCR and merge extracted text back into the attachment before model routing.
+- Server-side PDF OCR limits are now configurable and exposed in capability metadata.
+
+### Changed
+- OCR-required PDFs route as text fallback instead of OpenRouter native PDF file parts, avoiding parser failures on PDFs without a text layer.
+- Temporary PDF OCR page snapshots are stripped from saved conversation history after use.
+
+### Fixed
+- Non-retryable provider 400 errors, including file parse failures, no longer open the provider circuit breaker or block unrelated retries.
+
 ## [0.3.42] - 2026-04-21
 
 ### Added

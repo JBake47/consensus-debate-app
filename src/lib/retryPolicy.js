@@ -107,6 +107,10 @@ export function isTransientRetryableError(err, isAbortLikeError = () => false) {
   );
 }
 
+export function shouldAffectCircuitBreaker(err, isAbortLikeError = () => false) {
+  return isTransientRetryableError(err, isAbortLikeError);
+}
+
 export function getRetryDelayMs(attemptNumber, policy, random = Math.random) {
   const normalized = normalizeRetryPolicy(policy);
   const exp = normalized.baseDelayMs * (2 ** Math.max(0, attemptNumber - 1));

@@ -1,4 +1,8 @@
-import { getAttachmentTransportForModel } from './attachmentRouting.js';
+import {
+  getAttachmentTransportForModel,
+  getPdfOcrCandidatePages,
+  isPdfOcrRequired,
+} from './attachmentRouting.js';
 
 const MULTIMODAL_ORCHESTRATE_URL = '/api/multimodal/orchestrate';
 const MULTIMODAL_JOBS_URL = '/api/multimodal/jobs';
@@ -30,12 +34,22 @@ function needsImageOcrFallback({
   });
 }
 
+function needsPdfOcrFallback({ attachments = [] }) {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  return safeAttachments.some((attachment) => (
+    isPdfOcrRequired(attachment)
+      && !String(attachment?.content || '').trim()
+      && getPdfOcrCandidatePages(attachment).length > 0
+  ));
+}
+
 export function shouldCallOrchestrator(prompt, options = {}) {
   const text = String(prompt || '');
   return YOUTUBE_URL_REGEX.test(text)
     || IMAGE_INTENT_REGEX.test(text)
     || DOC_INTENT_REGEX.test(text)
-    || needsImageOcrFallback(options);
+    || needsImageOcrFallback(options)
+    || needsPdfOcrFallback(options);
 }
 
 export function normalizeGeneratedAttachment(item) {
@@ -145,6 +159,21 @@ function normalizeOrchestrationResponse({
       const nextAttachment = { ...attachment };
       if (typeof augmentation.content === 'string') {
         nextAttachment.content = augmentation.content;
+      }
+      if (typeof augmentation.inlineWarning === 'string') {
+        nextAttachment.inlineWarning = augmentation.inlineWarning;
+      }
+      if (typeof augmentation.pdfOcrStatus === 'string') {
+        nextAttachment.pdfOcrStatus = augmentation.pdfOcrStatus;
+      }
+      if (augmentation.previewMeta && typeof augmentation.previewMeta === 'object') {
+        nextAttachment.previewMeta = {
+          ...(nextAttachment.previewMeta || {}),
+          ...augmentation.previewMeta,
+        };
+      }
+      if (augmentation.dropPdfOcrPages) {
+        delete nextAttachment.pdfOcrPages;
       }
       return nextAttachment;
     })

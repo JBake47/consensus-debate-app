@@ -15,6 +15,29 @@ const pdfAttachment = {
   processingStatus: 'ready',
 };
 
+const scannedPdfAttachment = {
+  name: 'scan.pdf',
+  size: 4096,
+  type: 'application/pdf',
+  category: 'pdf',
+  dataUrl: 'data:application/pdf;base64,JVBERi0xLjQK',
+  content: '',
+  processingStatus: 'ready',
+  pdfRequiresOcr: true,
+  pdfOcrStatus: 'pending',
+  pdfOcrPages: [{
+    pageNumber: 1,
+    dataUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD',
+    width: 1200,
+    height: 1600,
+  }],
+  previewMeta: {
+    pageCount: 1,
+    hasTextLayer: false,
+    needsOcr: true,
+  },
+};
+
 const imageAttachment = {
   name: 'diagram.png',
   size: 1024,
@@ -55,6 +78,29 @@ test('Direct-provider PDFs fall back to extracted text', () => {
   assert.equal(typeof content, 'string');
   assert.equal(content.includes('Attached PDF fallback text: brief.pdf'), true);
   assert.equal(content.includes('Example PDF text'), true);
+});
+
+test('Scanned PDFs do not use native OpenRouter file parsing before OCR', () => {
+  const content = buildAttachmentContentForModel('Review the scanned PDF.', [scannedPdfAttachment], {
+    modelId: 'anthropic/claude-3.7-sonnet',
+  });
+  assert.equal(Array.isArray(content), false);
+  assert.equal(content.includes('Attached PDF OCR text: scan.pdf'), true);
+  assert.equal(content.includes('OCR text is not available'), true);
+});
+
+test('OCR-completed scanned PDFs route as text fallback for OpenRouter models', () => {
+  const content = buildAttachmentContentForModel('Review the scanned PDF.', [{
+    ...scannedPdfAttachment,
+    content: 'Page 1\nMom Dad Sister',
+    pdfOcrStatus: 'completed',
+    pdfOcrPages: [],
+  }], {
+    modelId: 'anthropic/claude-3.7-sonnet',
+  });
+  assert.equal(Array.isArray(content), false);
+  assert.equal(content.includes('Attached PDF OCR text: scan.pdf'), true);
+  assert.equal(content.includes('Mom Dad Sister'), true);
 });
 
 test('Images are excluded for models marked text-only', () => {

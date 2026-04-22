@@ -71,12 +71,13 @@ function renderModelNames(modelIds) {
 function buildRoutingSummary(attachment, routing) {
   if (!routing) return '';
   const category = String(attachment?.category || '').toLowerCase();
+  const fallbackLabel = category === 'image' || attachment?.pdfRequiresOcr ? 'OCR' : 'text';
   const parts = [];
   if (routing.nativeModels?.length > 0) {
     parts.push(`${routing.nativeModels.length} native`);
   }
   if (routing.fallbackModels?.length > 0) {
-    parts.push(`${routing.fallbackModels.length} ${category === 'image' ? 'OCR' : 'text'}`);
+    parts.push(`${routing.fallbackModels.length} ${fallbackLabel}`);
   }
   if (routing.excludedModels?.length > 0) {
     parts.push(`${routing.excludedModels.length} excluded`);
@@ -87,12 +88,13 @@ function buildRoutingSummary(attachment, routing) {
 function buildRoutingBreakdown(attachment, routing) {
   if (!routing) return '';
   const category = String(attachment?.category || '').toLowerCase();
+  const fallbackLabel = category === 'image' || attachment?.pdfRequiresOcr ? 'OCR' : 'text';
   const parts = [];
   if (routing.nativeModels?.length > 0) {
     parts.push(`${routing.nativeModels.length} native`);
   }
   if (routing.fallbackModels?.length > 0) {
-    parts.push(`${routing.fallbackModels.length} ${category === 'image' ? 'OCR' : 'text'}`);
+    parts.push(`${routing.fallbackModels.length} ${fallbackLabel}`);
   }
   if (routing.excludedModels?.length > 0) {
     parts.push(`${routing.excludedModels.length} excluded`);

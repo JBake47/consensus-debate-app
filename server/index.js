@@ -31,6 +31,7 @@ import {
   buildGeminiGenerateContentBody,
   buildOpenAIChatBody,
   buildOpenRouterChatBody,
+  parseDataUrl,
   splitSystemMessages,
 } from './providerPayload.js';
 import { AppRestartError, scheduleSelfRestart } from './restartManager.js';
@@ -38,6 +39,12 @@ import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateMana
 import { createModelCatalogCache, DEFAULT_MODEL_CATALOG_CACHE_TTL_MS, filterModelCatalog } from './modelCatalog.js';
 
 dotenv.config();
+
+function normalizeIntegerSetting(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -82,6 +89,9 @@ const XLSX_INTENT_REGEX = /\b(xlsx|excel|spreadsheet|workbook)\b/i;
 const GENERATE_INTENT_REGEX = /\b(generate|create|make|produce|export|output|save|convert)\b/i;
 const DOC_GENERATION_MAX_BYTES = Number(process.env.DOC_GENERATION_MAX_BYTES || 12 * 1024 * 1024);
 const FILE_TEXT_EXTRACTION_MAX_BYTES = Number(process.env.FILE_TEXT_EXTRACTION_MAX_BYTES || 12 * 1024 * 1024);
+const PDF_OCR_PAGE_MAX_BYTES = normalizeIntegerSetting(process.env.PDF_OCR_PAGE_MAX_BYTES, 3 * 1024 * 1024, 64 * 1024, 8 * 1024 * 1024);
+const PDF_OCR_TOTAL_MAX_BYTES = normalizeIntegerSetting(process.env.PDF_OCR_TOTAL_MAX_BYTES, 14 * 1024 * 1024, 128 * 1024, 32 * 1024 * 1024);
+const PDF_OCR_MAX_PAGES = normalizeIntegerSetting(process.env.PDF_OCR_MAX_PAGES, 8, 0, 16);
 const ARTIFACT_TTL_MS = Number(process.env.ARTIFACT_TTL_MS || 24 * 60 * 60 * 1000);
 const MODEL_CATALOG_CACHE_TTL_MS = Number(process.env.MODEL_CATALOG_CACHE_TTL_MS || DEFAULT_MODEL_CATALOG_CACHE_TTL_MS);
 const ARTIFACT_STORE_DIR = process.env.ARTIFACT_STORE_DIR
@@ -116,6 +126,7 @@ const providerHealth = {
 };
 const promptCacheWarmups = new Map();
 const geminiPromptCaches = new Map();
+const PDF_OCR_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function toFiniteNumber(value) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -938,6 +949,24 @@ async function fetchOpenRouterChatCompletion({ apiKey, body, signal }) {
   });
 }
 
+function createProviderHttpError(bodyText, status, fallbackMessage) {
+  let message = String(bodyText || fallbackMessage || `Provider error: ${status}`).trim();
+  let code = '';
+  if (bodyText) {
+    try {
+      const parsed = JSON.parse(bodyText);
+      message = String(parsed?.error?.message || parsed?.message || parsed?.error || message);
+      code = String(parsed?.error?.code || parsed?.code || '');
+    } catch {
+      // keep raw provider body as the message
+    }
+  }
+  const error = new Error(message);
+  error.status = Number.isFinite(Number(status)) ? Number(status) : 500;
+  if (code) error.code = code;
+  return error;
+}
+
 async function handleOpenRouter({
   model,
   messages,
@@ -982,7 +1011,7 @@ async function handleOpenRouter({
       }
       if (!response.ok) {
         const fallbackBodyText = response.bodyUsed ? bodyText : await response.text();
-        throw new Error(fallbackBodyText || `OpenRouter error: ${response.status}`);
+        throw createProviderHttpError(fallbackBodyText, response.status, `OpenRouter error: ${response.status}`);
       }
     }
 
@@ -1624,6 +1653,7 @@ function detectMimeFromBuffer(buffer) {
   if (asHex.startsWith('89504e470d0a1a0a')) return 'image/png';
   if (asHex.startsWith('ffd8ff')) return 'image/jpeg';
   if (asHex.startsWith('47494638')) return 'image/gif';
+  if (asHex.startsWith('52494646') && buffer.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
   if (buffer.subarray(0, 2).toString('hex') === '504b') return 'application/zip';
   if (asHex.startsWith('3c3f786d6c') || buffer.subarray(0, 100).toString('utf8').includes('<svg')) return 'image/svg+xml';
   return '';
@@ -2290,6 +2320,49 @@ function safeBase64ToBuffer(data) {
   }
 }
 
+function sanitizePdfOcrPages(rawPages = []) {
+  const pages = Array.isArray(rawPages) ? rawPages.slice(0, PDF_OCR_MAX_PAGES) : [];
+  const accepted = [];
+  let totalBytes = 0;
+
+  for (const [index, page] of pages.entries()) {
+    const parsed = parseDataUrl(page?.dataUrl || '');
+    const mimeType = String(parsed?.mimeType || '').toLowerCase();
+    if (!parsed || !PDF_OCR_IMAGE_MIME_TYPES.has(mimeType)) {
+      continue;
+    }
+    const binary = safeBase64ToBuffer(parsed.data);
+    if (!binary || binary.length === 0 || binary.length > PDF_OCR_PAGE_MAX_BYTES) {
+      continue;
+    }
+    if (totalBytes + binary.length > PDF_OCR_TOTAL_MAX_BYTES) {
+      break;
+    }
+    const sniffed = detectMimeFromBuffer(binary);
+    if (sniffed && !PDF_OCR_IMAGE_MIME_TYPES.has(sniffed)) {
+      continue;
+    }
+    const malware = scanBufferForMalwareHeuristics(binary);
+    if (malware.suspicious) {
+      continue;
+    }
+    const pageNumber = Number(page?.pageNumber);
+    const width = Number(page?.width);
+    const height = Number(page?.height);
+    accepted.push({
+      pageNumber: Number.isFinite(pageNumber) && pageNumber > 0 ? Math.floor(pageNumber) : index + 1,
+      dataUrl: page.dataUrl,
+      width: Number.isFinite(width) && width > 0 ? Math.floor(width) : null,
+      height: Number.isFinite(height) && height > 0 ? Math.floor(height) : null,
+      size: binary.length,
+      type: mimeType,
+    });
+    totalBytes += binary.length;
+  }
+
+  return accepted;
+}
+
 function validateIncomingAttachments(rawAttachments = []) {
   const attachments = Array.isArray(rawAttachments) ? rawAttachments.slice(0, MULTIMODAL_MAX_ATTACHMENTS) : [];
   const accepted = [];
@@ -2302,6 +2375,16 @@ function validateIncomingAttachments(rawAttachments = []) {
     const declaredSize = Number(attachment?.size || 0);
     const parsed = parseDataUrl(attachment?.dataUrl || '');
     const contentPreview = truncateText(attachment?.content || '', 2500);
+    const pdfOcrPages = category === 'pdf' ? sanitizePdfOcrPages(attachment?.pdfOcrPages) : [];
+    const pdfRequiresOcr = Boolean(attachment?.pdfRequiresOcr || attachment?.previewMeta?.needsOcr || attachment?.pdfOcrStatus === 'pending');
+    const previewMeta = attachment?.previewMeta && typeof attachment.previewMeta === 'object'
+      ? {
+        pageCount: Number.isFinite(Number(attachment.previewMeta.pageCount))
+          ? Math.max(0, Math.floor(Number(attachment.previewMeta.pageCount)))
+          : 0,
+        ocrCandidatePagesTruncated: Boolean(attachment.previewMeta.ocrCandidatePagesTruncated),
+      }
+      : null;
     if (!name) {
       rejected.push({ index, name: '(unnamed)', reason: 'Missing attachment name.' });
       continue;
@@ -2317,6 +2400,12 @@ function validateIncomingAttachments(rawAttachments = []) {
         size: declaredSize,
         dataUrl: null,
         content: contentPreview,
+        pdfRequiresOcr,
+        pdfOcrStatus: pdfRequiresOcr
+          ? (pdfOcrPages.length > 0 ? 'pending' : 'unavailable')
+          : undefined,
+        pdfOcrPages,
+        previewMeta,
       });
       continue;
     }
@@ -2327,6 +2416,22 @@ function validateIncomingAttachments(rawAttachments = []) {
       continue;
     }
     if (binary.length > DOC_GENERATION_MAX_BYTES) {
+      if (category === 'pdf' && pdfOcrPages.length > 0) {
+        accepted.push({
+          index,
+          name,
+          category,
+          type: declaredType || parsed.mimeType || 'application/pdf',
+          size: declaredSize,
+          dataUrl: null,
+          content: contentPreview,
+          pdfRequiresOcr: true,
+          pdfOcrStatus: 'pending',
+          pdfOcrPages,
+          previewMeta,
+        });
+        continue;
+      }
       rejected.push({ index, name, reason: `Attachment exceeds ${DOC_GENERATION_MAX_BYTES} byte limit.` });
       continue;
     }
@@ -2372,10 +2477,73 @@ function validateIncomingAttachments(rawAttachments = []) {
       size: binary.length,
       dataUrl: attachment.dataUrl,
       content: contentPreview,
+      pdfRequiresOcr,
+      pdfOcrStatus: pdfRequiresOcr
+        ? (pdfOcrPages.length > 0 ? 'pending' : 'unavailable')
+        : undefined,
+      pdfOcrPages,
+      previewMeta,
     });
   }
 
   return { accepted, rejected };
+}
+
+function buildAttachmentOcrSources(attachments = []) {
+  const sources = [];
+  for (const attachment of attachments) {
+    if (attachment?.category === 'image' && attachment?.dataUrl) {
+      sources.push({
+        kind: 'image',
+        index: attachment.index,
+        name: attachment.name,
+        content: [
+          { type: 'text', text: `Extract any text from this image attachment named "${attachment.name}". Return concise plaintext.` },
+          { type: 'image_url', image_url: { url: attachment.dataUrl } },
+        ],
+        maxChars: 2800,
+      });
+      continue;
+    }
+
+    const pdfPages = Array.isArray(attachment?.pdfOcrPages) ? attachment.pdfOcrPages : [];
+    if (
+      attachment?.category === 'pdf'
+      && attachment?.pdfRequiresOcr
+      && !String(attachment?.content || '').trim()
+      && pdfPages.length > 0
+    ) {
+      const pageParts = [];
+      for (const [pageIndex, page] of pdfPages.entries()) {
+        pageParts.push({ type: 'text', text: `PDF page ${page.pageNumber || pageIndex + 1}` });
+        pageParts.push({ type: 'image_url', image_url: { url: page.dataUrl } });
+      }
+      const pageCount = Number(attachment?.previewMeta?.pageCount || 0);
+      const capped = Boolean(attachment?.previewMeta?.ocrCandidatePagesTruncated || (pageCount > 0 && pageCount > pdfPages.length));
+      sources.push({
+        kind: 'pdf',
+        index: attachment.index,
+        name: attachment.name,
+        pageCount,
+        pageImageCount: pdfPages.length,
+        capped,
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Extract all readable text from this scanned/image-only PDF named "${attachment.name}".`,
+              'The PDF pages are provided as images. Preserve page numbers and reading order.',
+              capped ? `Only the first ${pdfPages.length} page images are available; say when text may continue on omitted pages.` : '',
+              'Return plaintext only.',
+            ].filter(Boolean).join(' '),
+          },
+          ...pageParts,
+        ],
+        maxChars: 9000,
+      });
+    }
+  }
+  return sources.slice(0, 8);
 }
 
 async function extractFallbackInsights({
@@ -2392,10 +2560,8 @@ async function extractFallbackInsights({
   const routing = [];
   const attachmentAugmentations = [];
 
-  const imagesForOcr = attachments
-    .filter((attachment) => attachment?.category === 'image' && attachment?.dataUrl)
-    .slice(0, 4);
-  if (imagesForOcr.length > 0) {
+  const ocrSources = buildAttachmentOcrSources(attachments);
+  if (ocrSources.length > 0) {
     const ocrRoute = chooseBestToolRoute({
       taskType: 'ocr',
       providerStatus,
@@ -2410,17 +2576,15 @@ async function extractFallbackInsights({
         model: ocrRoute.model,
         score: ocrRoute.score,
         reason: ocrRoute.reason,
+        sourceCount: ocrSources.length,
       });
-      for (const image of imagesForOcr) {
+      for (const source of ocrSources) {
         try {
           const ocrMessages = [
-            { role: 'system', content: 'Extract text from the image exactly as seen. Return concise plaintext.' },
+            { role: 'system', content: 'Extract text exactly as seen. Return concise plaintext without commentary.' },
             {
               role: 'user',
-              content: [
-                { type: 'text', text: `Extract any text from this image attachment named "${image.name}".` },
-                { type: 'image_url', image_url: { url: image.dataUrl } },
-              ],
+              content: source.content,
             },
           ];
           const ocrResult = await runProviderCompletion({
@@ -2430,12 +2594,26 @@ async function extractFallbackInsights({
             signal,
             clientApiKey,
           });
-          const extracted = truncateText(ocrResult?.content || '', 2800);
+          const extracted = truncateText(ocrResult?.content || '', source.maxChars);
           if (extracted) {
-            attachmentAugmentations.push({
-              index: image.index,
+            const augmentation = {
+              index: source.index,
               content: extracted,
-            });
+            };
+            if (source.kind === 'pdf') {
+              augmentation.pdfOcrStatus = 'completed';
+              augmentation.inlineWarning = source.capped
+                ? `OCR text was extracted from the first ${source.pageImageCount} page image${source.pageImageCount === 1 ? '' : 's'} of this scanned PDF. Reattach page images for any omitted pages if needed.`
+                : 'OCR text was extracted from this scanned/image-only PDF.';
+              augmentation.previewMeta = {
+                hasTextLayer: false,
+                needsOcr: false,
+                ocrCompleted: true,
+                ocrPageCount: source.pageImageCount,
+              };
+              augmentation.dropPdfOcrPages = true;
+            }
+            attachmentAugmentations.push(augmentation);
           }
         } catch {
           // non-blocking fallback path
@@ -2815,6 +2993,9 @@ app.get('/api/capabilities', (req, res) => {
       artifactTtlMs: ARTIFACT_TTL_MS,
       jobTtlMs: JOB_TTL_MS,
       maxJobPollMs: MAX_JOB_POLL_MS,
+      pdfOcrMaxPages: PDF_OCR_MAX_PAGES,
+      pdfOcrPageMaxBytes: PDF_OCR_PAGE_MAX_BYTES,
+      pdfOcrTotalMaxBytes: PDF_OCR_TOTAL_MAX_BYTES,
     },
   });
 });
@@ -2963,12 +3144,19 @@ app.post('/api/chat', async (req, res) => {
       message: err?.message || String(err),
     });
     if (stream) {
-      sendSse(res, { type: 'error', message: err.message || 'Request failed' });
+      sendSse(res, {
+        type: 'error',
+        message: err.message || 'Request failed',
+        status: Number.isFinite(Number(err?.status)) ? Number(err.status) : 500,
+        code: err?.code || null,
+      });
       res.end();
       return;
     }
-    res.status(500).json({
+    const status = Number.isFinite(Number(err?.status)) ? Number(err.status) : 500;
+    res.status(Math.max(400, Math.min(599, status))).json({
       error: err.message || 'Request failed',
+      code: err?.code || null,
       provider,
       model: providerModel,
     });

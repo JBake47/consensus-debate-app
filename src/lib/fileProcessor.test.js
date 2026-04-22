@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { processFile } from './fileProcessor.js';
+import { hasUsefulPdfText, processFile } from './fileProcessor.js';
 
 function test(name, fn) {
   return Promise.resolve()
@@ -31,4 +31,9 @@ await test('safe PDF fallback avoids text extraction on the main thread', async 
   assert.equal(typeof attachment.dataUrl, 'string');
   assert.equal(attachment.dataUrl.startsWith('data:application/pdf;base64,'), true);
   assert.equal(attachment.inlineWarning.includes('skipped'), true);
+});
+
+await test('hasUsefulPdfText ignores page headers and whitespace', async () => {
+  assert.equal(hasUsefulPdfText('--- Page 1 ---\n\n   '), false);
+  assert.equal(hasUsefulPdfText('--- Page 1 ---\nReadable text'), true);
 });

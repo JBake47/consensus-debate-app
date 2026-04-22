@@ -44,6 +44,7 @@ import {
   DEFAULT_RETRY_POLICY,
   normalizeRetryPolicy,
   isTransientRetryableError,
+  shouldAffectCircuitBreaker,
   getRetryDelayMs,
 } from '../lib/retryPolicy';
 import { buildResetSynthesisState } from '../lib/synthesisState';
@@ -3053,11 +3054,14 @@ export function DebateProvider({ children }) {
     }
   };
 
-  const markProviderFailure = (providerId, err) => {
+  const markProviderFailure = (providerId, err, options = {}) => {
     const provider = providerId || 'unknown';
     const state = getCircuitState(provider);
-    state.failures += 1;
     state.lastError = String(err?.message || err || 'Unknown error');
+    if (options.affectsCircuit === false) {
+      return;
+    }
+    state.failures += 1;
     if (state.failures >= retryPolicy.circuitFailureThreshold) {
       state.openedAt = Date.now();
       state.openedUntil = Date.now() + retryPolicy.circuitCooldownMs;
@@ -3798,8 +3802,9 @@ export function DebateProvider({ children }) {
       }
 
       const err = lastError || new Error('Request failed');
-      markProviderFailure(providerId, err);
-      const shouldRetry = attempt < retryPolicy.maxAttempts && isTransientRetryableError(err, isAbortLikeError);
+      const affectsCircuit = shouldAffectCircuitBreaker(err, isAbortLikeError);
+      markProviderFailure(providerId, err, { affectsCircuit });
+      const shouldRetry = attempt < retryPolicy.maxAttempts && affectsCircuit;
       if (!shouldRetry) {
         onRetryProgress?.(null);
         addFailureByProvider(providerId);
