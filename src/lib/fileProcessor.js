@@ -5,6 +5,8 @@ export const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 export const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
 export const DEFAULT_MAX_ATTACHMENTS = 16;
 export const PDF_OCR_MAX_PAGES = 8;
+export const PDF_TEXT_MAX_PAGES = 200;
+export const PDF_TEXT_MAX_CHARS = 500_000;
 const PDF_OCR_MAX_DIMENSION = 1800;
 const PDF_OCR_MAX_PIXELS = 2_600_000;
 const PDF_OCR_RENDER_SCALE = 2;
@@ -17,6 +19,18 @@ export function hasUsefulPdfText(content) {
     .replace(/\s+/g, ' ')
     .trim();
   return text.length > 0;
+}
+
+export function getPdfTextExtractionBudget(pageCount) {
+  const normalizedPageCount = Number.isFinite(Number(pageCount))
+    ? Math.max(0, Math.floor(Number(pageCount)))
+    : 0;
+  return {
+    pageCount: normalizedPageCount,
+    pageLimit: Math.min(PDF_TEXT_MAX_PAGES, normalizedPageCount),
+    charLimit: PDF_TEXT_MAX_CHARS,
+    pagesTruncated: normalizedPageCount > PDF_TEXT_MAX_PAGES,
+  };
 }
 
 /**
@@ -81,13 +95,16 @@ export async function processFile(file, options = {}) {
       const hasText = hasUsefulPdfText(pdf.content);
       const needsOcr = !pdf.parseFailed && !hasText && pdf.pageCount > 0;
       const ocrPages = Array.isArray(pdf.ocrCandidatePages) ? pdf.ocrCandidatePages : [];
+      const textLimitWarning = pdf.textPagesTruncated
+        ? `PDF text preview was limited to ${pdf.textPageLimit} page${pdf.textPageLimit === 1 ? '' : 's'} or ${pdf.textCharLimit.toLocaleString()} characters.`
+        : null;
       const inlineWarning = needsOcr
         ? (
           ocrPages.length > 0
             ? `This PDF appears to be scanned or image-only. Prepared ${ocrPages.length} page image${ocrPages.length === 1 ? '' : 's'} for OCR before sending.`
             : 'This PDF appears to be scanned or image-only, but page images could not be prepared for OCR.'
         )
-        : (pdf.parseFailed ? 'PDF text extraction failed; the file may be encrypted or malformed.' : base.inlineWarning);
+        : (pdf.parseFailed ? 'PDF text extraction failed; the file may be encrypted or malformed.' : (textLimitWarning || base.inlineWarning));
       return {
         ...base,
         content: pdf.content,
@@ -107,6 +124,9 @@ export async function processFile(file, options = {}) {
           ocrCandidatePageLimit: PDF_OCR_MAX_PAGES,
           ocrCandidatePagesTruncated: Boolean(pdf.ocrCandidatePagesTruncated),
           ocrPageRenderFailed: Boolean(pdf.ocrPageRenderFailed),
+          textPageLimit: pdf.textPageLimit,
+          textCharLimit: pdf.textCharLimit,
+          textPagesTruncated: Boolean(pdf.textPagesTruncated),
         },
       };
     }
@@ -267,13 +287,33 @@ async function readPdf(file) {
     const buffer = await readAsArrayBuffer(file);
     const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
     const pages = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
+    const budget = getPdfTextExtractionBudget(pdf.numPages);
+    let extractedChars = 0;
+    let textPagesTruncated = budget.pagesTruncated;
+    for (let i = 1; i <= budget.pageLimit; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const text = textContent.items.map(item => item.str).join(' ');
       if (text.trim()) {
-        pages.push(`--- Page ${i} ---\n${text}`);
+        const pageText = `--- Page ${i} ---\n${text}`;
+        const remainingChars = budget.charLimit - extractedChars;
+        if (remainingChars <= 0) {
+          textPagesTruncated = true;
+          page.cleanup?.();
+          break;
+        }
+        const storedPageText = pageText.length > remainingChars
+          ? pageText.slice(0, remainingChars)
+          : pageText;
+        pages.push(storedPageText);
+        extractedChars += storedPageText.length;
+        if (storedPageText.length < pageText.length || extractedChars >= budget.charLimit) {
+          textPagesTruncated = true;
+          page.cleanup?.();
+          break;
+        }
       }
+      page.cleanup?.();
     }
     const hasText = pages.length > 0;
     const ocrResult = hasText
@@ -283,6 +323,9 @@ async function readPdf(file) {
       content: pages.join('\n\n'),
       pageCount: pdf.numPages || 0,
       hasTextLayer: hasText,
+      textPageLimit: budget.pageLimit,
+      textCharLimit: budget.charLimit,
+      textPagesTruncated,
       ocrCandidatePages: ocrResult.pages,
       ocrCandidatePagesTruncated: ocrResult.truncated,
       ocrPageRenderFailed: ocrResult.failed,
@@ -293,6 +336,9 @@ async function readPdf(file) {
       content: '',
       pageCount: 0,
       hasTextLayer: false,
+      textPageLimit: 0,
+      textCharLimit: PDF_TEXT_MAX_CHARS,
+      textPagesTruncated: false,
       ocrCandidatePages: [],
       ocrCandidatePagesTruncated: false,
       ocrPageRenderFailed: false,

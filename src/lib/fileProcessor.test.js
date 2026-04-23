@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { hasUsefulPdfText, processFile } from './fileProcessor.js';
+import {
+  getPdfTextExtractionBudget,
+  hasUsefulPdfText,
+  PDF_TEXT_MAX_CHARS,
+  PDF_TEXT_MAX_PAGES,
+  processFile,
+} from './fileProcessor.js';
 
 function test(name, fn) {
   return Promise.resolve()
@@ -41,4 +47,15 @@ await test('safe PDF fallback marks PDFs unsafe for native parser replay', async
 await test('hasUsefulPdfText ignores page headers and whitespace', async () => {
   assert.equal(hasUsefulPdfText('--- Page 1 ---\n\n   '), false);
   assert.equal(hasUsefulPdfText('--- Page 1 ---\nReadable text'), true);
+});
+
+await test('PDF text extraction budget caps page and character work', async () => {
+  const smallBudget = getPdfTextExtractionBudget(5);
+  assert.equal(smallBudget.pageLimit, 5);
+  assert.equal(smallBudget.pagesTruncated, false);
+  assert.equal(smallBudget.charLimit, PDF_TEXT_MAX_CHARS);
+
+  const largeBudget = getPdfTextExtractionBudget(PDF_TEXT_MAX_PAGES + 50);
+  assert.equal(largeBudget.pageLimit, PDF_TEXT_MAX_PAGES);
+  assert.equal(largeBudget.pagesTruncated, true);
 });

@@ -222,6 +222,10 @@ function createConversationId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function createTurnId() {
+  return `turn-${createConversationId()}`;
+}
+
 function buildConversationWithoutLastTurn(conversation) {
   return buildConversationSnapshotWithoutLastTurn(conversation);
 }
@@ -782,7 +786,6 @@ const initialState = {
   conversations: [],
   activeConversationId: storedActiveConversationId ?? null,
   deletedConversationTombstones: {},
-  debateInProgress: false,
   showSettings: false,
   editingTurn: null,
   pendingSettingsFocus: null,
@@ -2010,7 +2013,7 @@ function reducer(state, action) {
       return { ...state, conversations, activeConversationId: branchConversationId };
     }
     case 'SET_DEBATE_IN_PROGRESS': {
-      return { ...state, debateInProgress: action.payload };
+      return state;
     }
     case 'TOGGLE_SETTINGS': {
       const nextShowSettings = !state.showSettings;
@@ -4071,7 +4074,7 @@ export function DebateProvider({ children }) {
     // Create new conversation if none active
     let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
-      convId = Date.now().toString();
+      convId = createConversationId();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
@@ -4081,7 +4084,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
     // Build new turn with rounds structure
-    const turnId = Date.now().toString();
+    const turnId = createTurnId();
     const runId = createRunId();
     const turn = {
       id: turnId,
@@ -4819,7 +4822,7 @@ export function DebateProvider({ children }) {
     // Create new conversation if none active
     let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
-      convId = Date.now().toString();
+      convId = createConversationId();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
@@ -4828,7 +4831,7 @@ export function DebateProvider({ children }) {
 
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
-    const turnId = Date.now().toString();
+    const turnId = createTurnId();
     const runId = createRunId();
     const turn = {
       id: turnId,
@@ -5124,7 +5127,7 @@ export function DebateProvider({ children }) {
     // Create new conversation if none active
     let convId = requestedConversationId || state.activeConversationId;
     if (!convId) {
-      convId = Date.now().toString();
+      convId = createConversationId();
       const title = createSeedTitle(userPrompt);
       dispatch({ type: 'NEW_CONVERSATION', payload: { id: convId, title } });
     }
@@ -5134,7 +5137,7 @@ export function DebateProvider({ children }) {
     dispatch({ type: 'SET_DEBATE_IN_PROGRESS', payload: true });
 
     // Build ensemble vote turn
-    const turnId = Date.now().toString();
+    const turnId = createTurnId();
     const runId = createRunId();
     const turn = {
       id: turnId,

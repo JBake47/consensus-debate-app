@@ -36,7 +36,12 @@ import {
 } from './providerPayload.js';
 import { AppRestartError, scheduleSelfRestart } from './restartManager.js';
 import { AppUpdateError, applyAppUpdate, getAppUpdateStatus } from './updateManager.js';
-import { createModelCatalogCache, DEFAULT_MODEL_CATALOG_CACHE_TTL_MS, filterModelCatalog } from './modelCatalog.js';
+import {
+  createModelCatalogCache,
+  DEFAULT_MODEL_CATALOG_CACHE_MAX_ENTRIES,
+  DEFAULT_MODEL_CATALOG_CACHE_TTL_MS,
+  filterModelCatalog,
+} from './modelCatalog.js';
 
 dotenv.config();
 
@@ -94,12 +99,44 @@ const PDF_OCR_TOTAL_MAX_BYTES = normalizeIntegerSetting(process.env.PDF_OCR_TOTA
 const PDF_OCR_MAX_PAGES = normalizeIntegerSetting(process.env.PDF_OCR_MAX_PAGES, 8, 0, 16);
 const ARTIFACT_TTL_MS = Number(process.env.ARTIFACT_TTL_MS || 24 * 60 * 60 * 1000);
 const MODEL_CATALOG_CACHE_TTL_MS = Number(process.env.MODEL_CATALOG_CACHE_TTL_MS || DEFAULT_MODEL_CATALOG_CACHE_TTL_MS);
+const MODEL_CATALOG_CACHE_MAX_ENTRIES = normalizeIntegerSetting(
+  process.env.MODEL_CATALOG_CACHE_MAX_ENTRIES,
+  DEFAULT_MODEL_CATALOG_CACHE_MAX_ENTRIES,
+  1,
+  5000
+);
 const ARTIFACT_STORE_DIR = process.env.ARTIFACT_STORE_DIR
   ? path.resolve(process.env.ARTIFACT_STORE_DIR)
   : path.join(process.cwd(), 'server', '.artifacts');
+const ARTIFACT_METADATA_FILE = path.join(ARTIFACT_STORE_DIR, 'artifacts.json');
 const JOB_TTL_MS = Number(process.env.MULTIMODAL_JOB_TTL_MS || 60 * 60 * 1000);
 const MAX_JOB_POLL_MS = Number(process.env.MULTIMODAL_MAX_JOB_POLL_MS || 45 * 1000);
 const MULTIMODAL_MAX_ATTACHMENTS = Number(process.env.MULTIMODAL_MAX_ATTACHMENTS || 16);
+const MULTIMODAL_MAX_JOBS = normalizeIntegerSetting(process.env.MULTIMODAL_MAX_JOBS, 32, 1, 500);
+const MULTIMODAL_MAX_PAYLOAD_BYTES = normalizeIntegerSetting(
+  process.env.MULTIMODAL_MAX_PAYLOAD_BYTES,
+  56 * 1024 * 1024,
+  64 * 1024,
+  60 * 1024 * 1024
+);
+const API_RATE_LIMIT_WINDOW_MS = normalizeIntegerSetting(
+  process.env.API_RATE_LIMIT_WINDOW_MS,
+  60 * 1000,
+  1000,
+  60 * 60 * 1000
+);
+const API_RATE_LIMIT_MAX_REQUESTS = normalizeIntegerSetting(
+  process.env.API_RATE_LIMIT_MAX_REQUESTS,
+  120,
+  1,
+  10000
+);
+const API_RATE_LIMIT_MAX_CLIENTS = normalizeIntegerSetting(
+  process.env.API_RATE_LIMIT_MAX_CLIENTS,
+  1000,
+  10,
+  100000
+);
 
 if (TRUST_PROXY) {
   app.set('trust proxy', true);
@@ -110,9 +147,15 @@ app.use(express.json({ limit: '60mb' }));
 const artifactStore = new Map();
 const multimodalJobs = new Map();
 const multimodalJobFingerprints = new Map();
-const modelCatalogCache = createModelCatalogCache({ ttlMs: MODEL_CATALOG_CACHE_TTL_MS });
+const modelCatalogCache = createModelCatalogCache({
+  ttlMs: MODEL_CATALOG_CACHE_TTL_MS,
+  maxEntries: MODEL_CATALOG_CACHE_MAX_ENTRIES,
+});
 const multimodalQueue = [];
+const apiRateLimitStore = new Map();
 let multimodalWorkerRunning = false;
+let artifactStoreReadyPromise = null;
+let artifactMetadataWritePromise = Promise.resolve();
 const SERVER_STARTED_AT = new Date().toISOString();
 const APP_RESTART_EXIT_TIMEOUT_MS = 5000;
 let apiServer = null;
@@ -457,6 +500,14 @@ function hasValidServerToken(req) {
   return constantTimeEquals(token, SERVER_AUTH_TOKEN);
 }
 
+function createHttpError(message, statusCode = 500, code = '') {
+  const error = new Error(message);
+  error.status = Number.isFinite(Number(statusCode)) ? Number(statusCode) : 500;
+  error.statusCode = error.status;
+  if (code) error.code = code;
+  return error;
+}
+
 function getForwardedIpChain(req) {
   const forwarded = String(req.get('x-forwarded-for') || '');
   const forwardedIps = forwarded
@@ -484,6 +535,44 @@ function getTrustedClientIp(req) {
     }
   }
   return chain[0] || directIp;
+}
+
+function pruneRateLimitStore(now = nowMs()) {
+  for (const [key, entry] of apiRateLimitStore.entries()) {
+    if (!entry || entry.resetAt <= now) {
+      apiRateLimitStore.delete(key);
+    }
+  }
+  while (apiRateLimitStore.size > API_RATE_LIMIT_MAX_CLIENTS) {
+    const oldestKey = apiRateLimitStore.keys().next().value;
+    if (!oldestKey) break;
+    apiRateLimitStore.delete(oldestKey);
+  }
+}
+
+function rateLimitCostlyApiRoute(req, res, next) {
+  const now = nowMs();
+  pruneRateLimitStore(now);
+  const clientKey = getTrustedClientIp(req) || 'unknown';
+  const current = apiRateLimitStore.get(clientKey);
+  const entry = current && current.resetAt > now
+    ? current
+    : { count: 0, resetAt: now + API_RATE_LIMIT_WINDOW_MS };
+  entry.count += 1;
+  apiRateLimitStore.set(clientKey, entry);
+
+  if (entry.count > API_RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({
+      error: 'Too many API requests. Try again shortly.',
+      code: 'rate_limited',
+      retryAfterSeconds,
+    });
+    return;
+  }
+
+  next();
 }
 
 function isLoopbackHostname(hostname) {
@@ -667,11 +756,6 @@ async function extractWordTextFromBuffer(buffer) {
 }
 
 app.use('/api', (req, res, next) => {
-  if (ALLOW_REMOTE_API) {
-    next();
-    return;
-  }
-
   const clientIp = getTrustedClientIp(req);
   const localRequest = isLoopbackIp(clientIp);
 
@@ -680,10 +764,28 @@ app.use('/api', (req, res, next) => {
     return;
   }
 
+  if (ALLOW_REMOTE_API) {
+    res.status(401).json({
+      error: 'Remote API access requires SERVER_AUTH_TOKEN.',
+      code: 'remote_api_auth_required',
+    });
+    return;
+  }
+
   res.status(403).json({
-    error: 'Remote API access denied. Use localhost, set SERVER_AUTH_TOKEN, or set ALLOW_REMOTE_API=true.',
+    error: 'Remote API access denied. Use localhost or include SERVER_AUTH_TOKEN.',
+    code: 'remote_api_forbidden',
   });
 });
+
+app.use(
+  ['/api/chat', '/api/files/extract-text', '/api/models'],
+  rateLimitCostlyApiRoute
+);
+app.post(
+  ['/api/multimodal/orchestrate', '/api/multimodal/jobs'],
+  rateLimitCostlyApiRoute
+);
 
 function sendSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -719,6 +821,152 @@ app.post('/api/files/extract-text', express.raw({ type: 'application/octet-strea
 
 async function ensureArtifactStoreDir() {
   await fs.mkdir(ARTIFACT_STORE_DIR, { recursive: true });
+}
+
+function isPathInsideDirectory(filePath, directoryPath) {
+  const relative = path.relative(path.resolve(directoryPath), path.resolve(filePath));
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function getArtifactStoragePath(storageName) {
+  const safeName = path.basename(String(storageName || '').trim());
+  if (!safeName) return null;
+  const storagePath = path.join(ARTIFACT_STORE_DIR, safeName);
+  return isPathInsideDirectory(storagePath, ARTIFACT_STORE_DIR) ? storagePath : null;
+}
+
+function serializeArtifactMetadataRecord(artifact) {
+  if (!artifact || !artifact.id || !artifact.path || !artifact.tokenHash) return null;
+  return {
+    id: artifact.id,
+    fileName: artifact.fileName,
+    mimeType: artifact.mimeType,
+    storageName: path.basename(artifact.path),
+    tokenHash: artifact.tokenHash,
+    size: artifact.size,
+    provenance: artifact.provenance || null,
+    createdAt: artifact.createdAt,
+    expiresAt: artifact.expiresAt,
+  };
+}
+
+function normalizeArtifactMetadataRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const id = String(record.id || '').trim();
+  const storageName = path.basename(String(record.storageName || record.path || '').trim());
+  const storagePath = getArtifactStoragePath(storageName);
+  const tokenHash = String(record.tokenHash || '').trim();
+  if (!id || !storagePath || !tokenHash) return null;
+  const createdAt = Number.isFinite(Number(record.createdAt)) ? Number(record.createdAt) : nowMs();
+  const expiresAt = Number.isFinite(Number(record.expiresAt))
+    ? Number(record.expiresAt)
+    : createdAt + ARTIFACT_TTL_MS;
+  return {
+    id,
+    fileName: path.basename(String(record.fileName || storageName || id)),
+    mimeType: String(record.mimeType || 'application/octet-stream'),
+    path: storagePath,
+    tokenHash,
+    size: Number.isFinite(Number(record.size)) ? Math.max(0, Number(record.size)) : 0,
+    provenance: record.provenance && typeof record.provenance === 'object' ? record.provenance : null,
+    createdAt,
+    expiresAt,
+  };
+}
+
+async function writeArtifactMetadataNow() {
+  await ensureArtifactStoreDir();
+  const records = Array.from(artifactStore.values())
+    .map(serializeArtifactMetadataRecord)
+    .filter(Boolean)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const payload = JSON.stringify({ version: 1, artifacts: records }, null, 2);
+  const tmpPath = `${ARTIFACT_METADATA_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tmpPath, payload);
+  await fs.rename(tmpPath, ARTIFACT_METADATA_FILE);
+}
+
+function queueArtifactMetadataWrite() {
+  artifactMetadataWritePromise = artifactMetadataWritePromise
+    .catch(() => undefined)
+    .then(() => writeArtifactMetadataNow());
+  return artifactMetadataWritePromise;
+}
+
+async function removeArtifactFile(filePath) {
+  if (!filePath || !isPathInsideDirectory(filePath, ARTIFACT_STORE_DIR)) return;
+  await fs.unlink(filePath).catch(() => {});
+}
+
+async function cleanupUntrackedArtifactFiles(trackedStorageNames) {
+  await ensureArtifactStoreDir();
+  const now = nowMs();
+  let changed = false;
+  const entries = await fs.readdir(ARTIFACT_STORE_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (entry.name === path.basename(ARTIFACT_METADATA_FILE) || entry.name.endsWith('.tmp')) continue;
+    if (trackedStorageNames.has(entry.name)) continue;
+    const filePath = path.join(ARTIFACT_STORE_DIR, entry.name);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat) continue;
+    if (stat.mtimeMs + ARTIFACT_TTL_MS <= now) {
+      await removeArtifactFile(filePath);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+async function initializeArtifactStore() {
+  await ensureArtifactStoreDir();
+  const trackedStorageNames = new Set();
+  let changed = false;
+
+  try {
+    const raw = await fs.readFile(ARTIFACT_METADATA_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const records = Array.isArray(parsed?.artifacts) ? parsed.artifacts : [];
+    for (const record of records) {
+      const artifact = normalizeArtifactMetadataRecord(record);
+      if (!artifact) {
+        changed = true;
+        continue;
+      }
+      if (artifact.expiresAt <= nowMs()) {
+        await removeArtifactFile(artifact.path);
+        changed = true;
+        continue;
+      }
+      const stat = await fs.stat(artifact.path).catch(() => null);
+      if (!stat || !stat.isFile()) {
+        changed = true;
+        continue;
+      }
+      artifact.size = stat.size;
+      artifactStore.set(artifact.id, artifact);
+      trackedStorageNames.add(path.basename(artifact.path));
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      changed = true;
+      // eslint-disable-next-line no-console
+      console.warn('Artifact metadata could not be loaded; stale artifacts will be cleaned by file age.', {
+        message: error?.message || String(error),
+      });
+    }
+  }
+
+  const removedOrphans = await cleanupUntrackedArtifactFiles(trackedStorageNames);
+  if (changed || removedOrphans) {
+    await queueArtifactMetadataWrite();
+  }
+}
+
+async function waitForArtifactStoreReady() {
+  if (artifactStoreReadyPromise) {
+    await artifactStoreReadyPromise;
+  }
 }
 
 function nowMs() {
@@ -780,12 +1028,17 @@ function recordProviderHealth(providerId, { success, durationMs, errorMessage = 
   }
 }
 
-function cleanupExpiredArtifacts() {
+async function cleanupExpiredArtifacts() {
   const now = nowMs();
+  let changed = false;
   for (const [artifactId, artifact] of artifactStore.entries()) {
     if (!artifact || artifact.expiresAt > now) continue;
     artifactStore.delete(artifactId);
-    fs.unlink(artifact.path).catch(() => {});
+    await removeArtifactFile(artifact.path);
+    changed = true;
+  }
+  if (changed) {
+    await queueArtifactMetadataWrite();
   }
 }
 
@@ -801,9 +1054,17 @@ function cleanupExpiredJobs() {
 }
 
 setInterval(() => {
-  cleanupExpiredArtifacts();
+  cleanupExpiredArtifacts().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.warn('Artifact cleanup failed', { message: error?.message || String(error) });
+  });
   cleanupExpiredJobs();
 }, 60 * 1000).unref?.();
+
+artifactStoreReadyPromise = initializeArtifactStore().catch((error) => {
+  // eslint-disable-next-line no-console
+  console.warn('Artifact store initialization failed', { message: error?.message || String(error) });
+});
 
 function parseModelTarget(modelId) {
   if (!modelId || typeof modelId !== 'string') {
@@ -1098,7 +1359,7 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
 
   if (!response.ok) {
     const bodyText = await response.text();
-    throw new Error(bodyText || `Anthropic error: ${response.status}`);
+    throw createProviderHttpError(bodyText, response.status, `Anthropic error: ${response.status}`);
   }
 
   if (!stream) {
@@ -1205,7 +1466,7 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
 
   if (!response.ok) {
     const bodyText = await response.text();
-    throw new Error(bodyText || `OpenAI error: ${response.status}`);
+    throw createProviderHttpError(bodyText, response.status, `OpenAI error: ${response.status}`);
   }
 
   if (!stream) {
@@ -1299,7 +1560,7 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
 
   if (!response.ok) {
     const bodyText = await response.text();
-    throw new Error(bodyText || `Gemini error: ${response.status}`);
+    throw createProviderHttpError(bodyText, response.status, `Gemini error: ${response.status}`);
   }
 
   if (!stream) {
@@ -2124,6 +2385,7 @@ function attachmentCategoryFromFormat(format) {
 }
 
 async function persistArtifact({ fileName, mimeType, buffer, provenance }) {
+  await waitForArtifactStoreReady();
   await ensureArtifactStoreDir();
   const artifactId = createId('artifact');
   const downloadToken = randomBytes(24).toString('hex');
@@ -2144,6 +2406,7 @@ async function persistArtifact({ fileName, mimeType, buffer, provenance }) {
     createdAt: nowMs(),
     expiresAt,
   });
+  await queueArtifactMetadataWrite();
   return {
     artifactId,
     downloadUrl: `/api/artifacts/${artifactId}?token=${downloadToken}`,
@@ -2202,12 +2465,15 @@ function buildFallbackSvg(prompt) {
 </svg>`;
 }
 
-async function generateImageAttachment({ prompt }) {
+async function generateImageAttachment({ prompt, signal }) {
   const titleBase = sanitizeFileBasename(prompt, 'generated-image');
   const sourceUrls = extractYouTubeUrls(prompt);
 
   if (process.env.OPENAI_API_KEY) {
     try {
+      if (signal?.aborted) {
+        throw createHttpError('Image generation aborted.', 499, 'request_aborted');
+      }
       const response = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
         headers: {
@@ -2219,6 +2485,7 @@ async function generateImageAttachment({ prompt }) {
           prompt,
           size: '1024x1024',
         }),
+        signal,
       });
       if (response.ok) {
         const data = await response.json();
@@ -2244,11 +2511,17 @@ async function generateImageAttachment({ prompt }) {
           };
         }
       }
-    } catch {
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') {
+        throw error;
+      }
       // fall through to SVG fallback
     }
   }
 
+  if (signal?.aborted) {
+    throw createHttpError('Image generation aborted.', 499, 'request_aborted');
+  }
   const svg = buildFallbackSvg(prompt);
   const svgBuffer = Buffer.from(svg, 'utf8');
   return {
@@ -2681,6 +2954,7 @@ async function executeMultimodalOrchestration({
   providerStatusInput = null,
   clientApiKey,
   attachments = [],
+  rejectedAttachments = [],
   routingPreferences = {},
   signal,
 }) {
@@ -2694,6 +2968,10 @@ async function executeMultimodalOrchestration({
   const youtubeUrls = extractYouTubeUrls(userPrompt);
   const attachmentValidation = validateIncomingAttachments(attachments);
   const safeAttachments = attachmentValidation.accepted;
+  const blockedAttachments = [
+    ...(Array.isArray(rejectedAttachments) ? rejectedAttachments : []),
+    ...attachmentValidation.rejected,
+  ];
 
   const generatedAttachments = [];
   const routingDecisions = [];
@@ -2809,7 +3087,7 @@ async function executeMultimodalOrchestration({
   }
 
   if (requestedFormats.includes('image')) {
-    const imageResult = await generateImageAttachment({ prompt: userPrompt });
+    const imageResult = await generateImageAttachment({ prompt: userPrompt, signal });
     generatedAttachments.push(imageResult.attachment);
     routingDecisions.push({
       type: 'image',
@@ -2836,9 +3114,9 @@ async function executeMultimodalOrchestration({
       `Generated artifacts attached (${generatedAttachments.length}): ${generatedAttachments.map((item) => item.name).join(', ')}`
     );
   }
-  if (attachmentValidation.rejected.length > 0) {
+  if (blockedAttachments.length > 0) {
     promptAugmentationParts.push(
-      `Blocked attachments for security:\n${attachmentValidation.rejected.map((item) => `- ${item.name}: ${item.reason}`).join('\n')}`
+      `Blocked attachments for security:\n${blockedAttachments.map((item) => `- ${item.name}: ${item.reason}`).join('\n')}`
     );
   }
 
@@ -2853,7 +3131,7 @@ async function executeMultimodalOrchestration({
     promptAugmentation: promptAugmentationParts.join('\n\n'),
     routingDecisions,
     attachmentAugmentations: extractionFallback.attachmentAugmentations,
-    rejectedAttachments: attachmentValidation.rejected,
+    rejectedAttachments: blockedAttachments,
     capabilityRegistry,
   };
 }
@@ -2866,7 +3144,39 @@ function buildMultimodalRequestPayload(body = {}) {
     providerStatusInput: body?.providerStatus || null,
     clientApiKey: body?.clientApiKey,
     attachments: body?.attachments || [],
+    rejectedAttachments: body?.rejectedAttachments || [],
     routingPreferences: body?.routingPreferences || {},
+  };
+}
+
+function estimateJsonByteSize(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) || '', 'utf8');
+  } catch {
+    return Infinity;
+  }
+}
+
+function prepareMultimodalRequestPayload(body = {}) {
+  const payload = buildMultimodalRequestPayload(body);
+  const payloadBytes = estimateJsonByteSize(payload);
+  if (payloadBytes > MULTIMODAL_MAX_PAYLOAD_BYTES) {
+    throw createHttpError(
+      `Multimodal payload exceeds ${MULTIMODAL_MAX_PAYLOAD_BYTES} byte limit.`,
+      413,
+      'multimodal_payload_too_large'
+    );
+  }
+
+  const attachmentValidation = validateIncomingAttachments(payload.attachments);
+
+  return {
+    ...payload,
+    attachments: attachmentValidation.accepted,
+    rejectedAttachments: [
+      ...(Array.isArray(payload.rejectedAttachments) ? payload.rejectedAttachments : []),
+      ...attachmentValidation.rejected,
+    ],
   };
 }
 
@@ -2887,9 +3197,17 @@ function getReusableMultimodalJob(payload) {
 }
 
 function enqueueMultimodalJob(payload) {
+  cleanupExpiredJobs();
   const { fingerprint, job: existingJob } = getReusableMultimodalJob(payload);
   if (existingJob) {
     return existingJob;
+  }
+  if (multimodalJobs.size >= MULTIMODAL_MAX_JOBS) {
+    throw createHttpError(
+      `Multimodal job queue is full (${MULTIMODAL_MAX_JOBS} retained jobs). Wait for existing jobs to expire or restart the local server.`,
+      429,
+      'multimodal_queue_full'
+    );
   }
 
   const jobId = createId('mmjob');
@@ -2937,6 +3255,9 @@ function scheduleMultimodalWorker() {
         }
       } finally {
         clearTimeout(timeoutId);
+        if (job.status === 'completed' || job.status === 'failed') {
+          job.payload = null;
+        }
         job.updatedAt = nowMs();
       }
     }
@@ -2945,9 +3266,9 @@ function scheduleMultimodalWorker() {
 }
 
 app.post('/api/multimodal/orchestrate', async (req, res) => {
-  const payload = buildMultimodalRequestPayload(req.body);
   const { signal } = createRequestAbortContext(req, res);
   try {
+    const payload = prepareMultimodalRequestPayload(req.body);
     const { job } = getReusableMultimodalJob(payload);
     if (job?.status === 'completed') {
       res.json(job.result);
@@ -2976,7 +3297,13 @@ app.post('/api/multimodal/orchestrate', async (req, res) => {
     if (signal.aborted || req.aborted || res.writableEnded) {
       return;
     }
-    res.status(500).json({ error: error?.message || 'Multimodal orchestration failed.' });
+    const status = Number.isFinite(Number(error?.status || error?.statusCode))
+      ? Number(error.status || error.statusCode)
+      : 500;
+    res.status(Math.max(400, Math.min(599, status))).json({
+      error: error?.message || 'Multimodal orchestration failed.',
+      code: error?.code || null,
+    });
   }
 });
 
@@ -2993,21 +3320,35 @@ app.get('/api/capabilities', (req, res) => {
       artifactTtlMs: ARTIFACT_TTL_MS,
       jobTtlMs: JOB_TTL_MS,
       maxJobPollMs: MAX_JOB_POLL_MS,
+      maxJobs: MULTIMODAL_MAX_JOBS,
+      maxMultimodalPayloadBytes: MULTIMODAL_MAX_PAYLOAD_BYTES,
       pdfOcrMaxPages: PDF_OCR_MAX_PAGES,
       pdfOcrPageMaxBytes: PDF_OCR_PAGE_MAX_BYTES,
       pdfOcrTotalMaxBytes: PDF_OCR_TOTAL_MAX_BYTES,
+      apiRateLimitWindowMs: API_RATE_LIMIT_WINDOW_MS,
+      apiRateLimitMaxRequests: API_RATE_LIMIT_MAX_REQUESTS,
     },
   });
 });
 
 app.post('/api/multimodal/jobs', async (req, res) => {
-  const job = enqueueMultimodalJob(buildMultimodalRequestPayload(req.body));
-  res.status(202).json({
-    jobId: job.id,
-    status: job.status,
-    createdAt: job.createdAt,
-    expiresAt: job.expiresAt,
-  });
+  try {
+    const job = enqueueMultimodalJob(prepareMultimodalRequestPayload(req.body));
+    res.status(202).json({
+      jobId: job.id,
+      status: job.status,
+      createdAt: job.createdAt,
+      expiresAt: job.expiresAt,
+    });
+  } catch (error) {
+    const status = Number.isFinite(Number(error?.status || error?.statusCode))
+      ? Number(error.status || error.statusCode)
+      : 500;
+    res.status(Math.max(400, Math.min(599, status))).json({
+      error: error?.message || 'Failed to enqueue multimodal orchestration job.',
+      code: error?.code || null,
+    });
+  }
 });
 
 app.get('/api/multimodal/jobs/:jobId', (req, res) => {
@@ -3033,6 +3374,7 @@ app.get('/api/multimodal/jobs/:jobId', (req, res) => {
 });
 
 app.get('/api/artifacts/:artifactId', async (req, res) => {
+  await waitForArtifactStoreReady();
   const artifact = artifactStore.get(req.params.artifactId);
   if (!artifact) {
     res.status(404).json({ error: 'Artifact not found.' });
@@ -3040,7 +3382,8 @@ app.get('/api/artifacts/:artifactId', async (req, res) => {
   }
   if (artifact.expiresAt <= nowMs()) {
     artifactStore.delete(req.params.artifactId);
-    fs.unlink(artifact.path).catch(() => {});
+    await removeArtifactFile(artifact.path);
+    await queueArtifactMetadataWrite();
     res.status(410).json({ error: 'Artifact expired.' });
     return;
   }

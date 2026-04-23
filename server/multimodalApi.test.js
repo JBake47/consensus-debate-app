@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import ExcelJS from 'exceljs';
 import { Document as DocxDocument, Packer as DocxPacker, Paragraph } from 'docx';
@@ -93,6 +96,11 @@ async function withServer(envOverrides, fn) {
   }
 }
 
+async function stopServer(child) {
+  child.kill();
+  await once(child, 'exit').catch(() => {});
+}
+
 await withServer({}, async ({ baseUrl }) => {
   await runTest('GET /api/capabilities returns multimodal registry + limits', async () => {
     const response = await fetch(`${baseUrl}/api/capabilities`);
@@ -105,6 +113,7 @@ await withServer({}, async ({ baseUrl }) => {
     assert.equal(typeof data.capabilityRegistry.routingVersion, 'string');
     assert.equal(typeof data.capabilityRegistry.providers?.openrouter?.capabilities?.webSearchNative, 'boolean');
     assert.equal(typeof data.limits.maxAttachments, 'number');
+    assert.equal(typeof data.limits.maxJobs, 'number');
     assert.equal(data.limits.pdfOcrMaxPages, 8);
     assert.equal(data.limits.pdfOcrPageMaxBytes, 3 * 1024 * 1024);
     assert.equal(data.limits.pdfOcrTotalMaxBytes, 14 * 1024 * 1024);
@@ -192,6 +201,146 @@ await withServer({}, async ({ baseUrl }) => {
     const body = Buffer.from(await artifactResponse.arrayBuffer());
     assert.equal(body.length > 0, true);
     assert.equal(artifactResponse.headers.get('content-type')?.includes('application/pdf'), true);
+  });
+
+  await runTest('async multimodal job reports blocked attachments while continuing safely', async () => {
+    const executableBytes = Buffer.from([0x4d, 0x5a, 0x90, 0x00]).toString('base64');
+    const createResponse = await fetch(`${baseUrl}/api/multimodal/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'Generate a short PDF handout and consider the attachment if safe.',
+        selectedModels: [],
+        synthesizerModel: '',
+        attachments: [{
+          name: 'blocked.exe',
+          category: 'binary',
+          type: 'application/octet-stream',
+          size: 4,
+          dataUrl: `data:application/octet-stream;base64,${executableBytes}`,
+        }],
+        providerStatus: {},
+      }),
+    });
+    assert.equal(createResponse.status, 202);
+    const created = await createResponse.json();
+    const completed = await pollJob(baseUrl, created.jobId);
+    const result = completed.result || {};
+    assert.equal(Array.isArray(result.rejectedAttachments), true);
+    assert.equal(result.rejectedAttachments.length, 1);
+    assert.equal(result.rejectedAttachments[0].name, 'blocked.exe');
+    assert.equal(String(result.promptAugmentation || '').includes('Blocked attachments for security'), true);
+    assert.equal((result.generatedAttachments || []).some((item) => item.generatedFormat === 'pdf'), true);
+  });
+});
+
+await runTest('artifact signed urls survive a local server restart until expiry', async () => {
+  const artifactDir = await mkdtemp(path.join(tmpdir(), 'consensus-artifacts-'));
+  const port = randomPort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const env = { ARTIFACT_STORE_DIR: artifactDir };
+  let downloadUrl = '';
+
+  try {
+    const firstServer = spawnServer(port, env);
+    try {
+      await waitForServer(baseUrl, firstServer.getLogs);
+      const createResponse = await fetch(`${baseUrl}/api/multimodal/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'Generate a brief PDF restart durability check.',
+          selectedModels: [],
+          synthesizerModel: '',
+          attachments: [],
+          providerStatus: {},
+        }),
+      });
+      assert.equal(createResponse.status, 202);
+      const created = await createResponse.json();
+      const completed = await pollJob(baseUrl, created.jobId);
+      const pdfAttachment = (completed.result?.generatedAttachments || [])
+        .find((item) => item.generatedFormat === 'pdf');
+      assert.equal(Boolean(pdfAttachment?.downloadUrl), true);
+      downloadUrl = pdfAttachment.downloadUrl;
+      const initialDownload = await fetch(`${baseUrl}${downloadUrl}`);
+      assert.equal(initialDownload.ok, true);
+    } finally {
+      await stopServer(firstServer.child);
+    }
+
+    const secondServer = spawnServer(port, env);
+    try {
+      await waitForServer(baseUrl, secondServer.getLogs);
+      const restartedDownload = await fetch(`${baseUrl}${downloadUrl}`);
+      assert.equal(restartedDownload.ok, true);
+      assert.equal(restartedDownload.headers.get('content-type')?.includes('application/pdf'), true);
+    } finally {
+      await stopServer(secondServer.child);
+    }
+  } finally {
+    await rm(artifactDir, { recursive: true, force: true });
+  }
+});
+
+await withServer({
+  MULTIMODAL_MAX_JOBS: '1',
+}, async ({ baseUrl }) => {
+  await runTest('async multimodal queue caps unique retained jobs while still reusing duplicates', async () => {
+    const payload = {
+      prompt: 'Plain local multimodal queue cap check alpha.',
+      selectedModels: [],
+      synthesizerModel: '',
+      attachments: [],
+      providerStatus: {},
+    };
+
+    const createResponse = await fetch(`${baseUrl}/api/multimodal/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(createResponse.status, 202);
+    const created = await createResponse.json();
+    assert.equal(typeof created.jobId, 'string');
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/multimodal/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(duplicateResponse.status, 202);
+    const duplicate = await duplicateResponse.json();
+    assert.equal(duplicate.jobId, created.jobId);
+
+    const uniqueResponse = await fetch(`${baseUrl}/api/multimodal/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        prompt: 'Plain local multimodal queue cap check beta.',
+      }),
+    });
+    assert.equal(uniqueResponse.status, 429);
+    const rejected = await uniqueResponse.json();
+    assert.equal(String(rejected.error || '').includes('queue is full'), true);
+
+    const capabilitiesResponse = await fetch(`${baseUrl}/api/capabilities`);
+    assert.equal(capabilitiesResponse.ok, true);
+    const capabilities = await capabilitiesResponse.json();
+    assert.equal(capabilities.limits.maxJobs, 1);
+  });
+});
+
+await withServer({
+  API_RATE_LIMIT_MAX_REQUESTS: '1',
+}, async ({ baseUrl }) => {
+  await runTest('multimodal job status polling is not charged as expensive API work', async () => {
+    const firstPoll = await fetch(`${baseUrl}/api/multimodal/jobs/not-found`);
+    assert.equal(firstPoll.status, 404);
+
+    const secondPoll = await fetch(`${baseUrl}/api/multimodal/jobs/not-found`);
+    assert.equal(secondPoll.status, 404);
   });
 });
 
@@ -303,6 +452,34 @@ await withServer({
       method: 'POST',
     });
     assert.equal(bareRestartResponse.status, 403);
+  });
+});
+
+await withServer({
+  ALLOW_REMOTE_API: 'true',
+  TRUST_PROXY: 'true',
+  SERVER_AUTH_TOKEN: 'server-test-token',
+}, async ({ baseUrl }) => {
+  await runTest('remote API mode still requires server token for non-loopback clients', async () => {
+    const localResponse = await fetch(`${baseUrl}/api/health`);
+    assert.equal(localResponse.status, 200);
+
+    const remoteWithoutToken = await fetch(`${baseUrl}/api/health`, {
+      headers: {
+        'X-Forwarded-For': '203.0.113.20',
+      },
+    });
+    assert.equal(remoteWithoutToken.status, 401);
+    const remoteBody = await remoteWithoutToken.json();
+    assert.equal(remoteBody.code, 'remote_api_auth_required');
+
+    const remoteWithToken = await fetch(`${baseUrl}/api/health`, {
+      headers: {
+        'X-Forwarded-For': '203.0.113.20',
+        'x-server-auth-token': 'server-test-token',
+      },
+    });
+    assert.equal(remoteWithToken.status, 200);
   });
 });
 

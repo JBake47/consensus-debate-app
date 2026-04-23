@@ -88,3 +88,28 @@ await runTest('model catalog cache dedupes concurrent in-flight fetches', async 
   assert.equal(first, second);
   assert.deepEqual(first, [{ id: 'openai/gpt-4.1' }]);
 });
+
+await runTest('model catalog cache caps entries without leaking raw keys into identity', async () => {
+  const seenAuthHeaders = [];
+  const cache = createModelCatalogCache({
+    ttlMs: 60_000,
+    maxEntries: 1,
+    fetchImpl: async (_url, options = {}) => {
+      seenAuthHeaders.push(options.headers?.Authorization || '');
+      return jsonResponse({
+        data: [
+          { id: `model-${seenAuthHeaders.length}` },
+        ],
+      });
+    },
+  });
+
+  await cache.get('first-secret-key');
+  await cache.get('second-secret-key');
+
+  assert.equal(cache.size, 1);
+  assert.deepEqual(seenAuthHeaders, [
+    'Bearer first-secret-key',
+    'Bearer second-secret-key',
+  ]);
+});

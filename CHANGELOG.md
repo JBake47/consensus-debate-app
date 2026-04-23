@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.46] - 2026-04-23
+
+### Added
+- Generated artifact metadata is now persisted so signed artifact downloads survive a local backend restart until expiry.
+- Configurable multimodal job, payload, model-catalog cache, and API rate limits are exposed through environment settings and capability metadata.
+- Verification scripts now include full tests, production build, and high-severity production dependency audit checks.
+
+### Changed
+- Remote API mode now still requires `SERVER_AUTH_TOKEN` for non-loopback clients, and expensive API endpoints are rate limited without charging multimodal job-status polling.
+- PDF text extraction now caps page and character work for very large PDFs while reporting truncation in preview metadata.
+- Model catalog caching now uses hashed API-key cache keys, a bounded entry count, and stale in-flight request pruning.
+
+### Fixed
+- Multimodal jobs now retain blocked attachment warnings while continuing with safe inputs, enforce retained job limits, and release stored request payloads after completion.
+- Generated image requests now respect orchestration aborts, and provider HTTP errors preserve status/code metadata for retry handling.
+- Rapid new chats now use collision-resistant conversation and turn IDs instead of timestamp-only identifiers.
+
 ## [0.3.45] - 2026-04-22
 
 ### Changed
@@ -746,7 +763,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code block copy functionality
 - Responsive design for mobile and desktop
 
-[Unreleased]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.36...HEAD
+[Unreleased]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.46...HEAD
+[0.3.46]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.45...v0.3.46
+[0.3.45]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.44...v0.3.45
+[0.3.44]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.43...v0.3.44
+[0.3.43]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.42...v0.3.43
+[0.3.42]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.41...v0.3.42
+[0.3.41]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.40...v0.3.41
+[0.3.40]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.39...v0.3.40
+[0.3.39]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.38...v0.3.39
+[0.3.38]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.37...v0.3.38
+[0.3.37]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.36...v0.3.37
 [0.3.36]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.35...v0.3.36
 [0.3.35]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.34...v0.3.35
 [0.3.34]: https://github.com/JBake47/consensus-debate-app/compare/v0.3.33...v0.3.34
