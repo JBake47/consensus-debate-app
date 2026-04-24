@@ -185,6 +185,16 @@ function AttentionPanel({
       };
     }
     if (
+      lowered.includes('no endpoints available matching your guardrail restrictions and data policy')
+      || (lowered.includes('guardrail') && lowered.includes('data policy'))
+      || (lowered.includes('zdr') && lowered.includes('endpoint'))
+    ) {
+      return {
+        summary,
+        action: 'OpenRouter filtered out every endpoint for this API key. Check Settings > Privacy in OpenRouter, especially ZDR, data-training, and provider guardrails, or choose a model allowed by the current policy.',
+      };
+    }
+    if (
       lowered.includes('429')
       || lowered.includes('rate limit')
       || lowered.includes('rate-limit')
