@@ -168,6 +168,31 @@ test('Images with OCR text fall back to plaintext for text-only models', () => {
   assert.equal(content.includes('Button: Submit'), true);
 });
 
+test('Oversized legacy images are excluded instead of sent natively', () => {
+  const content = buildAttachmentContentForModel('Explain this screenshot.', [{
+    ...imageAttachment,
+    previewMeta: { width: 551, height: 11024 },
+  }], {
+    modelId: 'anthropic/claude-haiku-4.5',
+  });
+  assert.equal(typeof content, 'string');
+  assert.equal(content.includes('Attachments not sent to this model'), true);
+  assert.equal(content.includes('provider dimension limit'), true);
+});
+
+test('Oversized legacy images use OCR text when available', () => {
+  const content = buildAttachmentContentForModel('Explain this screenshot.', [{
+    ...imageAttachment,
+    content: 'Campaign table rows',
+    previewMeta: { width: 551, height: 11024 },
+  }], {
+    modelId: 'anthropic/claude-haiku-4.5',
+  });
+  assert.equal(typeof content, 'string');
+  assert.equal(content.includes('Attached image OCR text: diagram.png'), true);
+  assert.equal(content.includes('Campaign table rows'), true);
+});
+
 test('Routing overview reports OCR fallback for images with extracted text', () => {
   const routing = buildAttachmentRoutingOverview({
     attachments: [{

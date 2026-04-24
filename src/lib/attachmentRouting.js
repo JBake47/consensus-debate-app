@@ -1,5 +1,6 @@
 import { getModelImageSupport } from './modelCapabilities.js';
 import { getTransportProviderId, usesOpenRouterTransport } from './modelTransport.js';
+import { MAX_NATIVE_IMAGE_DIMENSION } from './attachmentLimits.js';
 
 export const DEFAULT_MAX_ATTACHMENTS = 16;
 export const ATTACHMENT_ACCEPTED_TYPES = [
@@ -39,6 +40,14 @@ function supportsNativeImage({ modelId, modelCatalog, capabilityRegistry }) {
   if (!usesOpenRouterTransport(modelId)) return true;
   const imageSupport = getModelImageSupport(modelCatalog?.[modelId]);
   return imageSupport !== false;
+}
+
+function exceedsNativeImageDimensionLimit(attachment) {
+  const meta = attachment?.previewMeta || {};
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (width <= 0 || height <= 0) return false;
+  return Math.max(width, height) > MAX_NATIVE_IMAGE_DIMENSION;
 }
 
 function supportsNativeVideo({ modelId, capabilityRegistry }) {
@@ -155,6 +164,20 @@ export function getAttachmentTransportForModel(attachment, modelId, modelCatalog
   const transportProvider = getTransportProviderId(modelId);
 
   if (category === 'image') {
+    if (attachment.dataUrl && exceedsNativeImageDimensionLimit(attachment)) {
+      if (String(attachment.content || '').trim()) {
+        return {
+          mode: 'text_fallback',
+          label: 'OCR fallback',
+          reason: `This image exceeds the ${MAX_NATIVE_IMAGE_DIMENSION}px provider dimension limit, so OCR text will be sent instead.`,
+        };
+      }
+      return {
+        mode: 'excluded',
+        label: 'Too large',
+        reason: `This image exceeds the ${MAX_NATIVE_IMAGE_DIMENSION}px provider dimension limit. Reattach it so the app can resize it before sending.`,
+      };
+    }
     if (attachment.dataUrl && supportsNativeImage({ modelId, modelCatalog, capabilityRegistry })) {
       return { mode: 'native_image', label: 'Native image', reason: 'Image sent as a multimodal input.' };
     }

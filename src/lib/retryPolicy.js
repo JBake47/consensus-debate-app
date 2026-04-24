@@ -61,7 +61,26 @@ export function parseRetryableStatus(err) {
   return Number.isFinite(status) ? status : null;
 }
 
+function hasRateLimitSignals(err) {
+  if (!err) return false;
+  const status = parseRetryableStatus(err);
+  if (status === 429) return true;
+  const code = String(err?.code || '').toLowerCase();
+  const message = String(err?.message || '').toLowerCase();
+  return (
+    code.includes('rate_limit') ||
+    code.includes('rate_limited') ||
+    code === '429' ||
+    message.includes('rate limit') ||
+    message.includes('rate-limit') ||
+    message.includes('rate_limited') ||
+    message.includes('too many requests') ||
+    message.includes('retry shortly')
+  );
+}
+
 export function isNonRetryableError(err) {
+  if (hasRateLimitSignals(err)) return false;
   const status = parseRetryableStatus(err);
   if ([400, 401, 402, 403, 404, 422].includes(status)) return true;
   const code = String(err?.code || '').toLowerCase();
@@ -90,6 +109,7 @@ export function isNonRetryableError(err) {
 
 export function isTransientRetryableError(err, isAbortLikeError = () => false) {
   if (!err || isAbortLikeError(err) || isNonRetryableError(err)) return false;
+  if (hasRateLimitSignals(err)) return true;
   const status = parseRetryableStatus(err);
   if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
   const code = String(err?.code || '').toLowerCase();
@@ -97,6 +117,10 @@ export function isTransientRetryableError(err, isAbortLikeError = () => false) {
   const message = String(err?.message || '').toLowerCase();
   return (
     message.includes('rate limit') ||
+    message.includes('rate-limit') ||
+    message.includes('rate_limited') ||
+    message.includes('too many requests') ||
+    message.includes('retry shortly') ||
     message.includes('temporarily unavailable') ||
     message.includes('timeout') ||
     message.includes('timed out') ||
@@ -108,6 +132,10 @@ export function isTransientRetryableError(err, isAbortLikeError = () => false) {
     message.includes('502') ||
     message.includes('504')
   );
+}
+
+export function isRateLimitError(err) {
+  return hasRateLimitSignals(err);
 }
 
 export function shouldAffectCircuitBreaker(err, isAbortLikeError = () => false) {
@@ -122,6 +150,24 @@ export function getRetryDelayMs(attemptNumber, policy, random = Math.random) {
     Math.max(
       normalized.baseDelayMs,
       Math.min(normalized.maxDelayMs, exp * jitter),
+    ),
+  );
+}
+
+export function getRetryDelayMsForError(attemptNumber, policy, err, random = Math.random) {
+  if (!isRateLimitError(err)) {
+    return getRetryDelayMs(attemptNumber, policy, random);
+  }
+
+  const normalized = normalizeRetryPolicy(policy);
+  const rateLimitBaseDelayMs = Math.max(normalized.baseDelayMs, 7_500);
+  const rateLimitMaxDelayMs = Math.max(normalized.maxDelayMs, 30_000);
+  const exp = rateLimitBaseDelayMs * (2 ** Math.max(0, attemptNumber - 1));
+  const jitter = 0.85 + random() * 0.3;
+  return Math.round(
+    Math.max(
+      rateLimitBaseDelayMs,
+      Math.min(rateLimitMaxDelayMs, exp * jitter),
     ),
   );
 }

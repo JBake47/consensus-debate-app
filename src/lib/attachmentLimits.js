@@ -1,0 +1,1 @@
+export const MAX_NATIVE_IMAGE_DIMENSION = 8000;

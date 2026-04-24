@@ -1,12 +1,16 @@
 import { getFileCategory } from './fileTypes.js';
+import { MAX_NATIVE_IMAGE_DIMENSION } from './attachmentLimits.js';
 
 export { BINARY_EXTENSIONS, IMAGE_TYPES, TEXT_EXTENSIONS, getFileCategory } from './fileTypes.js';
+export { MAX_NATIVE_IMAGE_DIMENSION } from './attachmentLimits.js';
 export const MAX_INLINE_BYTES = 40 * 1024 * 1024;
 export const SERVER_TEXT_EXTRACTION_MAX_BYTES = 12 * 1024 * 1024;
 export const DEFAULT_MAX_ATTACHMENTS = 16;
 export const PDF_OCR_MAX_PAGES = 8;
 export const PDF_TEXT_MAX_PAGES = 200;
 export const PDF_TEXT_MAX_CHARS = 500_000;
+const PROVIDER_SAFE_IMAGE_TYPE = 'image/jpeg';
+const PROVIDER_SAFE_IMAGE_QUALITY = 0.9;
 const PDF_OCR_MAX_DIMENSION = 1800;
 const PDF_OCR_MAX_PIXELS = 2_600_000;
 const PDF_OCR_RENDER_SCALE = 2;
@@ -56,8 +60,17 @@ export async function processFile(file, options = {}) {
   };
 
   switch (category) {
-    case 'image':
-      return { ...base, content: '', preview: 'image', previewMeta: await readImageMeta(file, dataUrl) };
+    case 'image': {
+      const image = await prepareImageForNativeProviders(file, dataUrl);
+      return {
+        ...base,
+        dataUrl: image.dataUrl,
+        content: '',
+        preview: 'image',
+        previewMeta: image.previewMeta,
+        inlineWarning: image.inlineWarning || base.inlineWarning,
+      };
+    }
     case 'excel': {
       const content = await readOfficeDocument(file, 'excel');
       return { ...base, content, preview: 'text', previewMeta: buildTextPreviewMeta(content) };
@@ -140,6 +153,72 @@ export async function processFile(file, options = {}) {
   }
 }
 
+export function getImageResizeDimensions(width, height, maxDimension = MAX_NATIVE_IMAGE_DIMENSION) {
+  const sourceWidth = Number(width);
+  const sourceHeight = Number(height);
+  const limit = Number(maxDimension);
+  if (
+    !Number.isFinite(sourceWidth)
+    || !Number.isFinite(sourceHeight)
+    || !Number.isFinite(limit)
+    || sourceWidth <= 0
+    || sourceHeight <= 0
+    || limit <= 0
+  ) {
+    return { width: 0, height: 0, resized: false, scale: 1 };
+  }
+
+  const maxSourceDimension = Math.max(sourceWidth, sourceHeight);
+  if (maxSourceDimension <= limit) {
+    return {
+      width: Math.round(sourceWidth),
+      height: Math.round(sourceHeight),
+      resized: false,
+      scale: 1,
+    };
+  }
+
+  const scale = limit / maxSourceDimension;
+  const cappedLimit = Math.floor(limit);
+  return {
+    width: Math.min(cappedLimit, Math.max(1, Math.floor(sourceWidth * scale))),
+    height: Math.min(cappedLimit, Math.max(1, Math.floor(sourceHeight * scale))),
+    resized: true,
+    scale,
+  };
+}
+
+async function prepareImageForNativeProviders(file, dataUrl) {
+  const previewMeta = await readImageMeta(file, dataUrl);
+  const dimensions = getImageResizeDimensions(previewMeta?.width, previewMeta?.height);
+  if (!dimensions.resized) {
+    return { dataUrl, previewMeta, inlineWarning: null };
+  }
+
+  const resizedDataUrl = await resizeImageDataUrl(file, dataUrl, dimensions);
+  if (!resizedDataUrl) {
+    return {
+      dataUrl: null,
+      previewMeta,
+      inlineWarning: `This image is ${previewMeta.width}x${previewMeta.height}, which exceeds the ${MAX_NATIVE_IMAGE_DIMENSION}px provider limit. It could not be resized automatically, so it will not be sent as a native image.`,
+    };
+  }
+
+  return {
+    dataUrl: resizedDataUrl,
+    previewMeta: {
+      ...previewMeta,
+      originalWidth: previewMeta.width,
+      originalHeight: previewMeta.height,
+      width: dimensions.width,
+      height: dimensions.height,
+      resizedForProvider: true,
+      providerMaxDimension: MAX_NATIVE_IMAGE_DIMENSION,
+    },
+    inlineWarning: `Image resized from ${previewMeta.width}x${previewMeta.height} to ${dimensions.width}x${dimensions.height} for provider compatibility.`,
+  };
+}
+
 function buildTextPreviewMeta(content) {
   const text = String(content || '');
   return {
@@ -220,6 +299,53 @@ async function readImageMeta(file, dataUrl) {
   }
 
   return null;
+}
+
+async function loadImageSource(file, dataUrl) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file);
+    } catch {
+      // fall through
+    }
+  }
+
+  const source = String(dataUrl || '').trim();
+  if (typeof Image !== 'undefined' && source) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to load image for resizing'));
+      img.src = source;
+    });
+  }
+
+  return null;
+}
+
+async function resizeImageDataUrl(file, dataUrl, dimensions) {
+  const width = Number(dimensions?.width || 0);
+  const height = Number(dimensions?.height || 0);
+  if (width <= 0 || height <= 0) return '';
+
+  const renderCanvas = createRenderCanvas(width, height);
+  if (!renderCanvas) return '';
+
+  let image = null;
+  try {
+    image = await loadImageSource(file, dataUrl);
+    if (!image) return '';
+    renderCanvas.context.drawImage(image, 0, 0, width, height);
+    return await canvasToDataUrlWithOptions(
+      renderCanvas.canvas,
+      PROVIDER_SAFE_IMAGE_TYPE,
+      PROVIDER_SAFE_IMAGE_QUALITY
+    );
+  } catch {
+    return '';
+  } finally {
+    image?.close?.();
+  }
 }
 
 function arrayBufferToBase64(buffer) {
@@ -364,16 +490,20 @@ function createRenderCanvas(width, height) {
 }
 
 async function canvasToDataUrl(canvas) {
+  return canvasToDataUrlWithOptions(canvas, PDF_OCR_IMAGE_TYPE, PDF_OCR_IMAGE_QUALITY);
+}
+
+async function canvasToDataUrlWithOptions(canvas, type, quality) {
   if (typeof canvas?.toDataURL === 'function') {
-    return canvas.toDataURL(PDF_OCR_IMAGE_TYPE, PDF_OCR_IMAGE_QUALITY);
+    return canvas.toDataURL(type, quality);
   }
   if (typeof canvas?.convertToBlob === 'function') {
     const blob = await canvas.convertToBlob({
-      type: PDF_OCR_IMAGE_TYPE,
-      quality: PDF_OCR_IMAGE_QUALITY,
+      type,
+      quality,
     });
     const buffer = await blob.arrayBuffer();
-    return `data:${PDF_OCR_IMAGE_TYPE};base64,${arrayBufferToBase64(buffer)}`;
+    return `data:${type};base64,${arrayBufferToBase64(buffer)}`;
   }
   return '';
 }

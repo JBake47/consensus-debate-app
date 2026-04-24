@@ -45,7 +45,7 @@ import {
   normalizeRetryPolicy,
   isTransientRetryableError,
   shouldAffectCircuitBreaker,
-  getRetryDelayMs,
+  getRetryDelayMsForError,
 } from '../lib/retryPolicy';
 import { buildResetSynthesisState } from '../lib/synthesisState';
 import {
@@ -3824,7 +3824,7 @@ export function DebateProvider({ children }) {
         ...prev,
         retryAttempts: prev.retryAttempts + 1,
       }));
-      const delayMs = getRetryDelayMs(attempt, retryPolicy);
+      const delayMs = getRetryDelayMsForError(attempt, retryPolicy, err);
       onRetryProgress?.({
         active: true,
         attempt: attempt + 1,

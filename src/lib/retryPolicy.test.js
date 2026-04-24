@@ -6,6 +6,7 @@ import {
   isTransientRetryableError,
   shouldAffectCircuitBreaker,
   getRetryDelayMs,
+  getRetryDelayMsForError,
 } from './retryPolicy.js';
 
 function runTest(name, fn) {
@@ -58,6 +59,25 @@ runTest('isTransientRetryableError detects 429 and timeout unless aborted', () =
   );
 });
 
+runTest('isTransientRetryableError detects upstream rate-limited text without status', () => {
+  assert.equal(
+    isTransientRetryableError({
+      message: 'deepseek/deepseek-v4-flash is temporarily rate-limited upstream. Please retry shortly.',
+    }, () => false),
+    true,
+  );
+});
+
+runTest('isTransientRetryableError detects provider 429 code behind 400 status', () => {
+  const error = {
+    status: 400,
+    code: 429,
+    message: 'Provider returned error',
+  };
+  assert.equal(isNonRetryableError(error), false);
+  assert.equal(isTransientRetryableError(error, () => false), true);
+});
+
 runTest('shouldAffectCircuitBreaker ignores invalid attachment parse errors', () => {
   assert.equal(
     shouldAffectCircuitBreaker({ status: 400, message: 'Failed to parse scanned.pdf' }, () => false),
@@ -83,6 +103,13 @@ runTest('getRetryDelayMs applies jitter and bounds', () => {
   assert.ok(low >= DEFAULT_RETRY_POLICY.baseDelayMs);
   assert.ok(high <= DEFAULT_RETRY_POLICY.maxDelayMs);
   assert.ok(high >= low);
+});
+
+runTest('getRetryDelayMsForError uses longer backoff for rate limits', () => {
+  const delay = getRetryDelayMsForError(1, DEFAULT_RETRY_POLICY, { status: 429 }, () => 0);
+  const normalDelay = getRetryDelayMsForError(1, DEFAULT_RETRY_POLICY, { status: 503 }, () => 0);
+  assert.ok(delay >= 7500);
+  assert.ok(delay > normalDelay);
 });
 
 // eslint-disable-next-line no-console

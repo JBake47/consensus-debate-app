@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.47] - 2026-04-24
+
+### Changed
+- Image attachments that exceed provider dimension limits are now downscaled before native multimodal routing.
+- Rate-limit retries now use longer backoff for upstream `429` responses and related provider messages.
+
+### Fixed
+- Legacy oversized image attachments are blocked from native image routing, with OCR text fallback when available, so retrying old turns cannot replay provider dimension errors.
+- OpenRouter provider rate-limit errors reported as nested provider codes are now classified as retryable instead of non-retryable transport failures.
+
 ## [0.3.46] - 2026-04-23
 
 ### Added

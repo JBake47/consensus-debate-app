@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   getPdfTextExtractionBudget,
   hasUsefulPdfText,
+  getImageResizeDimensions,
+  MAX_NATIVE_IMAGE_DIMENSION,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
   processFile,
@@ -58,4 +60,21 @@ await test('PDF text extraction budget caps page and character work', async () =
   const largeBudget = getPdfTextExtractionBudget(PDF_TEXT_MAX_PAGES + 50);
   assert.equal(largeBudget.pageLimit, PDF_TEXT_MAX_PAGES);
   assert.equal(largeBudget.pagesTruncated, true);
+});
+
+await test('image resize dimensions cap portrait screenshots at provider limit', async () => {
+  const dimensions = getImageResizeDimensions(551, 11024);
+  assert.equal(dimensions.resized, true);
+  assert.equal(dimensions.height, MAX_NATIVE_IMAGE_DIMENSION);
+  assert.equal(dimensions.width < 551, true);
+});
+
+await test('image resize dimensions preserve images within provider limit', async () => {
+  const dimensions = getImageResizeDimensions(1200, 800);
+  assert.deepEqual(dimensions, {
+    width: 1200,
+    height: 800,
+    resized: false,
+    scale: 1,
+  });
 });
