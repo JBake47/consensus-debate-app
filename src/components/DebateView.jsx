@@ -184,10 +184,17 @@ function AttentionPanel({
         action: 'Provider credits are likely depleted. Add credits, then retry.',
       };
     }
-    if (lowered.includes('429') || lowered.includes('rate limit')) {
+    if (
+      lowered.includes('429')
+      || lowered.includes('rate limit')
+      || lowered.includes('rate-limit')
+      || lowered.includes('rate_limited')
+      || lowered.includes('retry shortly')
+      || lowered.includes('temporarily rate')
+    ) {
       return {
         summary,
-        action: 'Rate limited. Retry after a short delay or reduce parallel models.',
+        action: 'OpenRouter shared upstream capacity is rate limited. Wait 1-2 minutes, reduce parallel models, replace this model, or add your own provider key in OpenRouter Integrations.',
       };
     }
     if (lowered.includes('timeout') || lowered.includes('timed out') || lowered.includes('network')) {

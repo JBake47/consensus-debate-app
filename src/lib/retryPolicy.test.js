@@ -78,6 +78,15 @@ runTest('isTransientRetryableError detects provider 429 code behind 400 status',
   assert.equal(isTransientRetryableError(error, () => false), true);
 });
 
+runTest('isTransientRetryableError detects OpenRouter upstream rate-limit payloads', () => {
+  const error = {
+    status: 400,
+    message: 'Provider returned error deepseek/deepseek-v4-flash is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits.',
+  };
+  assert.equal(isNonRetryableError(error), false);
+  assert.equal(isTransientRetryableError(error, () => false), true);
+});
+
 runTest('shouldAffectCircuitBreaker ignores invalid attachment parse errors', () => {
   assert.equal(
     shouldAffectCircuitBreaker({ status: 400, message: 'Failed to parse scanned.pdf' }, () => false),

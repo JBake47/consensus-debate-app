@@ -38,6 +38,21 @@ runTest('getStreamDisplayState treats carried-forward content as a warning state
   );
 });
 
+runTest('getStreamDisplayState labels exhausted rate limits distinctly', () => {
+  assert.deepEqual(
+    getStreamDisplayState({
+      status: 'error',
+      error: 'Provider returned error: temporarily rate-limited upstream.',
+      errorKind: 'rate_limited',
+    }),
+    {
+      kind: 'rate_limited',
+      tone: 'warning',
+      label: 'Rate limited',
+    },
+  );
+});
+
 runTest('deriveRoundStatusFromStreams marks mixed fresh and stale responses as warning', () => {
   assert.equal(
     deriveRoundStatusFromStreams([

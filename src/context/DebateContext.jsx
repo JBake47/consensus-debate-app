@@ -44,6 +44,7 @@ import {
   DEFAULT_RETRY_POLICY,
   normalizeRetryPolicy,
   isTransientRetryableError,
+  isRateLimitError,
   shouldAffectCircuitBreaker,
   getRetryDelayMsForError,
 } from '../lib/retryPolicy';
@@ -4022,6 +4023,7 @@ export function DebateProvider({ children }) {
           const diagnostic = routeInfo?.reason && !routeInfo?.routed
             ? `${errorMsg} (${routeInfo.reason})`
             : errorMsg;
+          const errorKind = isRateLimitError(err) ? 'rate_limited' : 'failed';
           dispatchTurnAction('UPDATE_ROUND_STREAM', {
             roundIndex,
             streamIndex: index,
@@ -4029,13 +4031,13 @@ export function DebateProvider({ children }) {
             content: '',
             status: 'error',
             error: diagnostic,
-            errorKind: 'failed',
+            errorKind,
             outcome: null,
             retryProgress: null,
             searchEvidence: searchVerification?.enabled ? null : undefined,
             routeInfo,
           });
-          return { model, content: '', index, error: diagnostic, errorKind: 'failed', routeInfo, effectiveModel };
+          return { model, content: '', index, error: diagnostic, errorKind, routeInfo, effectiveModel };
         }
       })
     );
@@ -6522,12 +6524,13 @@ export function DebateProvider({ children }) {
           const diagnostic = routeInfo?.reason && !routeInfo?.routed
             ? `${errorMsg} (${routeInfo.reason})`
             : errorMsg;
+          const errorKind = isRateLimitError(err) ? 'rate_limited' : 'failed';
           const fallbackState = replacementModel
             ? null
             : buildPreviousResponseFallback(previousStream, {
               model,
               error: `Retry failed - showing previous response. ${diagnostic}`.trim(),
-              errorKind: 'failed',
+              errorKind,
               routeInfo,
             });
           dispatchTurnAction('UPDATE_ROUND_STREAM', fallbackState
@@ -6544,7 +6547,7 @@ export function DebateProvider({ children }) {
               content: '',
               status: 'error',
               error: diagnostic,
-              errorKind: 'failed',
+              errorKind,
               outcome: null,
               retryProgress: null,
               routeInfo,
@@ -6554,7 +6557,7 @@ export function DebateProvider({ children }) {
             content: fallbackState?.content || '',
             index: si,
             error: fallbackState ? null : diagnostic,
-            errorKind: fallbackState ? null : 'failed',
+            errorKind: fallbackState ? null : errorKind,
             outcome: fallbackState?.outcome || null,
             routeInfo,
             effectiveModel,

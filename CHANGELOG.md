@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.48] - 2026-04-24
+
+### Changed
+- Exhausted OpenRouter upstream rate limits now surface as `Rate limited` stream states instead of generic model failures.
+
+### Fixed
+- DeepSeek/OpenRouter `temporarily rate-limited upstream` errors now show actionable guidance for waiting, reducing parallelism, replacing the model, or using a provider key.
+
 ## [0.3.47] - 2026-04-24
 
 ### Changed

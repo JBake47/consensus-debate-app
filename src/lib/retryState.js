@@ -70,6 +70,10 @@ export function getStreamDisplayState(stream) {
     return { kind: errorKind, tone: 'warning', label: 'Cancelled' };
   }
 
+  if (errorKind === 'rate_limited') {
+    return { kind: errorKind, tone: 'warning', label: 'Rate limited' };
+  }
+
   if (status === 'error') {
     return { kind: 'failed', tone: 'error', label: 'Failed' };
   }
