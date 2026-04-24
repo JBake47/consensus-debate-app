@@ -459,6 +459,8 @@ export default function SettingsModal() {
   const synthEditingRef = useRef(false);
   const convEditingRef = useRef(false);
   const searchEditingRef = useRef(false);
+  const appUpdateRestartDialogRef = useRef(null);
+  const appUpdateRestartInFlightRef = useRef(false);
   const appUpdateRequestIdRef = useRef(0);
   const settingsBodyRef = useRef(null);
   const settingsTargetRefs = useRef(new Map());
@@ -987,6 +989,7 @@ export default function SettingsModal() {
     if (clearResult) {
       setAppUpdateResult(null);
       setAppUpdateRestartSheetOpen(false);
+      appUpdateRestartInFlightRef.current = false;
     }
 
     try {
@@ -1009,6 +1012,7 @@ export default function SettingsModal() {
     setAppUpdateError('');
     setAppUpdateResult(null);
     setAppUpdateRestartSheetOpen(false);
+    appUpdateRestartInFlightRef.current = false;
 
     try {
       const result = await requestAppUpdate();
@@ -1019,6 +1023,7 @@ export default function SettingsModal() {
 
       if (result?.restartRequired && !result?.localChangesRequireManualRestore) {
         setAppUpdateState('ready');
+        appUpdateRestartInFlightRef.current = false;
         setAppUpdateRestartSheetOpen(true);
         return;
       }
@@ -1186,6 +1191,14 @@ export default function SettingsModal() {
   }, [presetSheet]);
 
   useEffect(() => {
+    if (!appUpdateRestartSheetOpen) return;
+    const timer = window.setTimeout(() => {
+      appUpdateRestartDialogRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [appUpdateRestartSheetOpen]);
+
+  useEffect(() => {
     if (!presetSheet && !appUpdateRestartSheetOpen) return;
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape') return;
@@ -1269,6 +1282,8 @@ export default function SettingsModal() {
   };
 
   const handleConfirmAppRestart = useCallback(async () => {
+    if (appUpdateRestartInFlightRef.current) return;
+    appUpdateRestartInFlightRef.current = true;
     setAppUpdateRestartSheetOpen(false);
     setAppUpdateState('restarting');
     setAppUpdateError('');
@@ -1282,6 +1297,7 @@ export default function SettingsModal() {
         window.location.reload();
       }
     } catch (error) {
+      appUpdateRestartInFlightRef.current = false;
       setAppUpdateError(error?.message || 'The update finished, but automatic restart failed. Restart the app manually.');
       setAppUpdateState('error');
     }
@@ -3398,11 +3414,13 @@ export default function SettingsModal() {
         {appUpdateRestartSheetOpen && (
           <div className="settings-sheet-backdrop" onClick={closeAppUpdateRestartSheet}>
             <div
+              ref={appUpdateRestartDialogRef}
               className="settings-sheet glass-panel"
               onClick={(event) => event.stopPropagation()}
               role="dialog"
               aria-modal="true"
               aria-label="Restart app confirmation"
+              tabIndex={-1}
             >
               <div className="settings-sheet-header">
                 <h3>Restart App</h3>
@@ -3415,12 +3433,8 @@ export default function SettingsModal() {
                   <X size={16} />
                 </button>
               </div>
-              <form
+              <div
                 className="settings-sheet-body"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  handleConfirmAppRestart();
-                }}
               >
                 <p className="settings-hint settings-sheet-text">
                   This update changed backend code or dependencies on this machine. Restart the app now to finish loading the new version?
@@ -3435,15 +3449,15 @@ export default function SettingsModal() {
                     Not Now
                   </button>
                   <button
-                    type="submit"
+                    type="button"
                     className="settings-btn-primary"
-                    autoFocus
+                    onClick={handleConfirmAppRestart}
                     disabled={appUpdateState === 'restarting'}
                   >
                     {appUpdateState === 'restarting' ? 'Restarting...' : 'Restart Now'}
                   </button>
                 </div>
-              </form>
+              </div>
             </div>
           </div>
         )}
