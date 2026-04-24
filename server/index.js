@@ -32,6 +32,7 @@ import {
   buildOpenAIChatBody,
   buildOpenRouterChatBody,
   parseDataUrl,
+  replaceImagePartsWithText,
   splitSystemMessages,
 } from './providerPayload.js';
 import { AppRestartError, scheduleSelfRestart } from './restartManager.js';
@@ -1228,6 +1229,28 @@ function createProviderHttpError(bodyText, status, fallbackMessage) {
   return error;
 }
 
+function hasProviderImageParts(messages) {
+  return (Array.isArray(messages) ? messages : []).some((message) => (
+    Array.isArray(message?.content)
+    && message.content.some((part) => part?.type === 'image_url' && part.image_url?.url)
+  ));
+}
+
+function shouldRetryWithoutProviderImages(status, bodyText, messages) {
+  const parsedStatus = Number(status);
+  if (![400, 413, 422].includes(parsedStatus)) return false;
+  if (!hasProviderImageParts(messages)) return false;
+  const lowered = String(bodyText || '').toLowerCase();
+  if (!lowered.includes('image')) return false;
+  return (
+    lowered.includes('dimension')
+    || lowered.includes('max allowed size')
+    || lowered.includes('maximum allowed size')
+    || lowered.includes('too large')
+    || lowered.includes('exceed')
+  );
+}
+
 async function handleOpenRouter({
   model,
   messages,
@@ -1246,9 +1269,9 @@ async function handleOpenRouter({
 
   const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
   const webSearchOptions = getOpenRouterWebSearchOptions(openRouterWebSearchOptions);
-  const buildBody = (openRouterWebSearchMode = 'server_tool') => buildOpenRouterChatBody({
+  const buildBody = (openRouterWebSearchMode = 'server_tool', requestMessages = messages) => buildOpenRouterChatBody({
     model,
-    messages,
+    messages: requestMessages,
     stream,
     nativeWebSearch,
     openRouterWebSearchMode,
@@ -1263,16 +1286,33 @@ async function handleOpenRouter({
 
   const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openrouter', model, messages, promptCache });
   try {
-    let response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody(), signal });
+    let requestMessages = messages;
+    let response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('server_tool', requestMessages), signal });
 
     if (!response.ok) {
-      const bodyText = await response.text();
+      let bodyText = await response.text();
+      if (shouldRetryWithoutProviderImages(response.status, bodyText, requestMessages)) {
+        requestMessages = replaceImagePartsWithText(requestMessages);
+        response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('server_tool', requestMessages), signal });
+        if (!response.ok) {
+          bodyText = await response.text();
+        }
+      }
       if (nativeWebSearch && shouldRetryOpenRouterWebSearchWithPlugin(response.status, bodyText)) {
-        response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('plugin'), signal });
+        response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('plugin', requestMessages), signal });
+        if (!response.ok) {
+          bodyText = await response.text();
+          if (shouldRetryWithoutProviderImages(response.status, bodyText, requestMessages)) {
+            requestMessages = replaceImagePartsWithText(requestMessages);
+            response = await fetchOpenRouterChatCompletion({ apiKey, body: buildBody('plugin', requestMessages), signal });
+            if (!response.ok) {
+              bodyText = await response.text();
+            }
+          }
+        }
       }
       if (!response.ok) {
-        const fallbackBodyText = response.bodyUsed ? bodyText : await response.text();
-        throw createProviderHttpError(fallbackBodyText, response.status, `OpenRouter error: ${response.status}`);
+        throw createProviderHttpError(bodyText, response.status, `OpenRouter error: ${response.status}`);
       }
     }
 
@@ -1329,15 +1369,17 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
   }
 
   const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
-  const body = buildAnthropicChatBody({
+  const buildBody = (requestMessages = messages) => buildAnthropicChatBody({
     model,
-    messages,
+    messages: requestMessages,
     stream,
     nativeWebSearch,
     promptCache,
     maxTokens: process.env.ANTHROPIC_MAX_TOKENS || 64000,
     webSearchToolType: ANTHROPIC_WEB_SEARCH_TOOL_TYPE,
   });
+  let requestMessages = messages;
+  let body = buildBody(requestMessages);
 
   const headers = {
     'Content-Type': 'application/json',
@@ -1350,7 +1392,7 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
 
   const warmup = await acquirePromptCacheWarmupSlot({ provider: 'anthropic', model, messages, promptCache });
   try {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  let response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -1358,8 +1400,23 @@ async function handleAnthropic({ model, messages, stream, res, signal, nativeWeb
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw createProviderHttpError(bodyText, response.status, `Anthropic error: ${response.status}`);
+    let bodyText = await response.text();
+    if (shouldRetryWithoutProviderImages(response.status, bodyText, requestMessages)) {
+      requestMessages = replaceImagePartsWithText(requestMessages);
+      body = buildBody(requestMessages);
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!response.ok) {
+        bodyText = await response.text();
+      }
+    }
+    if (!response.ok) {
+      throw createProviderHttpError(bodyText, response.status, `Anthropic error: ${response.status}`);
+    }
   }
 
   if (!stream) {
@@ -1443,18 +1500,20 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
   }
 
   const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
-  const body = buildOpenAIChatBody({
+  const buildBody = (requestMessages = messages) => buildOpenAIChatBody({
     model,
-    messages,
+    messages: requestMessages,
     stream,
     nativeWebSearch,
     promptCache,
     webSearchMode: OPENAI_WEB_SEARCH_MODE,
   });
+  let requestMessages = messages;
+  let body = buildBody(requestMessages);
 
   const warmup = await acquirePromptCacheWarmupSlot({ provider: 'openai', model, messages, promptCache });
   try {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  let response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1465,8 +1524,26 @@ async function handleOpenAI({ model, messages, stream, res, signal, nativeWebSea
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw createProviderHttpError(bodyText, response.status, `OpenAI error: ${response.status}`);
+    let bodyText = await response.text();
+    if (shouldRetryWithoutProviderImages(response.status, bodyText, requestMessages)) {
+      requestMessages = replaceImagePartsWithText(requestMessages);
+      body = buildBody(requestMessages);
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!response.ok) {
+        bodyText = await response.text();
+      }
+    }
+    if (!response.ok) {
+      throw createProviderHttpError(bodyText, response.status, `OpenAI error: ${response.status}`);
+    }
   }
 
   if (!stream) {
@@ -1522,7 +1599,8 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
   }
 
   const promptCache = buildServerPromptCachePolicy(promptCacheOptions);
-  let body = buildGeminiGenerateContentBody({ messages, nativeWebSearch });
+  let requestMessages = messages;
+  let body = buildGeminiGenerateContentBody({ messages: requestMessages, nativeWebSearch });
   const cachePlan = buildGeminiPromptCachePlan({ model, messages, promptCache, nativeWebSearch });
   let warmupMessages = messages;
   if (cachePlan) {
@@ -1549,7 +1627,7 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
 
   const warmup = await acquirePromptCacheWarmupSlot({ provider: 'gemini', model, messages: warmupMessages, promptCache });
   try {
-  const response = await fetch(endpoint, {
+  let response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1559,8 +1637,25 @@ async function handleGemini({ model, messages, stream, res, signal, nativeWebSea
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw createProviderHttpError(bodyText, response.status, `Gemini error: ${response.status}`);
+    let bodyText = await response.text();
+    if (shouldRetryWithoutProviderImages(response.status, bodyText, requestMessages)) {
+      requestMessages = replaceImagePartsWithText(requestMessages);
+      body = buildGeminiGenerateContentBody({ messages: requestMessages, nativeWebSearch });
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!response.ok) {
+        bodyText = await response.text();
+      }
+    }
+    if (!response.ok) {
+      throw createProviderHttpError(bodyText, response.status, `Gemini error: ${response.status}`);
+    }
   }
 
   if (!stream) {

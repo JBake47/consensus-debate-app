@@ -4,8 +4,20 @@ import {
   buildGeminiGenerateContentBody,
   buildOpenAIChatBody,
   buildOpenRouterChatBody,
+  getDataUrlImageDimensions,
+  replaceImagePartsWithText,
   stripOpenRouterPdfFileParts,
 } from './providerPayload.js';
+
+function makePngDataUrl(width, height) {
+  const buffer = Buffer.alloc(24);
+  buffer.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  buffer.writeUInt32BE(13, 8);
+  buffer.write('IHDR', 12, 'ascii');
+  buffer.writeUInt32BE(width, 16);
+  buffer.writeUInt32BE(height, 20);
+  return `data:image/png;base64,${buffer.toString('base64')}`;
+}
 
 function test(name, fn) {
   try {
@@ -61,6 +73,57 @@ test('OpenRouter PDF scrubber replaces file-only messages with an explanatory te
   assert.equal(messages[0].content.length, 1);
   assert.equal(messages[0].content[0].type, 'text');
   assert.match(messages[0].content[0].text, /native PDF parsing is disabled/);
+});
+
+test('Provider builders replace oversized data-url images before sending', () => {
+  const oversizedImageUrl = makePngDataUrl(9001, 640);
+  assert.deepEqual(getDataUrlImageDimensions(oversizedImageUrl), { width: 9001, height: 640 });
+
+  const sourceMessages = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Inspect this screenshot.' },
+      { type: 'image_url', image_url: { url: oversizedImageUrl } },
+    ],
+  }];
+  const openRouterBody = buildOpenRouterChatBody({
+    model: 'meta-llama/llama-4-maverick',
+    messages: sourceMessages,
+  });
+  const anthropicBody = buildAnthropicChatBody({
+    model: 'claude-sonnet-4.5',
+    messages: sourceMessages,
+  });
+  const openAiBody = buildOpenAIChatBody({
+    model: 'gpt-4.1',
+    messages: sourceMessages,
+  });
+  const geminiBody = buildGeminiGenerateContentBody({
+    messages: sourceMessages,
+  });
+
+  assert.equal(openRouterBody.messages[0].content[1].type, 'text');
+  assert.match(openRouterBody.messages[0].content[1].text, /9001x640/);
+  assert.equal(anthropicBody.messages[0].content.some((part) => part.type === 'image'), false);
+  assert.match(anthropicBody.messages[0].content[1].text, /provider image dimension limit/);
+  assert.equal(openAiBody.messages[0].content[1].type, 'text');
+  assert.deepEqual(geminiBody.contents[0].parts, [
+    { text: 'Inspect this screenshot.' },
+    { text: openRouterBody.messages[0].content[1].text },
+  ]);
+});
+
+test('Image replacement retry strips image parts even when dimensions are unknown', () => {
+  const replaced = replaceImagePartsWithText([{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Inspect this.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,not-a-real-image' } },
+    ],
+  }]);
+
+  assert.equal(replaced[0].content[1].type, 'text');
+  assert.match(replaced[0].content[1].text, /provider rejected the image size or dimensions/);
 });
 
 test('OpenRouter body can fall back to deprecated web plugin compatibility mode', () => {
