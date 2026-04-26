@@ -407,39 +407,62 @@ async function loadPdfjs() {
   return pdfjsLibPromise;
 }
 
+async function destroyPdfDocument(pdf) {
+  try {
+    if (typeof pdf?.destroy === 'function') {
+      await pdf.destroy();
+    } else {
+      pdf?.cleanup?.();
+    }
+  } catch {
+    // Ignore teardown failures; extraction result has already been determined.
+  }
+}
+
+function cleanupPdfPage(page) {
+  try {
+    page?.cleanup?.();
+  } catch {
+    // Ignore page cleanup failures; document teardown remains the final backstop.
+  }
+}
+
 async function readPdf(file) {
+  let pdf = null;
   try {
     const pdfjsLib = await loadPdfjs();
     const buffer = await readAsArrayBuffer(file);
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
     const pages = [];
     const budget = getPdfTextExtractionBudget(pdf.numPages);
     let extractedChars = 0;
     let textPagesTruncated = budget.pagesTruncated;
     for (let i = 1; i <= budget.pageLimit; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const text = textContent.items.map(item => item.str).join(' ');
-      if (text.trim()) {
-        const pageText = `--- Page ${i} ---\n${text}`;
-        const remainingChars = budget.charLimit - extractedChars;
-        if (remainingChars <= 0) {
-          textPagesTruncated = true;
-          page.cleanup?.();
-          break;
+      let page = null;
+      try {
+        page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const text = textContent.items.map(item => item.str).join(' ');
+        if (text.trim()) {
+          const pageText = `--- Page ${i} ---\n${text}`;
+          const remainingChars = budget.charLimit - extractedChars;
+          if (remainingChars <= 0) {
+            textPagesTruncated = true;
+            break;
+          }
+          const storedPageText = pageText.length > remainingChars
+            ? pageText.slice(0, remainingChars)
+            : pageText;
+          pages.push(storedPageText);
+          extractedChars += storedPageText.length;
+          if (storedPageText.length < pageText.length || extractedChars >= budget.charLimit) {
+            textPagesTruncated = true;
+            break;
+          }
         }
-        const storedPageText = pageText.length > remainingChars
-          ? pageText.slice(0, remainingChars)
-          : pageText;
-        pages.push(storedPageText);
-        extractedChars += storedPageText.length;
-        if (storedPageText.length < pageText.length || extractedChars >= budget.charLimit) {
-          textPagesTruncated = true;
-          page.cleanup?.();
-          break;
-        }
+      } finally {
+        cleanupPdfPage(page);
       }
-      page.cleanup?.();
     }
     const hasText = pages.length > 0;
     const ocrResult = hasText
@@ -470,6 +493,8 @@ async function readPdf(file) {
       ocrPageRenderFailed: false,
       parseFailed: true,
     };
+  } finally {
+    await destroyPdfDocument(pdf);
   }
 }
 
@@ -550,10 +575,10 @@ async function renderPdfOcrCandidatePages(pdf) {
   const pages = [];
   let failed = false;
   for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    let page = null;
     try {
-      const page = await pdf.getPage(pageNumber);
+      page = await pdf.getPage(pageNumber);
       const rendered = await renderPdfPageForOcr(page, pageNumber);
-      page.cleanup?.();
       if (rendered) {
         pages.push(rendered);
       } else {
@@ -561,6 +586,8 @@ async function renderPdfOcrCandidatePages(pdf) {
       }
     } catch {
       failed = true;
+    } finally {
+      cleanupPdfPage(page);
     }
   }
 

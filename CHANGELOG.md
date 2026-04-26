@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.49] - 2026-04-26
+
+### Added
+- Multimodal turn preparation can now be cancelled from the composer, with abort signals propagated through async job submission, polling, and sync fallback requests.
+
+### Fixed
+- Attachment preview workers now time out, recreate wedged workers, and mark pending attachments failed instead of leaving the composer locked or replaying expensive PDF/image parsing on the main thread.
+- PDF preview extraction now destroys PDF.js documents and guarantees page cleanup after text or OCR page rendering, reducing retained local worker and document resources.
+
 ## [0.3.48] - 2026-04-24
 
 ### Changed

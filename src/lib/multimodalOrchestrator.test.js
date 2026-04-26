@@ -40,6 +40,15 @@ function withMockFetch(mockFetch, fn) {
     });
 }
 
+function makeAbortError() {
+  if (typeof DOMException === 'function') {
+    return new DOMException('Aborted', 'AbortError');
+  }
+  const error = new Error('Aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
 await runTest('shouldCallOrchestrator detects multimodal intents', async () => {
   assert.equal(shouldCallOrchestrator('Please summarize https://youtu.be/dQw4w9WgXcQ'), true);
   assert.equal(shouldCallOrchestrator('Generate a PDF and an XLSX budget sheet.'), true);
@@ -214,6 +223,57 @@ await runTest('orchestrateMultimodalTurn falls back to sync orchestration on asy
     assert.equal(result.routeInfo.handled, true);
   });
   assert.equal(calls.some((call) => call.url === '/api/multimodal/orchestrate'), true);
+});
+
+await runTest('orchestrateMultimodalTurn honors pre-aborted signals without starting work', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const calls = [];
+
+  await withMockFetch(async (url, options = {}) => {
+    calls.push({ url, method: options.method || 'GET' });
+    throw new Error(`fetch should not be called after abort: ${options.method || 'GET'} ${url}`);
+  }, async () => {
+    await assert.rejects(
+      () => orchestrateMultimodalTurn({
+        prompt: 'Generate a PDF from this text',
+        attachments: [],
+        signal: controller.signal,
+      }),
+      (error) => error?.name === 'AbortError',
+    );
+  });
+  assert.equal(calls.length, 0);
+});
+
+await runTest('orchestrateMultimodalTurn does not fall back to sync after abort during polling', async () => {
+  const controller = new AbortController();
+  const calls = [];
+
+  await withMockFetch(async (url, options = {}) => {
+    calls.push({ url, method: options.method || 'GET', signal: options.signal });
+    if (url === '/api/multimodal/jobs' && options.method === 'POST') {
+      assert.equal(options.signal, controller.signal);
+      return jsonResponse({ jobId: 'mmjob_abort', status: 'pending' }, true, 202);
+    }
+    if (url === '/api/multimodal/jobs/mmjob_abort') {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      throw makeAbortError();
+    }
+    throw new Error(`Unexpected request: ${options.method || 'GET'} ${url}`);
+  }, async () => {
+    await assert.rejects(
+      () => orchestrateMultimodalTurn({
+        prompt: 'Generate a PDF from this text',
+        attachments: [],
+        signal: controller.signal,
+      }),
+      (error) => error?.name === 'AbortError',
+    );
+  });
+
+  assert.equal(calls.some((call) => call.url === '/api/multimodal/orchestrate'), false);
 });
 
 await runTest('orchestrateMultimodalTurn resumes a queued job when sync fallback returns 202', async () => {

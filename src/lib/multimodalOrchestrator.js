@@ -97,19 +97,53 @@ function buildOrchestrationPayload({
   };
 }
 
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+function createAbortError() {
+  if (typeof DOMException === 'function') {
+    return new DOMException('Multimodal orchestration was aborted.', 'AbortError');
+  }
+  const error = new Error('Multimodal orchestration was aborted.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error) {
+  return error?.name === 'AbortError';
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function delay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener?.('abort', handleAbort);
+      resolve();
+    }, Math.max(0, Number(ms) || 0));
+    const handleAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener?.('abort', handleAbort);
+      reject(createAbortError());
+    };
+    signal?.addEventListener?.('abort', handleAbort, { once: true });
   });
 }
 
-async function submitMultimodalJob(payload) {
+async function submitMultimodalJob(payload, { signal } = {}) {
+  throwIfAborted(signal);
   const response = await fetch(MULTIMODAL_JOBS_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal,
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -118,12 +152,13 @@ async function submitMultimodalJob(payload) {
   return response.json();
 }
 
-async function pollMultimodalJob(jobId, { timeoutMs, pollIntervalMs }) {
+async function pollMultimodalJob(jobId, { timeoutMs, pollIntervalMs, signal }) {
   const startedAt = Date.now();
   let lastError = null;
   while (Date.now() - startedAt < timeoutMs) {
+    throwIfAborted(signal);
     try {
-      const response = await fetch(`${MULTIMODAL_JOBS_URL}/${encodeURIComponent(jobId)}`);
+      const response = await fetch(`${MULTIMODAL_JOBS_URL}/${encodeURIComponent(jobId)}`, { signal });
       if (!response.ok) {
         const errText = await response.text();
         throw new Error(errText || 'Failed to poll multimodal orchestration job');
@@ -137,9 +172,12 @@ async function pollMultimodalJob(jobId, { timeoutMs, pollIntervalMs }) {
       }
       lastError = null;
     } catch (error) {
+      if (isAbortError(error) || signal?.aborted) {
+        throw error;
+      }
       lastError = error;
     }
-    await delay(pollIntervalMs);
+    await delay(pollIntervalMs, signal);
   }
   throw lastError || new Error('Multimodal orchestration job timed out');
 }
@@ -201,13 +239,15 @@ function normalizeOrchestrationResponse({
   };
 }
 
-async function runSyncOrchestration(payload) {
+async function runSyncOrchestration(payload, { signal } = {}) {
+  throwIfAborted(signal);
   const response = await fetch(MULTIMODAL_ORCHESTRATE_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal,
   });
   if (!response.ok) {
     const errText = await response.text();
@@ -218,6 +258,7 @@ async function runSyncOrchestration(payload) {
     return pollMultimodalJob(data.jobId, {
       timeoutMs: MULTIMODAL_JOB_TIMEOUT_MS,
       pollIntervalMs: MULTIMODAL_JOB_POLL_MS,
+      signal,
     });
   }
   return data;
@@ -233,6 +274,7 @@ export async function orchestrateMultimodalTurn({
   routingPreferences = {},
   modelCatalog = {},
   capabilityRegistry = null,
+  signal,
 }) {
   const userPrompt = String(prompt || '').trim();
   if (!shouldCallOrchestrator(userPrompt, {
@@ -261,16 +303,20 @@ export async function orchestrateMultimodalTurn({
 
   let data = null;
   try {
-    const job = await submitMultimodalJob(payload);
+    const job = await submitMultimodalJob(payload, { signal });
     if (!job?.jobId) {
       throw new Error('Multimodal job submission did not return a job id');
     }
     data = await pollMultimodalJob(job.jobId, {
       timeoutMs: MULTIMODAL_JOB_TIMEOUT_MS,
       pollIntervalMs: MULTIMODAL_JOB_POLL_MS,
+      signal,
     });
-  } catch {
-    data = await runSyncOrchestration(payload);
+  } catch (error) {
+    if (isAbortError(error) || signal?.aborted) {
+      throw error;
+    }
+    data = await runSyncOrchestration(payload, { signal });
   }
 
   return normalizeOrchestrationResponse({

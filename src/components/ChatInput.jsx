@@ -30,6 +30,8 @@ const FILE_INPUT_ACCEPT_PARTS = [
 ];
 const SUPPORTED_EXTENSIONS = new Set(FILE_INPUT_ACCEPT_PARTS.map((value) => value.toLowerCase()));
 const EXTENSIONLESS_TEXT_NAMES = new Set(['dockerfile', 'makefile', '.env', '.gitignore']);
+const FILE_WORKER_TIMEOUT_MS = 45_000;
+const FILE_WORKER_TIMEOUT_CODE = 'file_worker_timeout';
 const SUPPORTED_MIME_HINTS = [
   'application/pdf',
   'application/json',
@@ -155,6 +157,7 @@ export default function ChatInput() {
   const fileWorkerRef = useRef(null);
   const fileWorkerRequestRef = useRef(0);
   const fileProcessingLockRef = useRef(false);
+  const orchestrationAbortRef = useRef(null);
   const conversationStoreReady = conversationStoreStatus === 'ready';
   const hasConfiguredProvider = Boolean(String(apiKey || '').trim())
     || Object.values(providerStatus || {}).some(Boolean);
@@ -182,7 +185,7 @@ export default function ChatInput() {
     }
   }, [editingTurn, dispatch]);
 
-  const fallbackAttachment = useCallback((file, uploadId = null) => ({
+  const fallbackAttachment = useCallback((file, uploadId = null, errorMessage = 'Failed to process file') => ({
     uploadId,
     name: file?.name || 'attachment',
     size: Number(file?.size || 0),
@@ -190,7 +193,7 @@ export default function ChatInput() {
     category: 'error',
     content: '',
     preview: 'error',
-    error: 'Failed to process file',
+    error: errorMessage,
     processingStatus: 'error',
   }), []);
 
@@ -228,32 +231,75 @@ export default function ChatInput() {
     return new Promise((resolve, reject) => {
       const worker = ensureFileWorker();
       const requestId = `files-${Date.now()}-${++fileWorkerRequestRef.current}`;
+      let settled = false;
+      let timeoutId = null;
 
       const cleanup = () => {
+        if (timeoutId != null) {
+          window.clearTimeout(timeoutId);
+        }
         worker.removeEventListener('message', handleMessage);
         worker.removeEventListener('error', handleError);
       };
 
       const handleMessage = (event) => {
         if (event.data?.requestId !== requestId) return;
+        if (settled) return;
+        settled = true;
         cleanup();
-        const nextAttachments = Array.isArray(event.data?.results)
-          ? event.data.results.map((result, index) => {
-            const fallbackEntry = safeEntries[index];
-            return result?.attachment || fallbackAttachment(fallbackEntry?.file || fallbackEntry, fallbackEntry?.uploadId || null);
-          })
-          : [];
+        const results = Array.isArray(event.data?.results) ? event.data.results : [];
+        const resultsByUploadId = new Map(results
+          .filter((result) => result?.uploadId)
+          .map((result) => [result.uploadId, result]));
+        const nextAttachments = safeEntries.map((entry, index) => {
+          const uploadId = entry?.uploadId || null;
+          const orderedResult = results[index];
+          const result = uploadId && orderedResult?.uploadId !== uploadId
+            ? resultsByUploadId.get(uploadId)
+            : orderedResult;
+          return result?.attachment
+            ? { ...result.attachment, uploadId: result.attachment.uploadId || uploadId }
+            : fallbackAttachment(entry?.file || entry, uploadId);
+        });
         resolve(nextAttachments);
       };
 
       const handleError = (error) => {
+        if (settled) return;
+        settled = true;
         cleanup();
+        worker.terminate();
+        if (fileWorkerRef.current === worker) {
+          fileWorkerRef.current = null;
+        }
         reject(error);
       };
 
+      const handleTimeout = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        worker.terminate();
+        if (fileWorkerRef.current === worker) {
+          fileWorkerRef.current = null;
+        }
+        const error = new Error('Attachment preview processing timed out.');
+        error.code = FILE_WORKER_TIMEOUT_CODE;
+        reject(error);
+      };
+
+      timeoutId = window.setTimeout(handleTimeout, FILE_WORKER_TIMEOUT_MS);
       worker.addEventListener('message', handleMessage);
       worker.addEventListener('error', handleError);
-      worker.postMessage({ requestId, files: safeEntries });
+      try {
+        worker.postMessage({ requestId, files: safeEntries });
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      }
     });
   }, [ensureFileWorker, fallbackAttachment]);
 
@@ -301,8 +347,16 @@ export default function ChatInput() {
       let processed;
       try {
         processed = await processFilesInWorker(pendingEntries);
-      } catch {
-        processed = await processFilesOnMainThread(pendingEntries);
+      } catch (error) {
+        if (error?.code === FILE_WORKER_TIMEOUT_CODE) {
+          processed = pendingEntries.map((entry) => fallbackAttachment(
+            entry.file,
+            entry.uploadId,
+            'Attachment preview processing timed out. Remove and reattach the file to try again.'
+          ));
+        } else {
+          processed = await processFilesOnMainThread(pendingEntries);
+        }
       }
       const processedById = new Map(processed.map((attachment) => [attachment.uploadId, attachment]));
       setAttachments((prev) => prev.map((attachment) => (
@@ -382,6 +436,9 @@ export default function ChatInput() {
     const currentAttachments = Array.isArray(rawAttachments) ? rawAttachments : [];
     if ((!trimmed && currentAttachments.length === 0) || !conversationStoreReady || debateInProgress || orchestrating || requiresProviderSetup) return;
 
+    orchestrationAbortRef.current?.abort?.();
+    const controller = new AbortController();
+    orchestrationAbortRef.current = controller;
     setOrchestrating(true);
     try {
       const orchestrated = await orchestrateMultimodalTurn({
@@ -393,6 +450,7 @@ export default function ChatInput() {
         apiKey,
         modelCatalog,
         capabilityRegistry,
+        signal: controller.signal,
       });
 
       performSubmit({
@@ -401,9 +459,15 @@ export default function ChatInput() {
         modelOverrides: orchestrated.modelOverrides || undefined,
         routeInfo: orchestrated.routeInfo || undefined,
       });
-    } catch {
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === 'AbortError') {
+        return;
+      }
       performSubmit({ prompt: trimmed, attachments: currentAttachments });
     } finally {
+      if (orchestrationAbortRef.current === controller) {
+        orchestrationAbortRef.current = null;
+      }
       setOrchestrating(false);
     }
   }, [
@@ -419,6 +483,10 @@ export default function ChatInput() {
     performSubmit,
     requiresProviderSetup,
   ]);
+
+  const cancelOrchestration = useCallback(() => {
+    orchestrationAbortRef.current?.abort?.();
+  }, []);
 
   const budgetEstimate = useMemo(() => estimateTurnBudget({
     prompt: input.trim(),
@@ -617,6 +685,8 @@ export default function ChatInput() {
   }, []);
 
   useEffect(() => () => {
+    orchestrationAbortRef.current?.abort?.();
+    orchestrationAbortRef.current = null;
     fileWorkerRef.current?.terminate();
     fileWorkerRef.current = null;
   }, []);
@@ -1024,6 +1094,11 @@ export default function ChatInput() {
                 <button className="chat-btn chat-btn-cancel" onClick={() => cancelDebate()} title="Stop the active run. Completed outputs remain in the turn so you can inspect or retry them.">
                   <Square size={16} />
                   <span>Stop</span>
+                </button>
+              ) : orchestrating ? (
+                <button className="chat-btn chat-btn-cancel" onClick={cancelOrchestration} title="Cancel multimodal preparation and keep the draft unchanged.">
+                  <Square size={16} />
+                  <span>Cancel</span>
                 </button>
               ) : (
                 <>
