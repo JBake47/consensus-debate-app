@@ -23,6 +23,10 @@ import {
   getFocusedEnsembleAnalysisPrompt,
 } from '../lib/debateEngine';
 import {
+  shouldResumeDebateBeforeSynthesis,
+  shouldRunConvergenceCheck,
+} from '../lib/debateResume.js';
+import {
   buildAttachmentMessagesForModels,
   buildAttachmentRoutingOverview,
   buildAttachmentTextContent,
@@ -550,13 +554,6 @@ function hashCacheKeyPayload(value) {
   const forwardHex = (forward >>> 0).toString(16).padStart(8, '0');
   const reverseHex = (reverse >>> 0).toString(16).padStart(8, '0');
   return `${forwardHex}${reverseHex}`;
-}
-
-function shouldRunConvergenceCheck(roundNum, maxRounds, includeFinalRound) {
-  if (!Number.isFinite(roundNum) || !Number.isFinite(maxRounds)) return false;
-  if (roundNum < 2 || roundNum > maxRounds) return false;
-  if (roundNum < maxRounds) return true;
-  return Boolean(includeFinalRound) && roundNum === maxRounds;
 }
 
 clearLegacyResponseCacheStorage();
@@ -2074,6 +2071,7 @@ export function DebateProvider({ children }) {
   const activeConversationIdRef = useRef(state.activeConversationId);
   const deletedConversationTombstonesRef = useRef(state.deletedConversationTombstones);
   const liveRunScopesRef = useRef([]);
+  const retryRoundRef = useRef(null);
   const lastConversationPersistAtRef = useRef(0);
   const lastRunHeartbeatAtRef = useRef(0);
   const lastModelCatalogRefreshAtRef = useRef(0);
@@ -5574,6 +5572,23 @@ export function DebateProvider({ children }) {
   const retrySynthesis = useCallback(async (options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;
     const forceRefresh = Boolean(options.forceRefresh);
+    const activeLastTurn = activeConversation.turns[activeConversation.turns.length - 1];
+    if (shouldResumeDebateBeforeSynthesis(activeLastTurn, {
+      maxRounds: state.maxDebateRounds,
+      includeFinalRound: runConvergenceOnFinalRound,
+    })) {
+      const resumeRoundIndex = Math.max(0, (activeLastTurn.rounds || []).length - 1);
+      const resumeRound = retryRoundRef.current;
+      if (resumeRound) {
+        await resumeRound(resumeRoundIndex, {
+          forceRefresh,
+          retryErroredCompleted: false,
+          sourceStage: options.sourceStage || 'synthesis',
+          sourceSummary: options.sourceSummary || 'Resume Debate',
+        });
+        return;
+      }
+    }
     const {
       conversationId: convId,
       conversationSnapshot,
@@ -5712,9 +5727,12 @@ export function DebateProvider({ children }) {
     state.apiKey,
     state.synthesizerModel,
     state.convergenceModel,
+    state.convergenceOnFinalRound,
+    state.maxDebateRounds,
     state.focusedMode,
     state.modelCatalog,
     state.capabilityRegistry,
+    runConvergenceOnFinalRound,
     setAbortController,
   ]);
 
@@ -6916,6 +6934,7 @@ export function DebateProvider({ children }) {
     buildNativeWebSearchStrategy,
     setAbortController,
   ]);
+  retryRoundRef.current = retryRound;
 
   const retryAllFailed = useCallback((options = {}) => {
     if (!activeConversation || activeConversation.turns.length === 0) return;

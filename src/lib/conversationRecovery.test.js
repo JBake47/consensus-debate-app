@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { prepareConversationsForPersistence } from './conversationPersistence.js';
+import { shouldResumeDebateBeforeSynthesis } from './debateResume.js';
 import {
   getLiveConversationRunScopes,
   getResumeRecoveryConversationIds,
   recoverInterruptedTurnState,
   resolveInitialActiveConversationId,
   resolvePreferredActiveConversationId,
+  STALE_CONVERGENCE_REASON,
 } from './conversationRecovery.js';
 
 function runTest(name, fn) {
@@ -124,6 +126,7 @@ runTest('interrupted snapshot roundtrip restores the active conversation and rec
   assert.equal(recoveredTurn.rounds[0].streams[0].status, 'complete');
   assert.equal(recoveredTurn.rounds[0].streams[0].outcome, 'using_previous_response');
   assert.equal(recoveredTurn.rounds[0].convergenceCheck.converged, false);
+  assert.equal(recoveredTurn.rounds[0].convergenceCheck.reason, STALE_CONVERGENCE_REASON);
   assert.equal(recoveredTurn.synthesis.status, 'error');
   assert.equal(recoveredTurn.debateMetadata.terminationReason, 'interrupted');
 });
@@ -225,6 +228,123 @@ runTest('pending final synthesis stays recoverable after model rounds finish', (
   assert.equal(recoveredTurn.synthesis.status, 'error');
   assert.equal(recoveredTurn.synthesis.error, 'Run interrupted before completion.');
   assert.equal(recoveredTurn.debateMetadata.terminationReason, 'interrupted');
+});
+
+runTest('synthesis retry resumes a completed rebuttal round that still needs convergence', () => {
+  const turn = {
+    mode: 'debate',
+    rounds: [
+      {
+        roundNumber: 1,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Initial A', status: 'complete' },
+          { model: 'openai/b', content: 'Initial B', status: 'complete' },
+        ],
+      },
+      {
+        roundNumber: 2,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Rebuttal A', status: 'complete' },
+          { model: 'openai/b', content: 'Rebuttal B', status: 'complete' },
+        ],
+        convergenceCheck: null,
+      },
+    ],
+    synthesis: {
+      model: 'openai/synth',
+      content: '',
+      status: 'error',
+      error: 'Run interrupted before completion.',
+    },
+    debateMetadata: {
+      totalRounds: 2,
+      converged: false,
+      terminationReason: 'interrupted',
+    },
+  };
+
+  assert.equal(shouldResumeDebateBeforeSynthesis(turn, {
+    maxRounds: 3,
+    includeFinalRound: true,
+  }), true);
+});
+
+runTest('synthesis retry resumes after a divergent interrupted rebuttal when rounds remain', () => {
+  const turn = {
+    mode: 'debate',
+    rounds: [
+      {
+        roundNumber: 1,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Initial A', status: 'complete' },
+          { model: 'openai/b', content: 'Initial B', status: 'complete' },
+        ],
+      },
+      {
+        roundNumber: 2,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Rebuttal A', status: 'complete' },
+          { model: 'openai/b', content: 'Rebuttal B', status: 'complete' },
+        ],
+        convergenceCheck: {
+          converged: false,
+          reason: 'Still disagreeing.',
+        },
+      },
+    ],
+    debateMetadata: {
+      totalRounds: 2,
+      converged: false,
+      terminationReason: 'interrupted',
+    },
+  };
+
+  assert.equal(shouldResumeDebateBeforeSynthesis(turn, {
+    maxRounds: 3,
+    includeFinalRound: true,
+  }), true);
+});
+
+runTest('synthesis retry does not resume debate when convergence already completed', () => {
+  const turn = {
+    mode: 'debate',
+    rounds: [
+      {
+        roundNumber: 1,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Initial A', status: 'complete' },
+          { model: 'openai/b', content: 'Initial B', status: 'complete' },
+        ],
+      },
+      {
+        roundNumber: 2,
+        status: 'complete',
+        streams: [
+          { model: 'openai/a', content: 'Rebuttal A', status: 'complete' },
+          { model: 'openai/b', content: 'Rebuttal B', status: 'complete' },
+        ],
+        convergenceCheck: {
+          converged: true,
+          reason: 'The models agree.',
+        },
+      },
+    ],
+    debateMetadata: {
+      totalRounds: 2,
+      converged: true,
+      terminationReason: 'converged',
+    },
+  };
+
+  assert.equal(shouldResumeDebateBeforeSynthesis(turn, {
+    maxRounds: 3,
+    includeFinalRound: true,
+  }), false);
 });
 
 runTest('resolvePreferredActiveConversationId preserves explicit new-chat selection and falls back when needed', () => {

@@ -1,6 +1,14 @@
 export const STALE_RUN_ERROR_MESSAGE = 'Run interrupted before completion.';
 export const STALE_CONVERGENCE_REASON = 'Convergence check interrupted before completion.';
 
+function getRecoveredConvergenceReason(reason) {
+  const normalized = String(reason || '').trim();
+  if (!normalized || normalized.toLowerCase() === 'checking' || normalized.toLowerCase() === 'checking...') {
+    return STALE_CONVERGENCE_REASON;
+  }
+  return normalized;
+}
+
 export function isLiveStatus(status) {
   return status === 'streaming' || status === 'pending' || status === 'searching' || status === 'analyzing';
 }
@@ -177,7 +185,7 @@ export function recoverInterruptedTurnState(turn) {
         nextRound.convergenceCheck = {
           ...nextRound.convergenceCheck,
           converged: false,
-          reason: nextRound.convergenceCheck.reason || STALE_CONVERGENCE_REASON,
+          reason: getRecoveredConvergenceReason(nextRound.convergenceCheck.reason),
         };
       }
 
