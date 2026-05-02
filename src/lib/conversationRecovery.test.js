@@ -170,6 +170,23 @@ runTest('getResumeRecoveryConversationIds only flags runs that were inactive lon
   assert.deepEqual(freshIds, []);
 });
 
+runTest('getResumeRecoveryConversationIds does not recover a locally controlled run after tab throttling', () => {
+  const fixture = createConversationFixture();
+  const staleIds = getResumeRecoveryConversationIds(fixture, {
+    hiddenAt: 10_000,
+    resumedAt: 30_000,
+    minHiddenMs: 15_000,
+    maxRunInactivityMs: 15_000,
+    hasActiveRunController: ({ conversationId, turnId, runId }) => (
+      conversationId === 'conv-live'
+      && turnId === 'turn-live'
+      && runId === 'run-live'
+    ),
+  });
+
+  assert.deepEqual(staleIds, []);
+});
+
 runTest('pending final synthesis stays recoverable after model rounds finish', () => {
   const conversation = {
     id: 'conv-synthesis',

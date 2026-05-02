@@ -226,6 +226,9 @@ export function getResumeRecoveryConversationIds(conversations, options = {}) {
   const items = Array.isArray(conversations) ? conversations : [];
   const hiddenAt = Number(options.hiddenAt);
   const resumedAt = Number(options.resumedAt);
+  const hasActiveRunController = typeof options.hasActiveRunController === 'function'
+    ? options.hasActiveRunController
+    : null;
   const minHiddenMs = Number.isFinite(Number(options.minHiddenMs))
     ? Math.max(0, Number(options.minHiddenMs))
     : 0;
@@ -245,6 +248,13 @@ export function getResumeRecoveryConversationIds(conversations, options = {}) {
     .filter((conversation) => {
       if (!isConversationActivelyRunning(conversation)) return false;
       const lastTurn = conversation.turns[conversation.turns.length - 1];
+      if (hasActiveRunController?.({
+        conversationId: conversation.id,
+        turnId: lastTurn?.id || null,
+        runId: lastTurn?.activeRunId || null,
+      })) {
+        return false;
+      }
       const lastActivityAt = getTurnLastRunActivityAt(lastTurn);
       if (!lastActivityAt) return true;
       return (resumedAt - lastActivityAt) >= maxRunInactivityMs;

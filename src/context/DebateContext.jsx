@@ -2377,6 +2377,10 @@ export function DebateProvider({ children }) {
           resumedAt: now,
           minHiddenMs: RESUME_RECOVERY_MIN_STALE_MS,
           maxRunInactivityMs: RESUME_RECOVERY_MIN_STALE_MS,
+          hasActiveRunController: ({ conversationId }) => {
+            const controller = abortControllersRef.current.get(conversationId);
+            return Boolean(controller && !controller.signal?.aborted);
+          },
         });
         for (const conversationId of staleConversationIds) {
           abortConversationRun(conversationId);
